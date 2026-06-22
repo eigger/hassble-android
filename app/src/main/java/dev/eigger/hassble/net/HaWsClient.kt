@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -114,6 +115,21 @@ class HaWsClient(
                         is Boolean -> put("value", v)
                         else -> put("value", v.toString())
                     }
+                })
+            })
+            put("ts", System.currentTimeMillis() / 1000)
+        }.toString())
+    }
+
+    fun sendInitialStates(uids: List<String>) {
+        if (uids.isEmpty()) return
+        enqueueOrSend(buildJsonObject {
+            put("id", idGen.getAndIncrement())
+            put("type", "$WS_DOMAIN/state")
+            put("states", buildJsonArray {
+                for (uid in uids) add(buildJsonObject {
+                    put("unique_id", uid)
+                    put("value", JsonNull)
                 })
             })
             put("ts", System.currentTimeMillis() / 1000)

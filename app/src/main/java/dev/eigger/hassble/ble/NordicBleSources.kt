@@ -62,6 +62,12 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 val manufacturerData = scanRecord?.manufacturerSpecificData
                 val rawBytes = scanRecord?.bytes
 
+                if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
+                    val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }
+                    val svcUuids = serviceData.keys.map { it.uuid.toString().takeLast(8) }
+                    Log.d(TAG, "ADV addr=$deviceAddress name='$deviceName' mfr=$mfrIds svc=$svcUuids")
+                }
+
                 for (d in devices) {
                     if (d.source != Source.advertisement) continue
                     val match = d.match ?: continue
@@ -82,6 +88,9 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             },
                         )
                     ) {
+                        if (match.manufacturerId != null || match.serviceDataUuid != null) {
+                            Log.d(TAG, "  NO MATCH profile=${d.id} mfrId=${match.manufacturerId} svcUuid=${match.serviceDataUuid}")
+                        }
                         continue
                     }
 
@@ -99,7 +108,11 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                         SourceField.manufacturer_data -> manufacturerHex
                         SourceField.raw -> fullScanHex
                     }
-                    if (primaryHex.isNullOrBlank()) continue
+                    if (primaryHex.isNullOrBlank()) {
+                        Log.d(TAG, "  MATCHED ${d.id} addr=$deviceAddress but $primaryField is null (mfr=$manufacturerHex)")
+                        continue
+                    }
+                    Log.i(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
 
                     emit(
                         RawReading(
