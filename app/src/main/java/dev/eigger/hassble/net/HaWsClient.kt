@@ -48,7 +48,9 @@ class HaWsClient(
     private val gatewayId: String,
     private val gatewayName: String,
     private val scope: CoroutineScope,
-    private val http: OkHttpClient = OkHttpClient(),
+    private val http: OkHttpClient = OkHttpClient.Builder()
+        .pingInterval(15, java.util.concurrent.TimeUnit.SECONDS)
+        .build(),
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
