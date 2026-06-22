@@ -860,18 +860,28 @@ private fun DeviceConfigCard(
                             modifier = Modifier.padding(top = 4.dp),
                         )
                     }
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    val badgeColor = when (device.source) { Source.advertisement -> Color(0xFF02B3E4); Source.gatt_notify -> Color(0xFF9E86FF); Source.obd -> Color(0xFFFF9100) }
-                    val badgeText = when (device.source) {
-                        Source.advertisement -> stringResource(R.string.source_advertisement)
-                        Source.gatt_notify -> stringResource(R.string.source_gatt_notify)
-                        Source.obd -> stringResource(R.string.source_obd)
-                    }
-                    SourceBadge(text = badgeText, color = badgeColor)
                     if (device.source == Source.advertisement) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        AdvertisementRegistrationBadge(device)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            val badgeColor = Color(0xFF02B3E4)
+                            SourceBadge(
+                                text = stringResource(R.string.source_advertisement),
+                                color = badgeColor,
+                            )
+                            val reg = advertisementRegistrationKind(device)
+                            SourceBadge(text = reg.label, color = reg.color)
+                        }
+                    }
+                }
+                if (device.source != Source.advertisement) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        val badgeColor = when (device.source) { Source.gatt_notify -> Color(0xFF9E86FF); Source.obd -> Color(0xFFFF9100); else -> Color.Gray }
+                        val badgeText = when (device.source) {
+                            Source.gatt_notify -> stringResource(R.string.source_gatt_notify)
+                            Source.obd -> stringResource(R.string.source_obd)
+                            else -> ""
+                        }
+                        SourceBadge(text = badgeText, color = badgeColor)
                     }
                 }
                 Icon(
@@ -1010,8 +1020,10 @@ private fun DeviceConfigCard(
                 when (device.source) {
                     Source.advertisement -> {
                         val reg = advertisementRegistrationKind(device)
-                        Text(text = reg.hint, color = Color.Gray, fontSize = 11.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
+                        if (!isRunning) {
+                            Text(text = reg.hint, color = Color.Gray, fontSize = 11.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
                         when {
                             !isRunning -> {
                                 Text(
@@ -1213,12 +1225,6 @@ private fun SourceBadge(text: String, color: Color) {
     ) {
         Text(text = text, color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
-}
-
-@Composable
-private fun AdvertisementRegistrationBadge(device: DeviceConfig) {
-    val reg = advertisementRegistrationKind(device)
-    SourceBadge(text = reg.label, color = reg.color)
 }
 
 @Composable

@@ -13,7 +13,7 @@ object AdvertisementMatcher {
         deviceAddress: String,
         deviceName: String,
         hasServiceUuid: (String) -> Boolean,
-        hasManufacturerId: (Int) -> Boolean,
+        manufacturerPayload: (Int) -> ByteArray?,
     ): Boolean {
         val checks = mutableListOf<() -> Boolean>()
 
@@ -27,7 +27,14 @@ object AdvertisementMatcher {
             checks += { deviceName.startsWith(prefix, ignoreCase = true) }
         }
         match.manufacturerId?.let { id ->
-            checks += { hasManufacturerId(id) }
+            checks += {
+                val payload = manufacturerPayload(id)
+                payload != null &&
+                    (match.manufacturerMinLength?.let { min -> payload.size >= min } ?: true) &&
+                    (match.manufacturerHexPrefix?.let { prefix ->
+                        bytesToHex(payload).startsWith(prefix, ignoreCase = true)
+                    } ?: true)
+            }
         }
 
         return checks.isNotEmpty() && checks.all { it() }
