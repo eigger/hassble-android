@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import dev.eigger.hassble.BuildConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -171,6 +172,7 @@ class HaWsClient(
             put("type", "$WS_DOMAIN/connect")
             put("gateway_id", gatewayId)
             put("name", gatewayName)
+            put("app_version", BuildConfig.VERSION_NAME)
         }.toString())
         startBridgeTimeout()
     }
