@@ -82,6 +82,15 @@
     <string name="last_seen_seconds">%1$d sec ago</string>
     <string name="last_seen_minutes">%1$d min ago</string>
     <string name="last_seen_hours">%1$d hr ago</string>
+    <!-- Applied-config inspector -->
+    <string name="config_detail_show">Show applied config</string>
+    <string name="config_detail_hide">Hide applied config</string>
+    <string name="cfg_match">Match</string>
+    <string name="cfg_decode">Decode</string>
+    <string name="cfg_raw_manufacturer">Received manufacturer data</string>
+    <string name="cfg_raw_service">Received service data</string>
+    <string name="cfg_raw_waiting">No advertisement received yet</string>
+    <string name="cfg_decode_line">%1$s · %2$s · off=%3$d len=%4$d %5$s %6$s</string>
     <!-- Onboarding -->
     <string name="onboarding_title">Getting Started</string>
     <string name="onboarding_step_ws_bridge">Install the ws_bridge integration in Home Assistant (HACS or manual).</string>

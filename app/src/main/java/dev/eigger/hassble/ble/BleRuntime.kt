@@ -178,7 +178,7 @@ class BleRuntime(
                     ensureAdvertisementInstance(d, mac, r.deviceName)
                 }
                 val instanceId = advertisementInstanceId(d, mac)
-                recordAdvertisementSeen(d, mac, r.deviceName, instanceId)
+                recordAdvertisementSeen(d, mac, r.deviceName, instanceId, r)
                 for (s in d.sensors) {
                     if (!isEnabled(d.id, s.key) || s.decode == null) continue
                     val bytes = advertisementPayloadBytes(r, s.sourceField) ?: continue
@@ -317,6 +317,7 @@ class BleRuntime(
         mac: String,
         deviceName: String?,
         instanceId: String,
+        reading: RawReading,
     ) {
         val key = "${d.id}|${normalizeMac(mac)}"
         discoveredAdvInstances[key] = DiscoveredAdvInstance(
@@ -325,6 +326,8 @@ class BleRuntime(
             deviceName = deviceName?.takeIf { it.isNotBlank() },
             instanceId = instanceId,
             lastSeenMs = System.currentTimeMillis(),
+            manufacturerHex = reading.manufacturerHex,
+            serviceDataHex = reading.serviceDataHex,
         )
         publishDiscoveredAdv()
     }
