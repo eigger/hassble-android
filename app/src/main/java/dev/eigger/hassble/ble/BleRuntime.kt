@@ -94,6 +94,7 @@ class BleRuntime(
 
     private fun declareEntitiesForInstance(d: DeviceConfig, instanceId: String, deviceDisplayName: String) {
         val ref = DeviceRef(instanceId, deviceDisplayName)
+        val newSensorUids = mutableListOf<String>()
         for (s in d.sensors) {
             if (!isEnabled(d.id, s.key)) continue
             val entityUid = uid(instanceId, s.key)
@@ -105,7 +106,9 @@ class BleRuntime(
                 stateClass = s.stateClass, icon = s.icon,
                 entityCategory = s.entityCategory,
             ))
+            newSensorUids += entityUid
         }
+        ws.sendInitialStates(newSensorUids)
         for (c in d.controls) {
             val entityUid = uid(instanceId, c.key)
             controls[entityUid] = d to c
