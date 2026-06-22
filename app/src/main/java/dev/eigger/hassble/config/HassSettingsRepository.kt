@@ -37,7 +37,7 @@ class HassSettingsRepository(private val context: Context) {
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[KEY_HA_URL] ?: "https://homeassistant.local:8123"
+        prefs[KEY_HA_URL] ?: "https://"
     }
 
     val startOnBoot: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -80,7 +80,7 @@ class HassSettingsRepository(private val context: Context) {
 
     val scanMode: Flow<BleScanModeOption> = context.dataStore.data.map { prefs ->
         runCatching { BleScanModeOption.valueOf(prefs[KEY_SCAN_MODE] ?: "") }
-            .getOrDefault(BleScanModeOption.LOW_LATENCY)
+            .getOrDefault(BleScanModeOption.BALANCED)
     }
 
     val disabledDevices: Flow<Set<String>> = context.dataStore.data.map { prefs ->

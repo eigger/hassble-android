@@ -53,7 +53,7 @@ class BleRuntime(
     private lateinit var config: GatewayConfig
     private lateinit var enabled: Set<String>                 // "deviceId/sensorKey"
     private var boundDevices: Map<String, String> = emptyMap() // Map of deviceId -> MAC
-    private var scanMode: BleScanModeOption = BleScanModeOption.LOW_LATENCY
+    private var scanMode: BleScanModeOption = BleScanModeOption.BALANCED
     private var disabledIds: Set<String> = emptySet()
     private val devices = mutableMapOf<String, DeviceConfig>()
     private val filters = mutableMapOf<String, ValueFilter>()  // uniqueId → filter
@@ -76,7 +76,7 @@ class BleRuntime(
     }
 
     /** 설정 적용 + 사용자가 켠 센서로 엔티티 선언 + BLE 기동. */
-    fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>, scanMode: BleScanModeOption = BleScanModeOption.LOW_LATENCY, disabledIds: Set<String> = emptySet()) {
+    fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>, scanMode: BleScanModeOption = BleScanModeOption.BALANCED, disabledIds: Set<String> = emptySet()) {
         this.config = config
         this.enabled = enabledKeys
         this.boundDevices = boundDevices
