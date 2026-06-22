@@ -1,0 +1,23 @@
+# 내장 OBD preset DB (앱이 git 설정의 preset 참조를 펼칠 때 사용)
+# eigger/espcomponents 의 components/ble_elm327/presets.py 에서 이식.
+# formula는 응답 데이터 바이트 a,b,c,d... 에 대한 식.
+
+presets:
+  rpm:             { mode: "01", pid: "0C", formula: "(a*256+b)/4",       unit: "rpm",  state_class: measurement, accuracy_decimals: 0, icon: "mdi:gauge" }
+  speed:           { mode: "01", pid: "0D", formula: "a",                 unit: "km/h", device_class: speed, state_class: measurement, accuracy_decimals: 0, icon: "mdi:speedometer" }
+  engine_load:     { mode: "01", pid: "04", formula: "a/2.55",            unit: "%",    state_class: measurement, accuracy_decimals: 1, icon: "mdi:engine" }
+  throttle:        { mode: "01", pid: "11", formula: "a/2.55",            unit: "%",    state_class: measurement, accuracy_decimals: 1, icon: "mdi:gauge" }
+  coolant_temp:    { mode: "01", pid: "05", formula: "a-40",              unit: "°C",   device_class: temperature, state_class: measurement, accuracy_decimals: 1, icon: "mdi:coolant-temperature" }
+  intake_air_temp: { mode: "01", pid: "0F", formula: "a-40",              unit: "°C",   device_class: temperature, state_class: measurement, accuracy_decimals: 1 }
+  ambient_temp:    { mode: "01", pid: "46", formula: "a-40",              unit: "°C",   device_class: temperature, state_class: measurement, accuracy_decimals: 1 }
+  battery_voltage: { mode: "01", pid: "42", formula: "(a*256+b)/1000",    unit: "V",    device_class: voltage, state_class: measurement, accuracy_decimals: 2 }
+  run_time:        { mode: "01", pid: "1F", formula: "a*256+b",           unit: "s",    device_class: duration, state_class: total_increasing, accuracy_decimals: 0 }
+  fuel_level:      { mode: "01", pid: "2F", formula: "a/2.55",            unit: "%",    state_class: measurement, accuracy_decimals: 1, icon: "mdi:gas-station" }
+  actual_torque:   { mode: "01", pid: "62", formula: "a-125",             unit: "%",    state_class: measurement, accuracy_decimals: 0, icon: "mdi:gauge" }
+  odometer:        { mode: "01", pid: "A6", formula: "(a*16777216+b*65536+c*256+d)/10", unit: "km", device_class: distance, state_class: total_increasing, accuracy_decimals: 1 }
+
+  gm_current_gear:      { mode: "22", pid: "199A", formula: "a",                unit: "",   accuracy_decimals: 0, icon: "mdi:car-shift-pattern" }
+  gm_prnd_status_alt:   { mode: "22", pid: "2889", formula: "a",                unit: "",   accuracy_decimals: 0, icon: "mdi:car-shift-pattern" }
+  gm_oil_pressure:      { mode: "22", pid: "115C", formula: "(a*0.65)-17.5",    unit: "psi", device_class: pressure, state_class: measurement, accuracy_decimals: 1 }
+  gm_trans_temp:        { mode: "22", pid: "1940", formula: "a-40",             unit: "°C", device_class: temperature, state_class: measurement, accuracy_decimals: 1, icon: "mdi:oil-temperature" }
+  gm_fuel_level_liters: { mode: "22", pid: "132A", formula: "(a*256+b)/64",     unit: "L",  state_class: measurement, accuracy_decimals: 1, icon: "mdi:gas-station" }

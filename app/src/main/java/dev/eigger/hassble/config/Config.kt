@@ -1,0 +1,127 @@
+package dev.eigger.hassble.config
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/**
+ * git URL에서 앱이 불러오는 설정. 스펙: docs/CONFIG_SCHEMA.md
+ * 앱이 이 설정으로 디코딩/필터링/엔티티 선언을 한다(HA는 엔티티 생성/갱신만).
+ */
+@Serializable
+data class GatewayConfig(
+    val version: Int = 1,
+    val defaults: Defaults = Defaults(),
+    val devices: List<DeviceConfig> = emptyList(),
+)
+
+@Serializable
+data class Defaults(val publish: PublishRule = PublishRule())
+
+enum class Source { advertisement, gatt_notify, obd }
+
+@Serializable
+data class DeviceConfig(
+    val id: String,
+    val name: String,
+    val source: Source,
+    val match: MatchConfig? = null,
+    val gatt: GattConfig? = null,
+    val obd: ObdConfig? = null,
+    val sensors: List<SensorConfig> = emptyList(),
+    val controls: List<ControlConfig> = emptyList(),
+    val publish: PublishRule? = null,
+)
+
+@Serializable
+data class MatchConfig(
+    val mac: String? = null,
+    @SerialName("service_data_uuid") val serviceDataUuid: String? = null,
+    @SerialName("manufacturer_id") val manufacturerId: Int? = null,
+    @SerialName("name_prefix") val namePrefix: String? = null,
+)
+
+@Serializable
+data class GattConfig(
+    val mac: String? = null,
+    @SerialName("service_uuid") val serviceUuid: String,
+    @SerialName("notify_char_uuid") val notifyCharUuid: String,
+    @SerialName("write_char_uuid") val writeCharUuid: String? = null,
+)
+
+@Serializable
+data class ObdConfig(
+    val mac: String? = null,
+    @SerialName("service_uuid") val serviceUuid: String = "FFF0",
+    @SerialName("tx_char_uuid") val txCharUuid: String = "FFF2",
+    @SerialName("rx_char_uuid") val rxCharUuid: String = "FFF1",
+    @SerialName("tx_delay") val txDelay: String = "50ms",
+    @SerialName("init_commands") val initCommands: List<String> = emptyList(),
+)
+
+@Serializable
+data class SensorConfig(
+    val key: String,
+    val platform: String = "sensor",       // sensor | binary_sensor
+    @SerialName("device_class") val deviceClass: String? = null,
+    val unit: String? = null,
+    @SerialName("state_class") val stateClass: String? = null,
+    val icon: String? = null,
+    @SerialName("entity_category") val entityCategory: String? = null,
+    @SerialName("accuracy_decimals") val accuracyDecimals: Int? = null,
+    // advertisement / gatt_notify
+    @SerialName("source_field") val sourceField: SourceField = SourceField.raw,
+    val decode: DecodeConfig? = null,
+    // obd
+    val preset: String? = null,
+    val mode: String = "01",
+    val pid: String? = null,
+    val formula: String? = null,
+    @SerialName("update_interval") val updateInterval: String = "60s",
+    @SerialName("pre_commands") val preCommands: List<String> = emptyList(),
+    // 필터
+    val publish: PublishRule? = null,
+)
+
+enum class SourceField { service_data, manufacturer_data, raw }
+
+@Serializable
+data class DecodeConfig(
+    val offset: Int = 0,
+    val length: Int = 1,
+    val type: DataType = DataType.uint8,
+    val endian: Endian = Endian.big,
+    val bitmask: Long? = null,
+    val scale: Double = 1.0,
+    @SerialName("offset_value") val offsetValue: Double = 0.0,
+    val map: Map<String, String> = emptyMap(),
+)
+
+enum class DataType { int8, uint8, int16, uint16, int32, uint32, float32 }
+enum class Endian { big, little }
+
+@Serializable
+data class ControlConfig(
+    val key: String,
+    val type: ControlType,
+    val name: String? = null,
+    val icon: String? = null,
+    @SerialName("entity_category") val entityCategory: String? = null,
+    // command 매핑:
+    //  switch → {on, off} hex / number → {template} ("A1{value:02X}")
+    //  select → {<option>: hex, ...} / button → {press: hex}
+    val command: Map<String, String> = emptyMap(),
+    val options: List<String> = emptyList(),  // select
+    val min: Double? = null,                   // number
+    val max: Double? = null,
+    val step: Double? = null,
+)
+
+enum class ControlType { switch, number, select, button }
+
+@Serializable
+data class PublishRule(
+    @SerialName("on_change_only") val onChangeOnly: Boolean = true,
+    @SerialName("min_interval") val minInterval: String = "10s",
+    val heartbeat: String? = null,
+    val deadband: Double? = null,
+)
