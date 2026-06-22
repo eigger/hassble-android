@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import dev.eigger.hassble.BuildConfig
+import dev.eigger.hassble.service.LiveEventLogger
+import dev.eigger.hassble.service.LogType
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -130,7 +132,7 @@ class HaWsClient(
             put("states", buildJsonArray {
                 for (uid in uids) add(buildJsonObject {
                     put("unique_id", uid)
-                    put("value", JsonNull)
+                    put("value", "unknown")
                 })
             })
             put("ts", System.currentTimeMillis() / 1000)
@@ -156,6 +158,7 @@ class HaWsClient(
 
     private fun send(text: String) {
         ws?.send(text)
+        LiveEventLogger.log(LogType.TX, "WS: $text")
     }
 
     private fun flushPendingMessages() {
@@ -211,6 +214,7 @@ class HaWsClient(
 
     private inner class Listener : WebSocketListener() {
         override fun onMessage(webSocket: WebSocket, text: String) {
+            LiveEventLogger.log(LogType.RX, "WS: $text")
             val msg = json.parseToJsonElement(text).jsonObject
             when (msg["type"]?.jsonPrimitive?.content) {
                 "auth_required" -> send(buildJsonObject {

@@ -142,4 +142,7 @@
     <string name="notif_bridge_timeout">ws_bridge 응답 없음</string>
     <string name="notif_config_error">설정 로드 실패</string>
     <string name="settings_saved">설정이 저장되었습니다</string>
+    <string name="tab_logs">로그</string>
+    <string name="live_logs_enable">라이브 활성화</string>
+    <string name="logs_clear">지우기</string>
 </resources>
