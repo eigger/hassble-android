@@ -42,9 +42,16 @@ object Decoder {
         return ExpressionBuilder(formula).variables(vars.keys).build().setVariables(vars).evaluate()
     }
 
-    /** "410C1AF8" → (01, 0C, [1A F8]); mode 22는 PID 2바이트. 응답 mode = 요청+0x40. */
+    /** ELM327 응답 hex → (mode, pid, dataBytes). ISO-TP 정규화 후 파싱. */
     fun parseObdResponse(rawHex: String): Triple<String, String, ByteArray>? {
-        val h = rawHex.trim().replace(" ", "")
+        val normalized = ObdResponseParser.normalizeElm327Response(rawHex)
+            ?: rawHex.trim().replace(" ", "").takeIf { it.length >= 4 }
+            ?: return null
+        return parseObdPayloadHex(normalized)
+    }
+
+    /** 이미 정규화된 payload hex (예: 410C1AF8) 파싱. */
+    fun parseObdPayloadHex(h: String): Triple<String, String, ByteArray>? {
         if (h.length < 4) return null
         val respMode = h.substring(0, 2).toIntOrNull(16) ?: return null
         val reqMode = respMode - 0x40

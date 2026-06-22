@@ -7,15 +7,21 @@ import android.content.pm.PackageManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.eigger.hassble.config.DeviceConfig
+import dev.eigger.hassble.config.SensorConfig
 import dev.eigger.hassble.config.Source
+import dev.eigger.hassble.config.SourceField
 import dev.eigger.hassble.config.parseDurationMs
+import dev.eigger.hassble.decode.ObdResponseParser
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -59,53 +65,52 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                     if (d.source != Source.advertisement) continue
                     val match = d.match ?: continue
 
-                    var isMatch = false
-                    if (match.mac != null && match.mac.equals(deviceAddress, ignoreCase = true)) {
-                        isMatch = true
-                    }
-                    if (!isMatch && match.serviceDataUuid != null) {
-                        val targetUuid = match.serviceDataUuid.uppercase()
-                        val hasUuid = serviceData.keys.any { 
-                            it.uuid.toString().uppercase().contains(targetUuid) 
-                        }
-                        if (hasUuid) isMatch = true
-                    }
-                    if (!isMatch && match.namePrefix != null && deviceName.startsWith(match.namePrefix, ignoreCase = true)) {
-                        isMatch = true
-                    }
-                    if (!isMatch && match.manufacturerId != null && manufacturerData != null) {
-                        if (manufacturerData.get(match.manufacturerId) != null) {
-                            isMatch = true
-                        }
+                    if (!AdvertisementMatcher.matches(
+                            match,
+                            deviceAddress,
+                            deviceName,
+                            hasServiceUuid = { uuid ->
+                                val target = uuid.uppercase()
+                                serviceData.keys.any { it.uuid.toString().uppercase().contains(target) }
+                            },
+                            hasManufacturerId = { id ->
+                                manufacturerData?.get(id) != null
+                            },
+                        )
+                    ) {
+                        continue
                     }
 
-                    if (isMatch) {
-                        val rawHex = when (d.sensors.firstOrNull()?.sourceField) {
-                            dev.eigger.hassble.config.SourceField.service_data -> {
-                                val entry = serviceData.entries.firstOrNull { 
-                                    match.serviceDataUuid == null || it.key.uuid.toString().uppercase().contains(match.serviceDataUuid.uppercase())
-                                }
-                                entry?.value?.value?.let { bytesToHex(it) }
-                            }
-                            dev.eigger.hassble.config.SourceField.manufacturer_data -> {
-                                val key = match.manufacturerId
-                                if (key != null && manufacturerData != null) {
-                                    manufacturerData.get(key)?.value?.let { bytesToHex(it) }
-                                } else null
-                            }
-                            else -> rawBytes?.value?.let { bytesToHex(it) }
-                        }
-
-                        if (rawHex != null) {
-                            emit(RawReading(
-                                deviceId = d.id,
-                                source = "advertisement",
-                                rawHex = rawHex,
-                                macAddress = deviceAddress,
-                                deviceName = deviceName.takeIf { it.isNotBlank() },
-                            ))
-                        }
+                    val manufacturerHex = match.manufacturerId?.let { id ->
+                        manufacturerData?.get(id)?.value?.let { AdvertisementMatcher.bytesToHex(it) }
                     }
+                    val serviceDataHex = match.serviceDataUuid?.let { uuid ->
+                        val target = uuid.uppercase()
+                        serviceData.entries.firstOrNull { (key, _) ->
+                            key.uuid.toString().uppercase().contains(target)
+                        }?.value?.value?.let { AdvertisementMatcher.bytesToHex(it) }
+                    }
+                    val fullScanHex = rawBytes?.value?.let { bytesToHex(it) }
+                    val primaryField = d.sensors.firstOrNull()?.sourceField ?: SourceField.raw
+                    val primaryHex = when (primaryField) {
+                        SourceField.service_data -> serviceDataHex
+                        SourceField.manufacturer_data -> manufacturerHex
+                        SourceField.raw -> fullScanHex
+                    }
+                    if (primaryHex.isNullOrBlank()) continue
+
+                    emit(
+                        RawReading(
+                            deviceId = d.id,
+                            source = "advertisement",
+                            rawHex = primaryHex,
+                            macAddress = deviceAddress,
+                            deviceName = deviceName.takeIf { it.isNotBlank() },
+                            manufacturerHex = manufacturerHex,
+                            serviceDataHex = serviceDataHex,
+                            fullScanHex = fullScanHex,
+                        ),
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -196,8 +201,7 @@ class NordicGattNotifySource(
 }
 
 /**
- * 경로 C: OBD (ELM327) 폴링.
- * 바인딩된 OBD BLE 동글에 연결한 뒤 rx/tx 캐릭터리스틱을 통해 쿼리-응답 루프를 돌며 센서 값들을 폴링합니다.
+ * 경로 C: OBD (ELM327) 폴링 — ESPHome ble_elm327과 동일한 단일 TX 큐 패턴.
  */
 class NordicElm327Source(
     private val context: Context,
@@ -207,109 +211,172 @@ class NordicElm327Source(
     private val activeConnections = mutableMapOf<String, ClientBleGatt>()
     private val responseMutex = Mutex()
     private var pendingDeferred: CompletableDeferred<String>? = null
-    private val activeJobs = mutableListOf<Job>()
+    private val sessionJobs = mutableMapOf<String, Job>()
+
+    private data class PollTarget(
+        val sensor: SensorConfig,
+        var nextPollAtMs: Long = 0L,
+    )
+
+    private data class TxItem(
+        val cmd: String,
+        val pollTarget: PollTarget? = null,
+    )
 
     override fun connect(device: DeviceConfig, enabledKeys: Set<String>): Flow<RawReading> = flow {
         val mac = device.obd?.mac ?: return@flow
-        val serviceUuidStr = device.obd.serviceUuid
-        val txCharUuidStr = device.obd.txCharUuid
-        val rxCharUuidStr = device.obd.rxCharUuid
-        val txDelayMs = parseDurationMs(device.obd.txDelay, 50L)
+        while (currentCoroutineContext().isActive) {
+            try {
+                runObdSession(this, device, enabledKeys, mac)
+                break
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "OBD session lost for ${device.id}, reconnecting in ${RECONNECT_DELAY_MS}ms", e)
+                onLinkStatus(
+                    DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message),
+                )
+                teardown(device.id)
+                delay(RECONNECT_DELAY_MS)
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
+            }
+        }
+    }
+
+    private suspend fun runObdSession(
+        collector: FlowCollector<RawReading>,
+        device: DeviceConfig,
+        enabledKeys: Set<String>,
+        mac: String,
+    ) {
+        val obd = device.obd ?: return
+        val txDelayMs = parseDurationMs(obd.txDelay, 50L)
+        val serviceUuidStr = obd.serviceUuid
+        val txCharUuidStr = obd.txCharUuid
+        val rxCharUuidStr = obd.rxCharUuid
+
+        Log.d(TAG, "Connecting to OBD reader ${device.id} at $mac")
+        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
+        val client = ClientBleGatt.connect(context, mac, scope)
+        activeConnections[device.id] = client
+        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+
+        val services = client.discoverServices()
+        val service = services.findService(UUID.fromString(serviceUuidStr))
+        val txChar = service?.findCharacteristic(UUID.fromString(txCharUuidStr))
+        val rxChar = service?.findCharacteristic(UUID.fromString(rxCharUuidStr))
+            ?: throw IllegalStateException("OBD RX characteristic not found")
+
+        if (txChar == null) throw IllegalStateException("OBD TX characteristic not found")
+
+        val responseBuffer = StringBuilder()
+        val rxJob = scope.launch {
+            rxChar.getNotifications().collect { bytes ->
+                val chunk = String(bytes.value, Charsets.US_ASCII)
+                responseBuffer.append(chunk)
+                if (responseBuffer.contains(">")) {
+                    val fullResponse = responseBuffer.toString().trim()
+                    responseBuffer.clear()
+                    pendingDeferred?.complete(fullResponse)
+                }
+            }
+        }
+        sessionJobs[device.id] = rxJob
+
+        val targets = device.sensors
+            .filter { it.key in enabledKeys && it.pid != null }
+            .map { PollTarget(it, System.currentTimeMillis()) }
+        if (targets.isEmpty()) {
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+            return
+        }
+
+        val txQueue = ArrayDeque<TxItem>()
+        for (cmd in Elm327Source.BASE_INIT) txQueue.add(TxItem(cmd))
+        for (cmd in obd.initCommands) {
+            if (!isDuplicateInit(cmd)) txQueue.add(TxItem(cmd))
+        }
+
+        var elmReady = false
+        var currentPreCommands: List<String> = emptyList()
+        var lastTxAtMs = 0L
+        var collectIdx = 0
 
         try {
-            Log.d(TAG, "Connecting to OBD reader ${device.id} at $mac")
-            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
-            val client = ClientBleGatt.connect(context, mac, scope)
-            activeConnections[device.id] = client
-            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+            while (currentCoroutineContext().isActive) {
+                val now = System.currentTimeMillis()
 
-            val services = client.discoverServices()
-            val service = services.findService(UUID.fromString(serviceUuidStr))
-            val txChar = service?.findCharacteristic(UUID.fromString(txCharUuidStr))
-            val rxChar = service?.findCharacteristic(UUID.fromString(rxCharUuidStr))
+                if (txQueue.isNotEmpty() && now - lastTxAtMs >= txDelayMs) {
+                    val item = txQueue.removeFirst()
+                    val resp = sendCommand(txChar, item.cmd)
+                    lastTxAtMs = System.currentTimeMillis()
 
-            if (txChar != null && rxChar != null) {
-                // rx notifications 수집 코루틴 가동
-                val responseBuffer = StringBuilder()
-                val rxJob = scope.launch {
-                    try {
-                        rxChar.getNotifications().collect { bytes ->
-                            val chunk = String(bytes.value, Charsets.US_ASCII)
-                            responseBuffer.append(chunk)
-                            if (responseBuffer.contains(">")) {
-                                val fullResponse = responseBuffer.toString().trim()
-                                responseBuffer.clear()
-                                pendingDeferred?.complete(fullResponse)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "OBD notify stream error", e)
+                    if (!elmReady && item.pollTarget == null && txQueue.isEmpty()) {
+                        elmReady = true
+                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
+                        Log.d(TAG, "OBD dongle ready for ${device.id}")
                     }
-                }
-                activeJobs.add(rxJob)
 
-                // 1. ELM327 Base Initialization
-                Log.d(TAG, "Initializing OBD dongle...")
-                for (cmd in Elm327Source.BASE_INIT) {
-                    sendCommand(client, txChar, cmd, txDelayMs)
-                }
-
-                // 2. Custom Configuration Init Commands
-                for (cmd in device.obd.initCommands) {
-                    sendCommand(client, txChar, cmd, txDelayMs)
-                }
-
-                // 3. 센서별 개별 폴링 코루틴 예약
-                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
-                for (sensor in device.sensors) {
-                    if (sensor.key !in enabledKeys) continue
-                    val intervalMs = parseDurationMs(sensor.updateInterval, 60000L)
-                    val mode = sensor.mode
-                    val pid = sensor.pid ?: continue
-                    val cmd = "$mode$pid"
-
-                    val pollJob = scope.launch {
-                        while (true) {
-                            delay(intervalMs)
-                            val rawResponse = sendCommand(client, txChar, cmd, txDelayMs)
-                            if (rawResponse != null) {
-                                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
-                                val cleanHex = rawResponse.replace("\r", "")
-                                    .replace("\n", "")
-                                    .replace(" ", "")
-                                    .replace(">", "")
-                                
-                                emit(RawReading(deviceId = device.id, source = "obd", rawHex = cleanHex))
-                            }
+                    if (elmReady && item.pollTarget != null && resp != null) {
+                        ObdResponseParser.normalizeElm327Response(resp)?.let { hex ->
+                            onLinkStatus(
+                                DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()),
+                            )
+                            collector.emit(
+                                RawReading(deviceId = device.id, source = "obd", rawHex = hex),
+                            )
                         }
                     }
-                    activeJobs.add(pollJob)
+                    continue
                 }
-            } else {
-                Log.e(TAG, "OBD tx ($txCharUuidStr) or rx ($rxCharUuidStr) characteristic not found")
-                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = "TX/RX char not found"))
+
+                if (!elmReady) {
+                    delay(POLL_LOOP_MS)
+                    continue
+                }
+
+                if (txQueue.isEmpty()) {
+                    val n = targets.size
+                    var scheduled = false
+                    for (i in 0 until n) {
+                        val target = targets[(collectIdx + i) % n]
+                        if (now >= target.nextPollAtMs) {
+                            val sensor = target.sensor
+                            if (sensor.preCommands != currentPreCommands) {
+                                sensor.preCommands.forEach { txQueue.add(TxItem(it)) }
+                                currentPreCommands = sensor.preCommands
+                            }
+                            txQueue.add(TxItem("${sensor.mode}${sensor.pid}", target))
+                            target.nextPollAtMs = now + parseDurationMs(sensor.updateInterval, 60_000L)
+                            collectIdx = (collectIdx + i + 1) % n
+                            scheduled = true
+                            break
+                        }
+                    }
+                    if (!scheduled) delay(POLL_LOOP_MS)
+                } else {
+                    delay(POLL_LOOP_MS)
+                }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed connecting/subscribing to OBD dongle ${device.id}", e)
-            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
+        } finally {
+            rxJob.cancel()
+            sessionJobs.remove(device.id)
         }
     }
 
     private suspend fun sendCommand(
-        client: ClientBleGatt,
         txChar: ClientBleGattCharacteristic,
         cmd: String,
-        delayMs: Long
     ): String? = responseMutex.withLock {
         val deferred = CompletableDeferred<String>()
         pendingDeferred = deferred
         val payload = (cmd + "\r").toByteArray(Charsets.US_ASCII)
+        val timeoutMs = if (cmd.length >= 6) MULTIFRAME_TIMEOUT_MS else SINGLE_FRAME_TIMEOUT_MS
 
         try {
             txChar.write(DataByteArray(payload), BleWriteType.NO_RESPONSE)
-            val resp = withTimeoutOrNull(2000) { deferred.await() }
+            val resp = withTimeoutOrNull(timeoutMs) { deferred.await() }
             pendingDeferred = null
-            delay(delayMs)
             return resp
         } catch (e: Exception) {
             Log.e(TAG, "Error executing OBD command $cmd", e)
@@ -335,10 +402,21 @@ class NordicElm327Source(
     }
 
     override fun disconnect(deviceId: String) {
-        activeJobs.forEach { it.cancel() }
-        activeJobs.clear()
+        teardown(deviceId)
+    }
+
+    private fun teardown(deviceId: String) {
+        sessionJobs.remove(deviceId)?.cancel()
         activeConnections.remove(deviceId)?.disconnect()
     }
+
+    private fun isDuplicateInit(cmd: String): Boolean {
+        val normalized = normalizeCommand(cmd)
+        return Elm327Source.BASE_INIT.any { normalizeCommand(it) == normalized }
+    }
+
+    private fun normalizeCommand(cmd: String): String =
+        cmd.filter { !it.isWhitespace() }.lowercase()
 
     private fun hexToBytes(hex: String): ByteArray? {
         val cleanHex = hex.replace(" ", "")
@@ -346,5 +424,12 @@ class NordicElm327Source(
         return ByteArray(cleanHex.length / 2) { i ->
             cleanHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
         }
+    }
+
+    companion object {
+        private const val RECONNECT_DELAY_MS = 5_000L
+        private const val POLL_LOOP_MS = 10L
+        private const val SINGLE_FRAME_TIMEOUT_MS = 2_000L
+        private const val MULTIFRAME_TIMEOUT_MS = 5_000L
     }
 }

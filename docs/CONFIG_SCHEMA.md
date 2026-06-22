@@ -41,7 +41,7 @@ devices: [ ... ]                    # 아래 참조
   name: "거실 온습도계"
   source: advertisement
   instance_mode: mac           # mac(기본) | shared
-  match:                       # 아래 중 하나 이상
+  match:                       # 지정한 항목은 **모두** 일치해야 함 (AND)
     mac: "A4:C1:38:..."
     service_data_uuid: "181a"
     manufacturer_id: 0x004C

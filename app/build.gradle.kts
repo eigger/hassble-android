@@ -13,8 +13,8 @@ android {
         applicationId = "dev.eigger.hassble"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.1.4"
     }
 
     buildTypes {
@@ -63,4 +63,6 @@ dependencies {
     implementation(libs.nordic.ble)
     implementation(libs.nordic.ble.scanner)
     implementation(libs.okhttp)
+
+    testImplementation("junit:junit:4.13.2")
 }

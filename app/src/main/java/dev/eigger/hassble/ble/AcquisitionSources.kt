@@ -10,9 +10,13 @@ import kotlinx.coroutines.flow.Flow
 data class RawReading(
     val deviceId: String,
     val source: String,        // advertisement | gatt_notify | obd
+    /** 하위 호환·비광고 소스용. 광고는 source_field별 hex 필드 사용 권장. */
     val rawHex: String,
     val macAddress: String? = null,
     val deviceName: String? = null,
+    val manufacturerHex: String? = null,
+    val serviceDataHex: String? = null,
+    val fullScanHex: String? = null,
 )
 
 /** 경로 A: 광고 passive scan. match를 ScanFilter로 변환. */
@@ -29,10 +33,8 @@ interface GattNotifySource {
 }
 
 /**
- * 경로 C: ELM327 폴링. 켜진 OBD 센서들의 (mode+pid)와 update_interval로 폴링 플랜을
- * 로컬 구성, base init + init_commands 후 tx_delay 간격 드레인, 응답 raw 방출.
- *
- * TODO: 멀티프레임(ISO-TP), pre_commands 헤더 전환, 재연결.
+ * 경로 C: ELM327 폴링.
+ * 단일 TX 큐 + pre_commands 헤더 전환 + ISO-TP 응답 정규화 + 끊김 시 재연결.
  */
 interface Elm327Source {
     /** enabledKeys = 사용자가 켠 센서 key (폴링 대상). */
