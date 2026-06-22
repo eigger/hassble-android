@@ -130,6 +130,12 @@ data class ControlConfig(
 
 enum class ControlType { switch, number, select, button }
 
+enum class BleScanModeOption(val label: String) {
+    LOW_POWER("Low Power"),
+    BALANCED("Balanced"),
+    LOW_LATENCY("Low Latency"),
+}
+
 @Serializable
 data class PublishRule(
     @SerialName("on_change_only") val onChangeOnly: Boolean = true,

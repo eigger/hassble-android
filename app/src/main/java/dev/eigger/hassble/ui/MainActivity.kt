@@ -169,6 +169,7 @@ private fun HomeScreen() {
     val enabledSensors by repository.enabledSensors.collectAsState(initial = emptySet())
     val enabledSensorsInitialized by repository.enabledSensorsInitialized.collectAsState(initial = false)
     val startOnBoot by repository.startOnBoot.collectAsState(initial = true)
+    val scanMode by repository.scanMode.collectAsState(initial = dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY)
     val onboardingComplete by repository.onboardingComplete.collectAsState(initial = false)
 
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
@@ -222,6 +223,7 @@ private fun HomeScreen() {
     val serviceError by BleGatewayService.serviceError.collectAsState()
     val usingCachedConfigService by BleGatewayService.usingCachedConfig.collectAsState()
     val deviceLinkStatuses by BleGatewayService.deviceLinkStatuses.collectAsState()
+    val disabledDeviceIds by repository.disabledDevices.collectAsState(initial = emptySet())
     val discoveredAdv by BleGatewayService.discoveredAdvInstances.collectAsState()
     val sensorLastValues by BleGatewayService.sensorLastValues.collectAsState()
 
@@ -373,6 +375,8 @@ private fun HomeScreen() {
                     onGitTokenChange = { gitTokenInput = it },
                     startOnBoot = startOnBoot,
                     onStartOnBootChange = { scope.launch { repository.saveStartOnBoot(it) } },
+                    scanMode = scanMode,
+                    onScanModeChange = { scope.launch { repository.saveScanMode(it) } },
                     isBatteryIgnored = isBatteryIgnored,
                     onShowOnboarding = { showOnboarding = true },
                     onStartGateway = {
@@ -395,6 +399,7 @@ private fun HomeScreen() {
                     loadedConfig = loadedConfig,
                     boundDevices = boundDevices,
                     enabledSensors = effectiveEnabledSensors,
+                    disabledDeviceIds = disabledDeviceIds,
                     discoveredAdv = discoveredAdv,
                     sensorLastValues = sensorLastValues,
                     deviceLinkStatuses = deviceLinkStatuses,
@@ -407,6 +412,8 @@ private fun HomeScreen() {
                     onSensorsBulkToggle = { keys, enabled ->
                         scope.launch { repository.setSensorsEnabled(keys, enabled) }
                     },
+                    onDisableDevice = { deviceId -> BleGatewayService.disableDevice(context, deviceId) },
+                    onEnableDevice = { deviceId -> BleGatewayService.enableDevice(context, deviceId) },
                 )
                 2 -> LogsTabContent()
             }
@@ -487,6 +494,8 @@ private fun GatewayTabContent(
     onGitTokenChange: (String) -> Unit,
     startOnBoot: Boolean,
     onStartOnBootChange: (Boolean) -> Unit,
+    scanMode: dev.eigger.hassble.config.BleScanModeOption,
+    onScanModeChange: (dev.eigger.hassble.config.BleScanModeOption) -> Unit,
     isBatteryIgnored: Boolean,
     onShowOnboarding: () -> Unit,
     onStartGateway: () -> Unit,
@@ -634,6 +643,37 @@ private fun GatewayTabContent(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "BLE 스캔 모드", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                    Text(
+                        text = when (scanMode) {
+                            dev.eigger.hassble.config.BleScanModeOption.LOW_POWER -> "절전 (광고 수신 불안정)"
+                            dev.eigger.hassble.config.BleScanModeOption.BALANCED -> "균형"
+                            dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY -> "고성능 (권장)"
+                        },
+                        fontSize = 11.sp, color = Color.Gray,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        dev.eigger.hassble.config.BleScanModeOption.entries.forEach { mode ->
+                            val selected = scanMode == mode
+                            Button(
+                                onClick = { onScanModeChange(mode) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (selected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.08f),
+                                    contentColor = if (selected) Color.Black else Color.White,
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            ) {
+                                Text(mode.label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(text = stringResource(R.string.battery_opt_status), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
@@ -707,6 +747,7 @@ private fun SensorsTabContent(
     loadedConfig: GatewayConfig?,
     boundDevices: Map<String, String>,
     enabledSensors: Set<String>,
+    disabledDeviceIds: Set<String>,
     discoveredAdv: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
     deviceLinkStatuses: List<DeviceLinkStatus>,
@@ -715,6 +756,8 @@ private fun SensorsTabContent(
     onUnbindClick: (String) -> Unit,
     onSensorToggle: (String, Boolean) -> Unit,
     onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
+    onDisableDevice: (String) -> Unit,
+    onEnableDevice: (String) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -820,6 +863,7 @@ private fun SensorsTabContent(
                     boundMac = boundDevices[device.id],
                     enabledSensors = enabledSensors,
                     isRunning = isRunning,
+                    isDisabled = device.id in disabledDeviceIds,
                     discoveredInstances = discoveredAdv.filter { it.profileId == device.id },
                     sensorLastValues = sensorLastValues.filter { it.profileId == device.id },
                     linkStatus = deviceLinkStatuses.firstOrNull { it.profileId == device.id },
@@ -827,6 +871,8 @@ private fun SensorsTabContent(
                     onSensorsBulkToggle = onSensorsBulkToggle,
                     onBindClick = { onBindClick(device) },
                     onUnbindClick = { onUnbindClick(device.id) },
+                    onDisable = { onDisableDevice(device.id) },
+                    onEnable = { onEnableDevice(device.id) },
                 )
             }
         }
@@ -866,6 +912,7 @@ private fun DeviceConfigCard(
     boundMac: String?,
     enabledSensors: Set<String>,
     isRunning: Boolean,
+    isDisabled: Boolean,
     discoveredInstances: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
     linkStatus: DeviceLinkStatus?,
@@ -873,6 +920,8 @@ private fun DeviceConfigCard(
     onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
     onBindClick: () -> Unit,
     onUnbindClick: () -> Unit,
+    onDisable: () -> Unit,
+    onEnable: () -> Unit,
 ) {
     val deviceSensorKeys = remember(device.id, device.sensors) {
         device.sensors.map { "${device.id}/${it.key}" }
@@ -885,7 +934,10 @@ private fun DeviceConfigCard(
             .fillMaxWidth()
             .animateContentSize(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDisabled) MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+            else MaterialTheme.colorScheme.surface
+        ),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -895,7 +947,24 @@ private fun DeviceConfigCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(text = device.name, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = device.name,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = if (isDisabled) Color.Gray else Color.White,
+                        )
+                        if (isDisabled) {
+                            Text(
+                                text = "비활성화됨",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier
+                                    .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
                     Text(text = "ID: ${device.id}", fontSize = 12.sp, color = Color.Gray)
                     if (device.sensors.isNotEmpty()) {
                         Text(
@@ -1222,6 +1291,37 @@ private fun DeviceConfigCard(
                         device = device,
                         discoveredInstances = discoveredInstances,
                     )
+
+                    if (isRunning) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            if (isDisabled) {
+                                Button(
+                                    onClick = onEnable,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                        contentColor = MaterialTheme.colorScheme.primary,
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                ) {
+                                    Text("활성화", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                Button(
+                                    onClick = onDisable,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                                        contentColor = MaterialTheme.colorScheme.error,
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                ) {
+                                    Text("비활성화 (HA 삭제)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

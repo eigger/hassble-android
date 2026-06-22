@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.MapSerializer
@@ -30,6 +31,9 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_ENABLED_SENSORS_INITIALIZED = booleanPreferencesKey("enabled_sensors_initialized")
         private val KEY_ALL_KNOWN_SENSORS = stringPreferencesKey("all_known_sensors")
         private val KEY_ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
+        private val KEY_SCAN_MODE = stringPreferencesKey("ble_scan_mode")
+        private val KEY_DISABLED_DEVICES = stringPreferencesKey("disabled_devices")
+        private val KEY_KNOWN_DEVICE_IDS = stringPreferencesKey("known_device_ids")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -72,6 +76,51 @@ class HassSettingsRepository(private val context: Context) {
 
     val onboardingComplete: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[KEY_ONBOARDING_COMPLETE] ?: false
+    }
+
+    val scanMode: Flow<BleScanModeOption> = context.dataStore.data.map { prefs ->
+        runCatching { BleScanModeOption.valueOf(prefs[KEY_SCAN_MODE] ?: "") }
+            .getOrDefault(BleScanModeOption.LOW_LATENCY)
+    }
+
+    val disabledDevices: Flow<Set<String>> = context.dataStore.data.map { prefs ->
+        runCatching {
+            json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_DISABLED_DEVICES] ?: "[]").toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun setDeviceDisabled(deviceId: String, disabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            val current = runCatching {
+                json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_DISABLED_DEVICES] ?: "[]").toMutableSet()
+            }.getOrDefault(mutableSetOf())
+            if (disabled) current.add(deviceId) else current.remove(deviceId)
+            prefs[KEY_DISABLED_DEVICES] = json.encodeToString(ListSerializer(String.serializer()), current.sorted())
+        }
+    }
+
+    suspend fun clearDisabledDevices() {
+        context.dataStore.edit { prefs -> prefs.remove(KEY_DISABLED_DEVICES) }
+    }
+
+    suspend fun getRemovedDeviceIds(newConfigIds: Set<String>): Set<String> {
+        val prefs = context.dataStore.data.first()
+        val known = runCatching {
+            json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_KNOWN_DEVICE_IDS] ?: "[]").toSet()
+        }.getOrDefault(emptySet())
+        return known - newConfigIds
+    }
+
+    suspend fun updateKnownDeviceIds(ids: Set<String>) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_KNOWN_DEVICE_IDS] = json.encodeToString(ListSerializer(String.serializer()), ids.sorted())
+        }
+    }
+
+    suspend fun saveScanMode(mode: BleScanModeOption) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_SCAN_MODE] = mode.name
+        }
     }
 
     suspend fun setOnboardingComplete(complete: Boolean) {

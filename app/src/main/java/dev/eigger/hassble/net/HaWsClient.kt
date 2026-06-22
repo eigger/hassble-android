@@ -1,5 +1,6 @@
 package dev.eigger.hassble.net
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -13,11 +14,15 @@ import kotlinx.coroutines.launch
 import dev.eigger.hassble.BuildConfig
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -75,6 +80,7 @@ class HaWsClient(
     private var isClosedManually = false
     private var authFailed = false
     private var reconnectDelayMs = 2000L
+    private val pendingRequests = java.util.concurrent.ConcurrentHashMap<Int, CompletableDeferred<JsonObject>>()
 
     fun connect() {
         if (_connectionState.value != ConnectionState.Disconnected) return
@@ -148,6 +154,42 @@ class HaWsClient(
             put("device_id", deviceId)
             put("online", online)
         }.toString())
+    }
+
+    suspend fun removeEntitiesByDeviceIdPrefix(deviceId: String) {
+        if (_connectionState.value != ConnectionState.Connected) return
+        val response = sendRequest("config/entity_registry/list") ?: return
+        val entities = runCatching { response["result"]?.jsonArray }.getOrNull() ?: return
+        val prefix = "${deviceId}_"
+        for (entity in entities) {
+            val obj = runCatching { entity.jsonObject }.getOrNull() ?: continue
+            val uid = obj["unique_id"]?.jsonPrimitive?.contentOrNull ?: continue
+            if (!uid.startsWith(prefix)) continue
+            val entityId = obj["entity_id"]?.jsonPrimitive?.contentOrNull ?: continue
+            sendRequest("config/entity_registry/remove") { put("entity_id", entityId) }
+        }
+    }
+
+    suspend fun removeEntitiesByUniqueIds(uniqueIds: List<String>) {
+        if (uniqueIds.isEmpty() || _connectionState.value != ConnectionState.Connected) return
+        val uniqueIdSet = uniqueIds.toSet()
+        val response = sendRequest("config/entity_registry/list") ?: return
+        val entities = runCatching { response["result"]?.jsonArray }.getOrNull() ?: return
+        for (entity in entities) {
+            val obj = runCatching { entity.jsonObject }.getOrNull() ?: continue
+            val uid = obj["unique_id"]?.jsonPrimitive?.contentOrNull ?: continue
+            if (uid !in uniqueIdSet) continue
+            val entityId = obj["entity_id"]?.jsonPrimitive?.contentOrNull ?: continue
+            sendRequest("config/entity_registry/remove") { put("entity_id", entityId) }
+        }
+    }
+
+    private suspend fun sendRequest(type: String, build: JsonObjectBuilder.() -> Unit = {}): JsonObject? {
+        val id = idGen.getAndIncrement()
+        val deferred = CompletableDeferred<JsonObject>()
+        pendingRequests[id] = deferred
+        enqueueOrSend(buildJsonObject { put("id", id); put("type", type); build() }.toString())
+        return withTimeoutOrNull(10_000) { deferred.await() }
     }
 
     private fun enqueueOrSend(text: String) {
@@ -234,8 +276,9 @@ class HaWsClient(
                 }
                 "result" -> {
                     val id = msg["id"]?.jsonPrimitive?.content?.toIntOrNull()
-                    if (id != null && id == connectMessageId) {
-                        onConnectResult()
+                    if (id != null) {
+                        pendingRequests.remove(id)?.complete(msg)
+                        if (id == connectMessageId) onConnectResult()
                     }
                 }
                 "event" -> msg["event"]?.let { _events.tryEmit(it.jsonObject) }

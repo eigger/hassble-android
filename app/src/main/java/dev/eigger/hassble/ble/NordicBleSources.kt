@@ -31,6 +31,9 @@ import no.nordicsemi.android.kotlin.ble.client.main.service.ClientBleGattCharact
 import no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray
 import no.nordicsemi.android.kotlin.ble.core.data.BleWriteType
 import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
+import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
+import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
+import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import java.util.UUID
@@ -45,7 +48,7 @@ private const val TAG = "HassBleSources"
 class NordicAdvertisementScanner(private val context: Context) : AdvertisementScanner {
     private var scanJob: Job? = null
 
-    override fun scan(devices: List<DeviceConfig>): Flow<RawReading> = flow {
+    override fun scan(devices: List<DeviceConfig>, scanMode: BleScanModeOption): Flow<RawReading> = flow {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "BLUETOOTH_SCAN permission not granted")
             LiveEventLogger.log(LogType.LINK, "BLE scan failed: BLUETOOTH_SCAN permission not granted")
@@ -56,8 +59,19 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles")
         LiveEventLogger.log(LogType.LINK, "Starting Nordic BLE scan for ${devices.size} profiles...")
 
+        val nativeScanMode = when (scanMode) {
+            BleScanModeOption.LOW_POWER -> BleScanMode.SCAN_MODE_LOW_POWER
+            BleScanModeOption.BALANCED -> BleScanMode.SCAN_MODE_BALANCED
+            BleScanModeOption.LOW_LATENCY -> BleScanMode.SCAN_MODE_LOW_LATENCY
+        }
+        val scanSettings = BleScannerSettings(
+            scanMode = nativeScanMode,
+            legacy = true,
+        )
+        LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}")
+
         try {
-            scanner.scan().collect { result ->
+            scanner.scan(settings = scanSettings).collect { result ->
                 val deviceName = result.device.name ?: ""
                 val deviceAddress = result.device.address
                 val scanRecord = result.data?.scanRecord

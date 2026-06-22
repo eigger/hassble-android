@@ -1,6 +1,7 @@
 package dev.eigger.hassble.ble
 
 import dev.eigger.hassble.config.AdvertisementInstanceMode
+import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.config.ControlConfig
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
@@ -52,6 +53,8 @@ class BleRuntime(
     private lateinit var config: GatewayConfig
     private lateinit var enabled: Set<String>                 // "deviceId/sensorKey"
     private var boundDevices: Map<String, String> = emptyMap() // Map of deviceId -> MAC
+    private var scanMode: BleScanModeOption = BleScanModeOption.LOW_LATENCY
+    private var disabledIds: Set<String> = emptySet()
     private val devices = mutableMapOf<String, DeviceConfig>()
     private val filters = mutableMapOf<String, ValueFilter>()  // uniqueId → filter
     private val obdIndex = mutableMapOf<String, Map<Pair<String, String>, SensorConfig>>()
@@ -73,10 +76,12 @@ class BleRuntime(
     }
 
     /** 설정 적용 + 사용자가 켠 센서로 엔티티 선언 + BLE 기동. */
-    fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>) {
+    fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>, scanMode: BleScanModeOption = BleScanModeOption.LOW_LATENCY, disabledIds: Set<String> = emptySet()) {
         this.config = config
         this.enabled = enabledKeys
         this.boundDevices = boundDevices
+        this.scanMode = scanMode
+        this.disabledIds = disabledIds
         jobs.forEach { it.cancel() }; jobs.clear(); scanner.stop()
         devices.clear(); filters.clear(); obdIndex.clear(); controls.clear()
         declaredAdvInstances.clear()
@@ -97,6 +102,7 @@ class BleRuntime(
     }
 
     private fun declareAndPrepare(d: DeviceConfig) {
+        if (d.id in disabledIds) return
         // match.mac 없는 광고 프로필은 첫 패킷 수신 시 MAC별로 동적 선언
         if (isDynamicAdvertisement(d)) return
         declareEntitiesForInstance(d, d.id, d.name)
@@ -143,8 +149,8 @@ class BleRuntime(
     }
 
     private fun startSources() {
-        val adv = config.devices.filter { it.source == Source.advertisement }
-        if (adv.isNotEmpty()) jobs += scanner.scan(adv).onEach(::onReading).launchIn(scope)
+        val adv = config.devices.filter { it.source == Source.advertisement && it.id !in disabledIds }
+        if (adv.isNotEmpty()) jobs += scanner.scan(adv, scanMode).onEach(::onReading).launchIn(scope)
         for (d in config.devices) {
             val resolved = resolveDeviceMac(d)
             when (resolved.source) {
@@ -182,6 +188,7 @@ class BleRuntime(
     // ── BLE raw → 디코딩 → 필터 → push ──────────────────────────────────────
     private fun onReading(r: RawReading) {
         val d = devices[r.deviceId] ?: return
+        if (d.id in disabledIds) return
         val logType = when (d.source) {
             Source.advertisement -> LogType.ADV
             Source.obd, Source.gatt_notify -> LogType.NOTIF
@@ -384,6 +391,18 @@ class BleRuntime(
     }
 
     private fun normalizeMac(mac: String) = mac.replace(":", "").replace("-", "").uppercase()
+
+    fun entityUniqueIdsForDevice(deviceId: String): List<String> {
+        val d = devices[deviceId] ?: return emptyList()
+        val instanceIds = if (isDynamicAdvertisement(d)) {
+            discoveredAdvInstances.values.filter { it.profileId == deviceId }.map { it.instanceId } + listOf(deviceId)
+        } else {
+            listOf(d.id)
+        }
+        return instanceIds.flatMap { instanceId ->
+            d.sensors.map { uid(instanceId, it.key) } + d.controls.map { uid(instanceId, it.key) }
+        }.distinct()
+    }
 
     private fun isEnabled(deviceId: String, key: String) = "$deviceId/$key" in enabled
     private fun uid(deviceId: String, key: String) = "${deviceId}_$key"
