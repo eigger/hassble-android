@@ -149,4 +149,7 @@
     <string name="notif_bridge_timeout">ws_bridge not responding</string>
     <string name="notif_config_error">Config load failed</string>
     <string name="settings_saved">Settings saved</string>
+    <string name="tab_logs">Logs</string>
+    <string name="live_logs_enable">Live Logs</string>
+    <string name="logs_clear">Clear</string>
 </resources>

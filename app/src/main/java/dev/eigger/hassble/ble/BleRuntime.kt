@@ -14,6 +14,8 @@ import dev.eigger.hassble.net.CommandPayload
 import dev.eigger.hassble.net.DeviceRef
 import dev.eigger.hassble.net.EntityMsg
 import dev.eigger.hassble.net.HaWsClient
+import dev.eigger.hassble.service.LiveEventLogger
+import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.launchIn
@@ -172,6 +174,24 @@ class BleRuntime(
     // ── BLE raw → 디코딩 → 필터 → push ──────────────────────────────────────
     private fun onReading(r: RawReading) {
         val d = devices[r.deviceId] ?: return
+        val logType = when (d.source) {
+            Source.advertisement -> LogType.ADV
+            Source.obd, Source.gatt_notify -> LogType.NOTIF
+            else -> LogType.ADV
+        }
+        val info = buildString {
+            append("device=${d.id}")
+            r.macAddress?.let { append(", mac=$it") }
+            r.deviceName?.let { append(", name=$it") }
+            if (d.source == Source.advertisement) {
+                r.manufacturerHex?.let { append(", mfg=$it") }
+                r.serviceDataHex?.let { append(", svc=$it") }
+            } else {
+                append(", raw=${r.rawHex}")
+            }
+        }
+        LiveEventLogger.log(logType, info)
+
         val out = mutableListOf<Pair<String, Any>>()
 
         when (d.source) {
@@ -252,6 +272,7 @@ class BleRuntime(
             "press" -> c.command["press"]
             else -> null
         } ?: return
+        LiveEventLogger.log(LogType.TX, "BLE Write: device=${d.id}, action=${cmd.action}, hex=$hex")
         scope.launch {
             when (d.source) {
                 Source.gatt_notify -> gatt.write(d, hex)

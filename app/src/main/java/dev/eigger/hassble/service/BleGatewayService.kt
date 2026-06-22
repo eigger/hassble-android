@@ -160,6 +160,7 @@ class BleGatewayService : Service() {
                 val onLinkStatus: (DeviceLinkStatus) -> Unit = { status ->
                     _deviceLinkStatuses.value = _deviceLinkStatuses.value
                         .filter { it.profileId != status.profileId } + status
+                    LiveEventLogger.log(LogType.LINK, "device=${status.profileId}, state=${status.state}")
                 }
                 val scanner = dev.eigger.hassble.ble.NordicAdvertisementScanner(this@BleGatewayService)
                 val gattSource = dev.eigger.hassble.ble.NordicGattNotifySource(

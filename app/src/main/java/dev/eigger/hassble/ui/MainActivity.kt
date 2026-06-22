@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,6 +51,10 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.List
+import dev.eigger.hassble.service.LiveEventLogger
+import dev.eigger.hassble.service.LogEntry
+import dev.eigger.hassble.service.LogType
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -310,6 +315,12 @@ private fun HomeScreen() {
     var scanningDevice by remember { mutableStateOf<DeviceConfig?>(null) }
     var selectedTab by remember { mutableStateOf(0) }
 
+    LaunchedEffect(selectedTab) {
+        if (selectedTab != 2) {
+            LiveEventLogger.isLiveActive = false
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         if (missingPermCount > 0) {
             PermissionBanner(missingCount = missingPermCount)
@@ -395,6 +406,7 @@ private fun HomeScreen() {
                         scope.launch { repository.setSensorsEnabled(keys, enabled) }
                     },
                 )
+                2 -> LogsTabContent()
             }
         }
 
@@ -415,6 +427,17 @@ private fun HomeScreen() {
                 onClick = { selectedTab = 1 },
                 icon = { Icon(Icons.Default.Info, contentDescription = stringResource(R.string.tab_sensors)) },
                 label = { Text(stringResource(R.string.tab_sensors)) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                ),
+            )
+            NavigationBarItem(
+                selected = selectedTab == 2,
+                onClick = { selectedTab = 2 },
+                icon = { Icon(Icons.Default.List, contentDescription = stringResource(R.string.tab_logs)) },
+                label = { Text(stringResource(R.string.tab_logs)) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = MaterialTheme.colorScheme.primary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -1446,5 +1469,171 @@ private fun StatusBadge(isRunning: Boolean, connState: ConnectionState, connecti
         Box(modifier = Modifier.size(8.dp).alpha(if (connState == ConnectionState.Connecting) alpha else 1f).background(color, shape = CircleShape))
         Spacer(modifier = Modifier.width(6.dp))
         Text(text = text, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun LogsTabContent() {
+    var isLiveActive by remember { mutableStateOf(LiveEventLogger.isLiveActive) }
+    val logsList = remember { mutableStateListOf<LogEntry>() }
+
+    LaunchedEffect(isLiveActive) {
+        LiveEventLogger.isLiveActive = isLiveActive
+    }
+
+    LaunchedEffect(isLiveActive) {
+        if (isLiveActive) {
+            LiveEventLogger.logFlow.collect { logLine ->
+                if (logsList.size >= 1000) {
+                    logsList.removeAt(0)
+                }
+                logsList.add(logLine)
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            LiveEventLogger.isLiveActive = false
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.live_logs_enable),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = Color.White
+                    )
+                    Text(
+                        text = if (isLiveActive) "Streaming logs..." else "Logs paused",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { logsList.clear() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.08f),
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(stringResource(R.string.logs_clear), fontSize = 12.sp)
+                    }
+                    Switch(
+                        checked = isLiveActive,
+                        onCheckedChange = { isLiveActive = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.4f)),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+        ) {
+            val listState = rememberLazyListState()
+
+            LaunchedEffect(logsList.size) {
+                if (logsList.isNotEmpty() && !listState.isScrollInProgress) {
+                    listState.animateScrollToItem(logsList.size - 1)
+                }
+            }
+
+            if (logsList.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "No logs yet. Enable Live Logs to see traffic.",
+                        color = Color.Gray,
+                        fontSize = 14.sp
+                    )
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(logsList) { logEntry ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Text(
+                                text = logEntry.timestamp,
+                                color = Color.Gray,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(end = 6.dp, top = 2.dp)
+                            )
+                            val badgeColor = when (logEntry.type) {
+                                LogType.ADV -> Color(0xFFFFCC80)
+                                LogType.TX -> Color(0xFFC5E1A5)
+                                LogType.RX -> Color(0xFF90CAF9)
+                                LogType.NOTIF -> Color(0xFFB39DDB)
+                                LogType.LINK -> Color(0xFFEEEEEE)
+                            }
+                            val badgeText = when (logEntry.type) {
+                                LogType.ADV -> "ADV"
+                                LogType.TX -> "TX"
+                                LogType.RX -> "RX"
+                                LogType.NOTIF -> "NOTIF"
+                                LogType.LINK -> "LINK"
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .padding(end = 6.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(badgeColor.copy(alpha = 0.15f))
+                                    .border(0.5.dp, badgeColor.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = badgeText,
+                                    color = badgeColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 9.sp,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                )
+                            }
+                            Text(
+                                text = logEntry.message,
+                                color = Color.LightGray,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
