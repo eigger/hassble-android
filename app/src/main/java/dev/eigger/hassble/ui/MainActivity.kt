@@ -495,6 +495,9 @@ private fun GatewayTabContent(
     val inputsEnabled = !isRunning
     var isTestingConnection by remember { mutableStateOf(false) }
     val issueMessage = connectionIssueMessage(connectionIssue)
+    val gatewayId = remember {
+        android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "hassble"
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -515,6 +518,17 @@ private fun GatewayTabContent(
                     ConnectionState.Disconnected -> stringResource(R.string.status_disconnected)
                 }, isHighlighted = connState == ConnectionState.Connected)
                 StatusRow(label = stringResource(R.string.gateway_model), value = Build.MODEL, isHighlighted = false)
+                StatusRow(
+                    label = "게이트웨이 ID (클릭하여 복사)",
+                    value = gatewayId,
+                    isHighlighted = false,
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("Gateway ID", gatewayId)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "게이트웨이 ID가 복사되었습니다.", Toast.LENGTH_SHORT).show()
+                    }
+                )
                 if (issueMessage != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = issueMessage, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
@@ -1445,10 +1459,15 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
 }
 
 @Composable
-private fun StatusRow(label: String, value: String, isHighlighted: Boolean) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+private fun StatusRow(label: String, value: String, isHighlighted: Boolean, onClick: (() -> Unit)? = null) {
+    val modifier = if (onClick != null) {
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onClick() }
+    } else {
+        Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    }
+    Row(modifier = modifier, horizontalArrangement = Arrangement.SpaceBetween) {
         Text(text = label, color = Color.Gray, fontSize = 14.sp)
-        Text(text = value, color = if (isHighlighted) MaterialTheme.colorScheme.secondary else Color.White, fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
+        Text(text = value, color = if (onClick != null) MaterialTheme.colorScheme.primary else if (isHighlighted) MaterialTheme.colorScheme.secondary else Color.White, fontWeight = if (isHighlighted || onClick != null) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
     }
 }
 
