@@ -82,6 +82,15 @@
     <string name="last_seen_seconds">%1$d초 전</string>
     <string name="last_seen_minutes">%1$d분 전</string>
     <string name="last_seen_hours">%1$d시간 전</string>
+    <!-- 적용된 설정 인스펙터 -->
+    <string name="config_detail_show">적용된 설정 보기</string>
+    <string name="config_detail_hide">적용된 설정 숨기기</string>
+    <string name="cfg_match">매칭 조건</string>
+    <string name="cfg_decode">디코드</string>
+    <string name="cfg_raw_manufacturer">수신 제조사 데이터</string>
+    <string name="cfg_raw_service">수신 서비스 데이터</string>
+    <string name="cfg_raw_waiting">아직 수신된 광고 없음</string>
+    <string name="cfg_decode_line">%1$s · %2$s · off=%3$d len=%4$d %5$s %6$s</string>
     <string name="onboarding_title">시작하기</string>
     <string name="onboarding_step_ws_bridge">Home Assistant에 ws_bridge 통합 구성요소를 설치하세요 (HACS 또는 수동).</string>
     <string name="onboarding_step_token">HA 프로필 → 보안에서 장기 액세스 토큰을 발급하세요.</string>

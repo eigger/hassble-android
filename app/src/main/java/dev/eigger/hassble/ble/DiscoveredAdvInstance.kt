@@ -7,4 +7,8 @@ data class DiscoveredAdvInstance(
     val deviceName: String?,
     val instanceId: String,
     val lastSeenMs: Long,
+    /** 마지막으로 수신한 manufacturer payload (company ID 제외) hex. 디코딩 진단용. */
+    val manufacturerHex: String? = null,
+    /** 마지막으로 수신한 service_data payload hex. */
+    val serviceDataHex: String? = null,
 )

@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -308,12 +309,12 @@ private fun HomeScreen() {
     var scanningDevice by remember { mutableStateOf<DeviceConfig?>(null) }
     var selectedTab by remember { mutableStateOf(0) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         if (missingPermCount > 0) {
             PermissionBanner(missingCount = missingPermCount)
         }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -1017,6 +1018,7 @@ private fun DeviceConfigCard(
                             .background(Color.Black.copy(alpha = 0.2f))
                             .padding(12.dp),
                     ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                 when (device.source) {
                     Source.advertisement -> {
                         val reg = advertisementRegistrationKind(device)
@@ -1169,11 +1171,108 @@ private fun DeviceConfigCard(
                         }
                     }
                 }
+                }
                     }
+
+                    ConfigDetailSection(
+                        device = device,
+                        discoveredInstances = discoveredInstances,
+                    )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ConfigDetailSection(
+    device: DeviceConfig,
+    discoveredInstances: List<DiscoveredAdvInstance>,
+) {
+    var open by remember(device.id) { mutableStateOf(false) }
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(
+        text = stringResource(if (open) R.string.config_detail_hide else R.string.config_detail_show),
+        color = MaterialTheme.colorScheme.primary,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clickable { open = !open }
+            .padding(vertical = 4.dp),
+    )
+    if (!open) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.25f))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        device.match?.let { m ->
+            val criteria = buildList {
+                m.mac?.let { add("mac=$it") }
+                m.serviceDataUuid?.let { add("service_uuid=$it") }
+                m.manufacturerId?.let { add("manufacturer_id=0x%04X".format(it)) }
+                m.manufacturerHexPrefix?.let { add("hex_prefix=$it") }
+                m.manufacturerMinLength?.let { add("min_len=$it") }
+                m.namePrefix?.let { add("name_prefix=$it") }
+            }
+            if (criteria.isNotEmpty()) {
+                CfgLabel(stringResource(R.string.cfg_match))
+                criteria.forEach { CfgMono(it) }
+            }
+        }
+
+        val decodeSensors = device.sensors.filter { it.decode != null }
+        if (decodeSensors.isNotEmpty()) {
+            CfgLabel(stringResource(R.string.cfg_decode))
+            decodeSensors.forEach { s ->
+                val dec = s.decode!!
+                val scalePart = buildString {
+                    if (dec.scale != 1.0) append("×${dec.scale}")
+                    if (dec.offsetValue != 0.0) append(" ${if (dec.offsetValue >= 0) "+" else ""}${dec.offsetValue}")
+                }.trim()
+                CfgMono(
+                    stringResource(
+                        R.string.cfg_decode_line,
+                        s.key,
+                        s.sourceField.name,
+                        dec.offset,
+                        dec.length,
+                        "${dec.type.name}/${dec.endian.name}",
+                        scalePart,
+                    ),
+                )
+            }
+        }
+
+        val latest = discoveredInstances.maxByOrNull { it.lastSeenMs }
+        CfgLabel(stringResource(R.string.cfg_raw_manufacturer))
+        CfgMono(latest?.manufacturerHex ?: stringResource(R.string.cfg_raw_waiting))
+        if (device.match?.serviceDataUuid != null || latest?.serviceDataHex != null) {
+            CfgLabel(stringResource(R.string.cfg_raw_service))
+            CfgMono(latest?.serviceDataHex ?: stringResource(R.string.cfg_raw_waiting))
+        }
+    }
+}
+
+@Composable
+private fun CfgLabel(text: String) {
+    Text(text = text, color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+private fun CfgMono(text: String) {
+    Text(
+        text = text,
+        color = Color.LightGray,
+        fontSize = 11.sp,
+        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+        modifier = Modifier.padding(start = 6.dp),
+    )
 }
 
 private enum class AdvRegistrationKind { MacPerDevice, FixedMac, Shared }
