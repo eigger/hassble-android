@@ -40,7 +40,7 @@ class HassSettingsRepository(private val context: Context) {
     }
 
     val gitUrl: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[KEY_GIT_URL] ?: ""
+        prefs[KEY_GIT_URL].orEmpty().ifBlank { "https://github.com/eigger/hassble-config" }
     }
 
     val gitToken: Flow<String?> = context.dataStore.data.map { prefs ->
