@@ -113,6 +113,7 @@ class BleGatewayService : Service() {
                 if (state == ConnectionState.Connected) {
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
+                    runtime?.redeclareEntities()
                 }
             }
         }

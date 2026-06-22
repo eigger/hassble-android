@@ -64,6 +64,14 @@ class BleRuntime(
         ws.events.onEach(::onEvent).launchIn(scope)
     }
 
+    fun redeclareEntities() {
+        if (!::config.isInitialized) return
+        declaredAdvInstances.clear()
+        for (d in config.devices) {
+            declareAndPrepare(d)
+        }
+    }
+
     /** 설정 적용 + 사용자가 켠 센서로 엔티티 선언 + BLE 기동. */
     fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>) {
         this.config = config
