@@ -28,6 +28,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_START_ON_BOOT = booleanPreferencesKey("start_on_boot")
         private val KEY_ENABLED_SENSORS = stringPreferencesKey("enabled_sensors")
         private val KEY_ENABLED_SENSORS_INITIALIZED = booleanPreferencesKey("enabled_sensors_initialized")
+        private val KEY_ALL_KNOWN_SENSORS = stringPreferencesKey("all_known_sensors")
         private val KEY_ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
     }
 
@@ -112,22 +113,34 @@ class HassSettingsRepository(private val context: Context) {
                 val jsonStr = prefs[KEY_ENABLED_SENSORS] ?: "[]"
                 json.decodeFromString(ListSerializer(String.serializer()), jsonStr).toSet()
             }.getOrDefault(emptySet())
+            val allKnown = runCatching {
+                val jsonStr = prefs[KEY_ALL_KNOWN_SENSORS] ?: "[]"
+                json.decodeFromString(ListSerializer(String.serializer()), jsonStr).toSet()
+            }.getOrDefault(emptySet())
+
             when {
                 !initialized || current.isEmpty() -> {
                     prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
                         ListSerializer(String.serializer()),
                         allKeys.sorted(),
                     )
+                    prefs[KEY_ALL_KNOWN_SENSORS] = json.encodeToString(
+                        ListSerializer(String.serializer()),
+                        allKeys.sorted(),
+                    )
                     prefs[KEY_ENABLED_SENSORS_INITIALIZED] = true
                 }
                 else -> {
-                    val pruned = current.intersect(allKeys)
-                    if (pruned != current) {
-                        prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
-                            ListSerializer(String.serializer()),
-                            pruned.sorted(),
-                        )
-                    }
+                    val newKeys = allKeys - allKnown
+                    val pruned = current.intersect(allKeys) + newKeys
+                    prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
+                        ListSerializer(String.serializer()),
+                        pruned.sorted(),
+                    )
+                    prefs[KEY_ALL_KNOWN_SENSORS] = json.encodeToString(
+                        ListSerializer(String.serializer()),
+                        allKeys.sorted(),
+                    )
                 }
             }
         }
