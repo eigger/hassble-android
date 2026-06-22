@@ -13,6 +13,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -30,6 +35,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,16 +49,20 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -60,6 +70,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -94,14 +105,21 @@ import android.net.Uri
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import dev.eigger.hassble.ble.DiscoveredAdvInstance
+import dev.eigger.hassble.ble.SensorLastValue
+import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.ConfigLoader
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.HassSettingsRepository
 import dev.eigger.hassble.config.ObdPresetStore
 import dev.eigger.hassble.config.Source
+import dev.eigger.hassble.ble.DeviceLinkStatus
+import dev.eigger.hassble.net.ConnectionIssue
 import dev.eigger.hassble.net.ConnectionState
+import dev.eigger.hassble.net.HaConnectionTester
 import dev.eigger.hassble.service.BleGatewayService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -141,7 +159,10 @@ private fun HomeScreen() {
     val savedGitUrl by repository.gitUrl.collectAsState(initial = "")
     val savedGitToken by repository.gitToken.collectAsState(initial = "")
     val boundDevices by repository.boundDevices.collectAsState(initial = emptyMap())
+    val enabledSensors by repository.enabledSensors.collectAsState(initial = emptySet())
+    val enabledSensorsInitialized by repository.enabledSensorsInitialized.collectAsState(initial = false)
     val startOnBoot by repository.startOnBoot.collectAsState(initial = true)
+    val onboardingComplete by repository.onboardingComplete.collectAsState(initial = false)
 
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     var isBatteryIgnored by remember { mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName)) }
@@ -165,26 +186,51 @@ private fun HomeScreen() {
     var gitTokenInput by remember { mutableStateOf("") }
 
     LaunchedEffect(savedHaUrl, savedHaToken, savedGitUrl, savedGitToken) {
-        if (urlInput.isEmpty()) urlInput = savedHaUrl
-        if (tokenInput.isEmpty()) tokenInput = savedHaToken
-        if (gitUrlInput.isEmpty()) gitUrlInput = savedGitUrl
-        if (gitTokenInput.isEmpty()) gitTokenInput = savedGitToken ?: ""
+        urlInput = savedHaUrl
+        tokenInput = savedHaToken
+        gitUrlInput = savedGitUrl
+        gitTokenInput = savedGitToken ?: ""
+    }
+
+    LaunchedEffect(urlInput, tokenInput) {
+        delay(1000)
+        if (urlInput.isNotBlank()) {
+            repository.saveHaSettings(urlInput, tokenInput)
+        }
+    }
+    LaunchedEffect(gitUrlInput, gitTokenInput) {
+        delay(1000)
+        if (gitUrlInput.isNotBlank()) {
+            repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
+        }
     }
 
     val presets = remember {
         ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
     }
-    val loader = remember { ConfigLoader(File(context.filesDir, "config.yaml"), presets) }
+    val loader = remember { ConfigLoader(File(context.filesDir, "config_cache"), presets) }
     val isRunning by BleGatewayService.isServiceRunning.collectAsState()
     val connState by BleGatewayService.serviceConnectionState.collectAsState()
+    val connectionIssue by BleGatewayService.connectionIssue.collectAsState()
+    val serviceError by BleGatewayService.serviceError.collectAsState()
+    val usingCachedConfigService by BleGatewayService.usingCachedConfig.collectAsState()
+    val deviceLinkStatuses by BleGatewayService.deviceLinkStatuses.collectAsState()
+    val discoveredAdv by BleGatewayService.discoveredAdvInstances.collectAsState()
+    val sensorLastValues by BleGatewayService.sensorLastValues.collectAsState()
 
     var loadedConfig by remember { mutableStateOf<GatewayConfig?>(null) }
     var configError by remember { mutableStateOf<String?>(null) }
     var isConfigLoading by remember { mutableStateOf(false) }
     var reloadTrigger by remember { mutableStateOf(0) }
+    var usingCachedConfig by remember { mutableStateOf(false) }
+    var showOnboarding by remember { mutableStateOf(false) }
+    var missingPermCount by remember { mutableStateOf(0) }
+
+    LaunchedEffect(onboardingComplete) {
+        if (!onboardingComplete) showOnboarding = true
+    }
 
     LaunchedEffect(gitUrlInput, gitTokenInput, reloadTrigger) {
-        if (isRunning) return@LaunchedEffect
         if (gitUrlInput.isNotBlank()) {
             isConfigLoading = true
             configError = null
@@ -192,24 +238,38 @@ private fun HomeScreen() {
             isConfigLoading = false
             if (res.isSuccess) {
                 loadedConfig = res.getOrNull()
+                usingCachedConfig = false
             } else {
-                val exception = res.exceptionOrNull()
-                val userFriendlyError = when (exception) {
-                    is java.net.UnknownHostException -> "네트워크 연결 실패: 서버 주소를 찾을 수 없습니다."
-                    is java.net.ConnectException -> "서버 연결 실패: URL을 확인해 주세요."
-                    is java.io.IOException -> "네트워크 데이터 읽기 오류가 발생했습니다."
-                    is com.charleskorn.kaml.YamlException -> "설정 파일(YAML) 구문 오류가 발생했습니다. 들여쓰기 등을 확인해 주세요.\n(상세: ${exception.localizedMessage})"
-                    is kotlinx.serialization.SerializationException -> "설정 파일 데이터 분석 오류가 발생했습니다.\n(상세: ${exception.localizedMessage})"
-                    else -> "설정을 로드할 수 없습니다. URL 및 파일을 확인해 주세요.\n(상세: ${exception?.localizedMessage})"
-                }
-                configError = userFriendlyError
-                loadedConfig = loader.loadCache()
-                if (loadedConfig != null) {
-                    Toast.makeText(context, "최신 설정을 불러오지 못해 캐시된 설정을 사용합니다.", Toast.LENGTH_LONG).show()
+                configError = ConfigErrorMapper.message(context, res.exceptionOrNull())
+                loadedConfig = loader.loadCache(gitUrlInput)
+                usingCachedConfig = loadedConfig != null
+                if (usingCachedConfig) {
+                    Toast.makeText(context, context.getString(R.string.config_cache_toast), Toast.LENGTH_LONG).show()
                 }
             }
         } else {
-            loadedConfig = loader.loadCache()
+            loadedConfig = loader.loadCache(gitUrlInput)
+            usingCachedConfig = false
+        }
+    }
+
+    LaunchedEffect(reloadTrigger, isRunning) {
+        if (isRunning && reloadTrigger > 0) {
+            BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+        }
+    }
+
+    LaunchedEffect(loadedConfig) {
+        val config = loadedConfig ?: return@LaunchedEffect
+        repository.syncEnabledSensors(config)
+    }
+
+    val effectiveEnabledSensors = remember(loadedConfig, enabledSensors, enabledSensorsInitialized) {
+        val configKeys = loadedConfig?.allSensorKeys().orEmpty()
+        when {
+            configKeys.isEmpty() -> enabledSensors
+            !enabledSensorsInitialized || enabledSensors.isEmpty() -> configKeys
+            else -> enabledSensors
         }
     }
 
@@ -225,26 +285,194 @@ private fun HomeScreen() {
         }
     }
 
-    val launcher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
+    fun refreshPermissions() {
+        missingPermCount = permissionsToRequest.count {
+            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    val launcher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestMultiplePermissions()) {
+        refreshPermissions()
+    }
     LaunchedEffect(Unit) {
+        refreshPermissions()
         val ungranted = permissionsToRequest.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
         if (ungranted.isNotEmpty()) launcher.launch(ungranted.toTypedArray())
     }
+    DisposableEffect(lifecycleOwner) {
+        val permObserver = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshPermissions()
+        }
+        lifecycleOwner.lifecycle.addObserver(permObserver)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(permObserver) }
+    }
 
     var scanningDevice by remember { mutableStateOf<DeviceConfig?>(null) }
+    var selectedTab by remember { mutableStateOf(0) }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (missingPermCount > 0) {
+            PermissionBanner(missingCount = missingPermCount)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
             Column {
                 Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Text(text = stringResource(R.string.app_sub_title), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
-            StatusBadge(isRunning = isRunning, connState = connState)
+            StatusBadge(isRunning = isRunning, connState = connState, connectionIssue = connectionIssue)
         }
 
+        val showCacheBanner = usingCachedConfig || usingCachedConfigService
+        if (showCacheBanner) {
+            InfoBanner(
+                text = stringResource(R.string.config_cache_banner),
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
+        serviceError?.let { err ->
+            WarningBanner(
+                text = stringResource(R.string.service_error_banner, err),
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
+
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            when (selectedTab) {
+                0 -> GatewayTabContent(
+                    isRunning = isRunning,
+                    connState = connState,
+                    connectionIssue = connectionIssue,
+                    urlInput = urlInput,
+                    onUrlChange = { urlInput = it },
+                    tokenInput = tokenInput,
+                    onTokenChange = { tokenInput = it },
+                    gitUrlInput = gitUrlInput,
+                    onGitUrlChange = { gitUrlInput = it },
+                    gitTokenInput = gitTokenInput,
+                    onGitTokenChange = { gitTokenInput = it },
+                    startOnBoot = startOnBoot,
+                    onStartOnBootChange = { scope.launch { repository.saveStartOnBoot(it) } },
+                    isBatteryIgnored = isBatteryIgnored,
+                    onShowOnboarding = { showOnboarding = true },
+                    onStartGateway = {
+                        if (urlInput.isNotBlank() && tokenInput.isNotBlank() && gitUrlInput.isNotBlank()) {
+                            scope.launch {
+                                repository.saveHaSettings(urlInput, tokenInput)
+                                repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
+                                BleGatewayService.start(context, urlInput, tokenInput, gitUrlInput, gitTokenInput.ifBlank { null })
+                            }
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onStopGateway = { BleGatewayService.stop(context) },
+                )
+                1 -> SensorsTabContent(
+                    isRunning = isRunning,
+                    isConfigLoading = isConfigLoading,
+                    configError = configError,
+                    loadedConfig = loadedConfig,
+                    boundDevices = boundDevices,
+                    enabledSensors = effectiveEnabledSensors,
+                    discoveredAdv = discoveredAdv,
+                    sensorLastValues = sensorLastValues,
+                    deviceLinkStatuses = deviceLinkStatuses,
+                    onReloadConfig = { reloadTrigger++ },
+                    onBindClick = { scanningDevice = it },
+                    onUnbindClick = { deviceId -> scope.launch { repository.unbindDevice(deviceId) } },
+                    onSensorToggle = { key, enabled ->
+                        scope.launch { repository.setSensorEnabled(key, enabled) }
+                    },
+                    onSensorsBulkToggle = { keys, enabled ->
+                        scope.launch { repository.setSensorsEnabled(keys, enabled) }
+                    },
+                )
+            }
+        }
+
+        NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+            NavigationBarItem(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                icon = { Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.tab_gateway)) },
+                label = { Text(stringResource(R.string.tab_gateway)) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                ),
+            )
+            NavigationBarItem(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                icon = { Icon(Icons.Default.Info, contentDescription = stringResource(R.string.tab_sensors)) },
+                label = { Text(stringResource(R.string.tab_sensors)) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                ),
+            )
+        }
+    }
+
+    scanningDevice?.let { device ->
+        BleScanDialog(
+            deviceConfig = device,
+            onDismiss = { scanningDevice = null },
+            onDeviceSelected = { mac ->
+                scope.launch {
+                    repository.bindDevice(device.id, mac)
+                    scanningDevice = null
+                }
+            }
+        )
+    }
+
+    if (showOnboarding) {
+        OnboardingDialog(onDismiss = {
+            showOnboarding = false
+            scope.launch { repository.setOnboardingComplete(true) }
+        })
+    }
+}
+
+
+
+@Composable
+private fun GatewayTabContent(
+    isRunning: Boolean,
+    connState: ConnectionState,
+    connectionIssue: ConnectionIssue,
+    urlInput: String,
+    onUrlChange: (String) -> Unit,
+    tokenInput: String,
+    onTokenChange: (String) -> Unit,
+    gitUrlInput: String,
+    onGitUrlChange: (String) -> Unit,
+    gitTokenInput: String,
+    onGitTokenChange: (String) -> Unit,
+    startOnBoot: Boolean,
+    onStartOnBootChange: (Boolean) -> Unit,
+    isBatteryIgnored: Boolean,
+    onShowOnboarding: () -> Unit,
+    onStartGateway: () -> Unit,
+    onStopGateway: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val inputsEnabled = !isRunning
+    var isTestingConnection by remember { mutableStateOf(false) }
+    val issueMessage = connectionIssueMessage(connectionIssue)
+
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -260,26 +488,86 @@ private fun HomeScreen() {
                     ConnectionState.Disconnected -> stringResource(R.string.status_disconnected)
                 }, isHighlighted = connState == ConnectionState.Connected)
                 StatusRow(label = stringResource(R.string.gateway_model), value = Build.MODEL, isHighlighted = false)
+                if (issueMessage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = issueMessage, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
             }
         }
 
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = stringResource(R.string.server_integration_settings), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = stringResource(R.string.server_integration_settings), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextButton(onClick = onShowOnboarding) {
+                        Text(stringResource(R.string.show_onboarding_again), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                    }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                OutlinedTextField(value = urlInput, onValueChange = { urlInput = it }, label = { Text("HA URL") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                OutlinedTextField(value = urlInput, onValueChange = onUrlChange, label = { Text("HA URL") }, enabled = inputsEnabled, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(value = tokenInput, onValueChange = { tokenInput = it }, label = { Text(stringResource(R.string.long_lived_token)) }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                OutlinedTextField(value = tokenInput, onValueChange = onTokenChange, label = { Text(stringResource(R.string.long_lived_token)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(value = gitUrlInput, onValueChange = { gitUrlInput = it }, label = { Text(stringResource(R.string.git_config_url)) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                OutlinedTextField(value = gitUrlInput, onValueChange = onGitUrlChange, label = { Text(stringResource(R.string.git_config_url)) }, enabled = inputsEnabled, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(value = gitTokenInput, onValueChange = { gitTokenInput = it }, label = { Text(stringResource(R.string.git_token_optional)) }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                OutlinedTextField(value = gitTokenInput, onValueChange = onGitTokenChange, label = { Text(stringResource(R.string.git_token_optional)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            if (urlInput.isBlank() || tokenInput.isBlank()) {
+                                Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            scope.launch {
+                                isTestingConnection = true
+                                when (val result = HaConnectionTester.test(urlInput, tokenInput)) {
+                                    is HaConnectionTester.Result.Ok ->
+                                        Toast.makeText(context, context.getString(R.string.test_connection_ok), Toast.LENGTH_SHORT).show()
+                                    is HaConnectionTester.Result.AuthFailed ->
+                                        Toast.makeText(context, context.getString(R.string.test_connection_auth_failed, result.code), Toast.LENGTH_LONG).show()
+                                    is HaConnectionTester.Result.NetworkError ->
+                                        Toast.makeText(context, context.getString(R.string.test_connection_failed, result.message), Toast.LENGTH_LONG).show()
+                                }
+                                isTestingConnection = false
+                            }
+                        },
+                        enabled = !isTestingConnection,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), contentColor = MaterialTheme.colorScheme.primary),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        if (isTestingConnection) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(stringResource(R.string.test_connection_btn), fontSize = 12.sp)
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(context.getString(R.string.ws_bridge_url))))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.08f), contentColor = Color.White),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Text(stringResource(R.string.open_ws_bridge_repo), fontSize = 11.sp)
+                    }
+                }
             }
         }
+
+        GatewayControlButton(
+            isRunning = isRunning,
+            onStart = onStartGateway,
+            onStop = onStopGateway,
+        )
 
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -296,8 +584,8 @@ private fun HomeScreen() {
                     }
                     Switch(
                         checked = startOnBoot,
-                        onCheckedChange = { scope.launch { repository.saveStartOnBoot(it) } },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = MaterialTheme.colorScheme.primary)
+                        onCheckedChange = onStartOnBootChange,
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = MaterialTheme.colorScheme.primary),
                     )
                 }
 
@@ -309,7 +597,7 @@ private fun HomeScreen() {
                         Text(
                             text = if (isBatteryIgnored) stringResource(R.string.battery_opt_ignored) else stringResource(R.string.battery_opt_active),
                             fontSize = 12.sp,
-                            color = if (isBatteryIgnored) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
+                            color = if (isBatteryIgnored) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
                         )
                     }
                     if (!isBatteryIgnored) {
@@ -321,12 +609,11 @@ private fun HomeScreen() {
                                     }
                                     context.startActivity(intent)
                                 } catch (e: Exception) {
-                                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                    context.startActivity(intent)
+                                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(8.dp),
                         ) {
                             Text(text = stringResource(R.string.request_battery_ignore_btn), color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
@@ -356,7 +643,7 @@ private fun HomeScreen() {
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.padding(start = 8.dp)
+                        modifier = Modifier.padding(start = 8.dp),
                     ) {
                         Text(text = stringResource(R.string.go_to_settings_btn), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
@@ -364,165 +651,458 @@ private fun HomeScreen() {
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(R.string.devices_adapters_list),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            if (!isRunning) {
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+
+@Composable
+private fun SensorsTabContent(
+    isRunning: Boolean,
+    isConfigLoading: Boolean,
+    configError: String?,
+    loadedConfig: GatewayConfig?,
+    boundDevices: Map<String, String>,
+    enabledSensors: Set<String>,
+    discoveredAdv: List<DiscoveredAdvInstance>,
+    sensorLastValues: List<SensorLastValue>,
+    deviceLinkStatuses: List<DeviceLinkStatus>,
+    onReloadConfig: () -> Unit,
+    onBindClick: (DeviceConfig) -> Unit,
+    onUnbindClick: (String) -> Unit,
+    onSensorToggle: (String, Boolean) -> Unit,
+    onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.devices_adapters_list),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                )
                 Button(
-                    onClick = { reloadTrigger++ },
+                    onClick = onReloadConfig,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), contentColor = MaterialTheme.colorScheme.primary),
                     shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                 ) {
                     Text(text = stringResource(R.string.reload_config_btn), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
+        if (isRunning) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.reload_config_running_hint),
+                        color = Color.Gray,
+                        fontSize = 11.sp,
+                    )
+                    Text(
+                        text = stringResource(R.string.sensor_edit_locked_running),
+                        color = Color.Gray,
+                        fontSize = 11.sp,
+                    )
+                    Text(
+                        text = stringResource(R.string.bind_locked_running),
+                        color = Color.Gray,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
+
+        if (configError != null && loadedConfig != null) {
+            item { WarningBanner(text = stringResource(R.string.config_cache_banner)) }
+        }
 
         if (isConfigLoading) {
-            Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
+            item {
+                Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
+            }
         } else if (configError != null && loadedConfig == null) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = stringResource(R.string.config_load_error, configError ?: ""),
-                            color = MaterialTheme.colorScheme.error,
-                            fontSize = 14.sp,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Button(
-                        onClick = { reloadTrigger++ },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Text(text = stringResource(R.string.retry_btn), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f)),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = stringResource(R.string.config_load_error, configError),
+                                color = MaterialTheme.colorScheme.error,
+                                fontSize = 14.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Button(
+                            onClick = onReloadConfig,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.align(Alignment.End),
+                        ) {
+                            Text(text = stringResource(R.string.retry_btn), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
-        } else if (loadedConfig == null || loadedConfig?.devices?.isEmpty() == true) {
-            Text(text = stringResource(R.string.no_devices_configured), color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp))
+        } else if (loadedConfig == null || loadedConfig.devices.isEmpty()) {
+            item {
+                Text(
+                    text = stringResource(R.string.no_devices_configured),
+                    color = Color.Gray,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(vertical = 12.dp),
+                )
+            }
         } else {
-            loadedConfig?.devices?.forEach { device ->
+            items(loadedConfig.devices, key = { it.id }) { device ->
                 DeviceConfigCard(
                     device = device,
                     boundMac = boundDevices[device.id],
-                    onBindClick = { scanningDevice = device },
-                    onUnbindClick = { scope.launch { repository.unbindDevice(device.id) } }
+                    enabledSensors = enabledSensors,
+                    isRunning = isRunning,
+                    discoveredInstances = discoveredAdv.filter { it.profileId == device.id },
+                    sensorLastValues = sensorLastValues.filter { it.profileId == device.id },
+                    linkStatus = deviceLinkStatuses.firstOrNull { it.profileId == device.id },
+                    onSensorToggle = onSensorToggle,
+                    onSensorsBulkToggle = onSensorsBulkToggle,
+                    onBindClick = { onBindClick(device) },
+                    onUnbindClick = { onUnbindClick(device.id) },
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        val buttonBrush = if (isRunning) Brush.horizontalGradient(listOf(Color(0xFFFF5252), Color(0xFFFF1744))) else Brush.horizontalGradient(listOf(Color(0xFF9E86FF), Color(0xFF651FFF)))
-        Box(modifier = Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(28.dp)).background(buttonBrush)) {
-            Button(onClick = {
-                if (isRunning) {
-                    BleGatewayService.stop(context)
-                } else {
-                    if (urlInput.isNotBlank() && tokenInput.isNotBlank() && gitUrlInput.isNotBlank()) {
-                        scope.launch {
-                            repository.saveHaSettings(urlInput, tokenInput)
-                            repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
-                            BleGatewayService.start(context, urlInput, tokenInput, gitUrlInput, gitTokenInput.ifBlank { null })
-                        }
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }, modifier = Modifier.fillMaxSize(), colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), shape = RoundedCornerShape(28.dp)) {
-                Text(text = if (isRunning) stringResource(R.string.stop_gateway) else stringResource(R.string.start_gateway), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            }
-        }
-    }
-
-    scanningDevice?.let { device ->
-        BleScanDialog(
-            deviceConfig = device,
-            onDismiss = { scanningDevice = null },
-            onDeviceSelected = { mac ->
-                scope.launch {
-                    repository.bindDevice(device.id, mac)
-                    scanningDevice = null
-                }
-            }
-        )
+        item { Spacer(modifier = Modifier.height(8.dp)) }
     }
 }
 
-
+@Composable
+private fun GatewayControlButton(isRunning: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
+    val buttonBrush = if (isRunning) {
+        Brush.horizontalGradient(listOf(Color(0xFFFF5252), Color(0xFFFF1744)))
+    } else {
+        Brush.horizontalGradient(listOf(Color(0xFF9E86FF), Color(0xFF651FFF)))
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(28.dp)).background(buttonBrush)) {
+        Button(
+            onClick = { if (isRunning) onStop() else onStart() },
+            modifier = Modifier.fillMaxSize(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+            shape = RoundedCornerShape(28.dp),
+        ) {
+            Text(
+                text = if (isRunning) stringResource(R.string.stop_gateway) else stringResource(R.string.start_gateway),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DeviceConfigCard(device: DeviceConfig, boundMac: String?, onBindClick: () -> Unit, onUnbindClick: () -> Unit) {
+private fun DeviceConfigCard(
+    device: DeviceConfig,
+    boundMac: String?,
+    enabledSensors: Set<String>,
+    isRunning: Boolean,
+    discoveredInstances: List<DiscoveredAdvInstance>,
+    sensorLastValues: List<SensorLastValue>,
+    linkStatus: DeviceLinkStatus?,
+    onSensorToggle: (String, Boolean) -> Unit,
+    onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
+    onBindClick: () -> Unit,
+    onUnbindClick: () -> Unit,
+) {
+    val deviceSensorKeys = remember(device.id, device.sensors) {
+        device.sensors.map { "${device.id}/${it.key}" }
+    }
+    val enabledCount = deviceSensorKeys.count { it in enabledSensors }
+    var expanded by remember(device.id) { mutableStateOf(false) }
+
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(text = device.name, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                     Text(text = "ID: ${device.id}", fontSize = 12.sp, color = Color.Gray)
+                    if (device.sensors.isNotEmpty()) {
+                        Text(
+                            text = stringResource(R.string.sensors_enabled_summary, enabledCount, device.sensors.size),
+                            fontSize = 11.sp,
+                            color = if (enabledCount > 0) MaterialTheme.colorScheme.secondary else Color.Gray,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
-                val badgeColor = when (device.source) { Source.advertisement -> Color(0xFF02B3E4); Source.gatt_notify -> Color(0xFF9E86FF); Source.obd -> Color(0xFFFF9100) }
-                val badgeText = when (device.source) {
-                    Source.advertisement -> stringResource(R.string.source_advertisement)
-                    Source.gatt_notify -> stringResource(R.string.source_gatt_notify)
-                    Source.obd -> stringResource(R.string.source_obd)
+                Column(horizontalAlignment = Alignment.End) {
+                    val badgeColor = when (device.source) { Source.advertisement -> Color(0xFF02B3E4); Source.gatt_notify -> Color(0xFF9E86FF); Source.obd -> Color(0xFFFF9100) }
+                    val badgeText = when (device.source) {
+                        Source.advertisement -> stringResource(R.string.source_advertisement)
+                        Source.gatt_notify -> stringResource(R.string.source_gatt_notify)
+                        Source.obd -> stringResource(R.string.source_obd)
+                    }
+                    SourceBadge(text = badgeText, color = badgeColor)
+                    if (device.source == Source.advertisement) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        AdvertisementRegistrationBadge(device)
+                    }
                 }
-                Box(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(badgeColor.copy(alpha = 0.15f)).border(1.dp, badgeColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                    Text(text = badgeText, color = badgeColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = Color.Gray,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            if (device.sensors.isNotEmpty()) {
-                Text(text = stringResource(R.string.sensor_list), fontSize = 12.sp, color = Color.Gray, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(4.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    device.sensors.take(4).forEach { sensor ->
-                        Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.05f)).padding(horizontal = 6.dp, vertical = 3.dp)) {
-                            Text(text = sensor.key, color = Color.LightGray, fontSize = 11.sp)
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                Column {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    if (device.sensors.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.enabled_sensors),
+                                fontSize = 12.sp,
+                                color = Color.Gray,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (!isRunning) {
+                                Row {
+                                    TextButton(
+                                        onClick = { onSensorsBulkToggle(deviceSensorKeys.toSet(), true) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.sensors_enable_all),
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { onSensorsBulkToggle(deviceSensorKeys.toSet(), false) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.sensors_disable_all),
+                                            fontSize = 11.sp,
+                                            color = Color.Gray,
+                                        )
+                                    }
+                                }
+                            }
                         }
-                    }
-                    if (device.sensors.size > 4) {
-                        Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.05f)).padding(horizontal = 6.dp, vertical = 3.dp)) {
-                            Text(text = "+${device.sensors.size - 4}", color = Color.LightGray, fontSize = 11.sp)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        device.sensors.forEach { sensor ->
+                            val sensorKey = "${device.id}/${sensor.key}"
+                            val checked = sensorKey in enabledSensors
+                            val latest = sensorLastValues
+                                .filter { it.sensorKey == sensor.key }
+                                .maxByOrNull { it.updatedAtMs }
+                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = sensorDisplayLabel(sensor),
+                                        color = if (checked) Color.White else Color.Gray,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Switch(
+                                        checked = checked,
+                                        onCheckedChange = { onSensorToggle(sensorKey, it) },
+                                        enabled = !isRunning,
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.Black,
+                                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                        ),
+                                    )
+                                }
+                                if (isRunning && checked) {
+                                    Text(
+                                        text = if (latest != null) {
+                                            stringResource(
+                                                R.string.sensor_value_updated,
+                                                latest.value,
+                                                lastSeenText(latest.updatedAtMs),
+                                            )
+                                        } else {
+                                            stringResource(R.string.sensor_no_data)
+                                        },
+                                        color = if (latest != null) MaterialTheme.colorScheme.secondary else Color.Gray,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+                                    )
+                                }
+                            }
                         }
+                        Spacer(modifier = Modifier.height(12.dp))
                     }
+            if (device.controls.isNotEmpty()) {
+                Text(
+                    text = stringResource(R.string.ha_controls),
+                    fontSize = 12.sp,
+                    color = Color.Gray,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                device.controls.forEach { control ->
+                    val label = control.name ?: control.key.replace('_', ' ').replaceFirstChar { it.uppercase() }
+                    Text(
+                        text = "$label · ${controlTypeLabel(control.type)}",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                    )
+                    Text(
+                        text = stringResource(R.string.controls_ha_only_hint, controlTypeLabel(control.type)),
+                        color = Color.Gray,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
             }
             Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.2f)).padding(12.dp)) {
                 when (device.source) {
                     Source.advertisement -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(6.dp).background(Color(0xFF00E676), CircleShape))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(text = stringResource(R.string.auto_detecting), color = Color(0xFF00E676), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        val reg = advertisementRegistrationKind(device)
+                        Text(text = reg.hint, color = Color.Gray, fontSize = 11.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        when {
+                            !isRunning -> {
+                                Text(
+                                    text = stringResource(R.string.discovered_devices_waiting),
+                                    color = Color.Gray,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            discoveredInstances.isEmpty() -> {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(6.dp).background(Color(0xFF00E676), CircleShape))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = stringResource(R.string.auto_detecting),
+                                        color = Color(0xFF00E676),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                            else -> {
+                                Text(
+                                    text = stringResource(R.string.discovered_devices_count, discoveredInstances.size),
+                                    color = Color(0xFF00E676),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                discoveredInstances.forEach { inst ->
+                                    val macBased = reg.macBasedPerInstance
+                                    Column(modifier = Modifier.padding(top = 8.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                                Box(modifier = Modifier.size(6.dp).background(Color(0xFF00E676), CircleShape))
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = inst.deviceName ?: stringResource(R.string.unknown_device),
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                )
+                                            }
+                                            MacBasedChip(macBased = macBased)
+                                        }
+                                        Text(
+                                            text = inst.mac,
+                                            color = Color.Gray,
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(start = 14.dp),
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.adv_instance_entity_id, inst.instanceId),
+                                            color = Color.Gray,
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.padding(start = 14.dp),
+                                        )
+                                        Text(
+                                            text = lastSeenText(inst.lastSeenMs),
+                                            color = Color.Gray,
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.padding(start = 14.dp),
+                                        )
+                                        val instValues = sensorLastValues.filter { it.instanceId == inst.instanceId }
+                                        if (instValues.isNotEmpty()) {
+                                            instValues.forEach { v ->
+                                                Text(
+                                                    text = stringResource(
+                                                        R.string.sensor_value_updated,
+                                                        "${v.sensorKey}: ${v.value}",
+                                                        lastSeenText(v.updatedAtMs),
+                                                    ),
+                                                    color = MaterialTheme.colorScheme.secondary,
+                                                    fontSize = 10.sp,
+                                                    modifier = Modifier.padding(start = 14.dp, top = 2.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     Source.gatt_notify, Source.obd -> {
+                        if (device.source == Source.obd) {
+                            Text(
+                                text = stringResource(R.string.obd_limitation_hint),
+                                color = Color.Gray,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(bottom = 6.dp),
+                            )
+                        }
                         val hardcodedMac = if (device.source == Source.gatt_notify) device.gatt?.mac else device.obd?.mac
                         if (!hardcodedMac.isNullOrBlank()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(modifier = Modifier.size(6.dp).background(Color.Gray, CircleShape))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(text = stringResource(R.string.bound_in_config, hardcodedMac), color = Color.LightGray, fontSize = 12.sp)
+                            }
+                            if (isRunning && linkStatus != null) {
+                                DeviceLinkStatusRow(linkStatus)
                             }
                         } else if (!boundMac.isNullOrBlank()) {
                             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -532,9 +1112,14 @@ private fun DeviceConfigCard(device: DeviceConfig, boundMac: String?, onBindClic
                                     Text(text = stringResource(R.string.connected_mac, boundMac), color = Color(0xFF00E676), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                                 }
                                 Row {
-                                    Text(text = stringResource(R.string.rebind), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
-                                    Text(text = stringResource(R.string.unbind), color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onUnbindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    if (!isRunning) {
+                                        Text(text = stringResource(R.string.rebind), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
+                                        Text(text = stringResource(R.string.unbind), color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onUnbindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    }
                                 }
+                            }
+                            if (isRunning && linkStatus != null) {
+                                DeviceLinkStatusRow(linkStatus)
                             }
                         } else {
                             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -543,16 +1128,88 @@ private fun DeviceConfigCard(device: DeviceConfig, boundMac: String?, onBindClic
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(text = stringResource(R.string.connection_needed), color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 }
-                                Box(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primary).clickable { onBindClick() }.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                                    Text(text = stringResource(R.string.bind_connect), color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                if (!isRunning) {
+                                    Box(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primary).clickable { onBindClick() }.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                                        Text(text = stringResource(R.string.bind_connect), color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+                }
+            }
         }
     }
+}
+
+private enum class AdvRegistrationKind { MacPerDevice, FixedMac, Shared }
+
+private data class AdvRegistrationInfo(
+    val kind: AdvRegistrationKind,
+    val label: String,
+    val hint: String,
+    val color: Color,
+    val macBasedPerInstance: Boolean,
+)
+
+@Composable
+private fun advertisementRegistrationKind(device: DeviceConfig): AdvRegistrationInfo {
+    val fixedMac = device.match?.mac?.takeIf { it.isNotBlank() }
+    return when {
+        device.instanceMode == AdvertisementInstanceMode.shared -> AdvRegistrationInfo(
+            kind = AdvRegistrationKind.Shared,
+            label = stringResource(R.string.adv_reg_shared),
+            hint = stringResource(R.string.adv_reg_shared_hint),
+            color = Color(0xFFFF9100),
+            macBasedPerInstance = false,
+        )
+        fixedMac != null -> AdvRegistrationInfo(
+            kind = AdvRegistrationKind.FixedMac,
+            label = stringResource(R.string.adv_reg_fixed_mac, fixedMac),
+            hint = stringResource(R.string.adv_reg_fixed_mac_hint),
+            color = Color(0xFF9E9E9E),
+            macBasedPerInstance = false,
+        )
+        else -> AdvRegistrationInfo(
+            kind = AdvRegistrationKind.MacPerDevice,
+            label = stringResource(R.string.adv_reg_mac_per_device),
+            hint = stringResource(R.string.adv_reg_mac_per_device_hint),
+            color = Color(0xFF02B3E4),
+            macBasedPerInstance = true,
+        )
+    }
+}
+
+@Composable
+private fun SourceBadge(text: String, color: Color) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.15f))
+            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Text(text = text, color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun AdvertisementRegistrationBadge(device: DeviceConfig) {
+    val reg = advertisementRegistrationKind(device)
+    SourceBadge(text = reg.label, color = reg.color)
+}
+
+@Composable
+private fun MacBasedChip(macBased: Boolean) {
+    val color = if (macBased) Color(0xFF02B3E4) else Color(0xFFFF9100)
+    val label = if (macBased) {
+        stringResource(R.string.adv_instance_mac_based)
+    } else {
+        stringResource(R.string.adv_instance_not_mac_based)
+    }
+    SourceBadge(text = label, color = color)
 }
 
 @Composable
@@ -643,10 +1300,18 @@ private fun StatusRow(label: String, value: String, isHighlighted: Boolean) {
 }
 
 @Composable
-private fun StatusBadge(isRunning: Boolean, connState: ConnectionState) {
+private fun StatusBadge(isRunning: Boolean, connState: ConnectionState, connectionIssue: ConnectionIssue) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val alpha by infiniteTransition.animateFloat(initialValue = 0.4f, targetValue = 1f, animationSpec = infiniteRepeatable(animation = tween(1000), repeatMode = RepeatMode.Reverse), label = "pulseAlpha")
-    val (color, text) = when { !isRunning -> Color.Gray to "Offline"; connState == ConnectionState.Connected -> MaterialTheme.colorScheme.secondary to "Connected"; connState == ConnectionState.Connecting -> Color(0xFFFFD600) to "Connecting"; else -> MaterialTheme.colorScheme.error to "Error" }
+    val (color, text) = when {
+        !isRunning -> Color.Gray to stringResource(R.string.status_badge_offline)
+        connectionIssue == ConnectionIssue.AuthFailed -> MaterialTheme.colorScheme.error to stringResource(R.string.status_badge_auth_failed)
+        connectionIssue == ConnectionIssue.BridgeNotResponding -> Color(0xFFFF9100) to stringResource(R.string.status_badge_bridge_timeout)
+        connectionIssue == ConnectionIssue.NetworkError -> MaterialTheme.colorScheme.error to stringResource(R.string.status_badge_network_error)
+        connState == ConnectionState.Connected -> MaterialTheme.colorScheme.secondary to stringResource(R.string.status_badge_connected)
+        connState == ConnectionState.Connecting -> Color(0xFFFFD600) to stringResource(R.string.status_badge_connecting)
+        else -> MaterialTheme.colorScheme.error to stringResource(R.string.status_badge_error)
+    }
     Row(modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = 0.15f)).border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(modifier = Modifier.size(8.dp).alpha(if (connState == ConnectionState.Connecting) alpha else 1f).background(color, shape = CircleShape))
         Spacer(modifier = Modifier.width(6.dp))

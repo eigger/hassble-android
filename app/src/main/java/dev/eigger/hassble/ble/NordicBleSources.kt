@@ -73,6 +73,11 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                     if (!isMatch && match.namePrefix != null && deviceName.startsWith(match.namePrefix, ignoreCase = true)) {
                         isMatch = true
                     }
+                    if (!isMatch && match.manufacturerId != null && manufacturerData != null) {
+                        if (manufacturerData.get(match.manufacturerId) != null) {
+                            isMatch = true
+                        }
+                    }
 
                     if (isMatch) {
                         val rawHex = when (d.sensors.firstOrNull()?.sourceField) {
@@ -92,7 +97,13 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                         }
 
                         if (rawHex != null) {
-                            emit(RawReading(deviceId = d.id, source = "advertisement", rawHex = rawHex))
+                            emit(RawReading(
+                                deviceId = d.id,
+                                source = "advertisement",
+                                rawHex = rawHex,
+                                macAddress = deviceAddress,
+                                deviceName = deviceName.takeIf { it.isNotBlank() },
+                            ))
                         }
                     }
                 }
@@ -117,7 +128,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
  */
 class NordicGattNotifySource(
     private val context: Context,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) : GattNotifySource {
     private val activeConnections = mutableMapOf<String, ClientBleGatt>()
 
@@ -128,8 +140,10 @@ class NordicGattNotifySource(
 
         try {
             Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
             val client = ClientBleGatt.connect(context, mac, scope)
             activeConnections[device.id] = client
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
             val services = client.discoverServices()
             val service = services.findService(UUID.fromString(serviceUuidStr))
@@ -138,14 +152,17 @@ class NordicGattNotifySource(
             if (characteristic != null) {
                 Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
                 characteristic.getNotifications().collect { bytes ->
+                    onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
                     val hex = bytes.value.joinToString("") { String.format("%02X", it) }
                     emit(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
                 }
             } else {
                 Log.e(TAG, "Notify characteristic $notifyCharUuidStr not found")
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = "Notify char not found"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed connecting/subscribing to GATT device ${device.id}", e)
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
         }
     }
 
@@ -184,7 +201,8 @@ class NordicGattNotifySource(
  */
 class NordicElm327Source(
     private val context: Context,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) : Elm327Source {
     private val activeConnections = mutableMapOf<String, ClientBleGatt>()
     private val responseMutex = Mutex()
@@ -200,8 +218,10 @@ class NordicElm327Source(
 
         try {
             Log.d(TAG, "Connecting to OBD reader ${device.id} at $mac")
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
             val client = ClientBleGatt.connect(context, mac, scope)
             activeConnections[device.id] = client
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
             val services = client.discoverServices()
             val service = services.findService(UUID.fromString(serviceUuidStr))
@@ -240,6 +260,7 @@ class NordicElm327Source(
                 }
 
                 // 3. 센서별 개별 폴링 코루틴 예약
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
                 for (sensor in device.sensors) {
                     if (sensor.key !in enabledKeys) continue
                     val intervalMs = parseDurationMs(sensor.updateInterval, 60000L)
@@ -252,7 +273,7 @@ class NordicElm327Source(
                             delay(intervalMs)
                             val rawResponse = sendCommand(client, txChar, cmd, txDelayMs)
                             if (rawResponse != null) {
-                                // 수신된 ASCII 응답에서 공백/개행/프롬프트를 제거해 16진수 hex 형태로 변환
+                                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
                                 val cleanHex = rawResponse.replace("\r", "")
                                     .replace("\n", "")
                                     .replace(" ", "")
@@ -266,9 +287,11 @@ class NordicElm327Source(
                 }
             } else {
                 Log.e(TAG, "OBD tx ($txCharUuidStr) or rx ($rxCharUuidStr) characteristic not found")
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = "TX/RX char not found"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed connecting/subscribing to OBD dongle ${device.id}", e)
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
         }
     }
 

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "hassble_settings")
@@ -25,6 +26,9 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_GIT_TOKEN = stringPreferencesKey("git_token")
         private val KEY_BOUND_DEVICES = stringPreferencesKey("bound_devices")
         private val KEY_START_ON_BOOT = booleanPreferencesKey("start_on_boot")
+        private val KEY_ENABLED_SENSORS = stringPreferencesKey("enabled_sensors")
+        private val KEY_ENABLED_SENSORS_INITIALIZED = booleanPreferencesKey("enabled_sensors_initialized")
+        private val KEY_ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -40,7 +44,7 @@ class HassSettingsRepository(private val context: Context) {
     }
 
     val gitUrl: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[KEY_GIT_URL].orEmpty().ifBlank { "https://github.com/eigger/hassble-config" }
+        prefs[KEY_GIT_URL].orEmpty().ifBlank { HassBleDefaults.GIT_CONFIG_URL }
     }
 
     val gitToken: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -52,6 +56,27 @@ class HassSettingsRepository(private val context: Context) {
         runCatching {
             json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), jsonStr)
         }.getOrDefault(emptyMap())
+    }
+
+    val enabledSensors: Flow<Set<String>> = context.dataStore.data.map { prefs ->
+        val jsonStr = prefs[KEY_ENABLED_SENSORS] ?: return@map emptySet()
+        runCatching {
+            json.decodeFromString(ListSerializer(String.serializer()), jsonStr).toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    val enabledSensorsInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_ENABLED_SENSORS_INITIALIZED] ?: false
+    }
+
+    val onboardingComplete: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_ONBOARDING_COMPLETE] ?: false
+    }
+
+    suspend fun setOnboardingComplete(complete: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_ONBOARDING_COMPLETE] = complete
+        }
     }
 
     suspend fun saveHaSettings(url: String, token: String) {
@@ -75,6 +100,75 @@ class HassSettingsRepository(private val context: Context) {
             } else {
                 prefs.remove(KEY_GIT_TOKEN)
             }
+        }
+    }
+
+    suspend fun syncEnabledSensors(config: GatewayConfig) {
+        val allKeys = config.allSensorKeys()
+        if (allKeys.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val initialized = prefs[KEY_ENABLED_SENSORS_INITIALIZED] ?: false
+            val current = runCatching {
+                val jsonStr = prefs[KEY_ENABLED_SENSORS] ?: "[]"
+                json.decodeFromString(ListSerializer(String.serializer()), jsonStr).toSet()
+            }.getOrDefault(emptySet())
+            when {
+                !initialized || current.isEmpty() -> {
+                    prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
+                        ListSerializer(String.serializer()),
+                        allKeys.sorted(),
+                    )
+                    prefs[KEY_ENABLED_SENSORS_INITIALIZED] = true
+                }
+                else -> {
+                    val pruned = current.intersect(allKeys)
+                    if (pruned != current) {
+                        prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
+                            ListSerializer(String.serializer()),
+                            pruned.sorted(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun setSensorEnabled(sensorKey: String, enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            val currentSet = runCatching {
+                val currentJson = prefs[KEY_ENABLED_SENSORS] ?: "[]"
+                json.decodeFromString(ListSerializer(String.serializer()), currentJson).toMutableSet()
+            }.getOrDefault(mutableSetOf())
+            if (enabled) {
+                currentSet += sensorKey
+            } else {
+                currentSet -= sensorKey
+            }
+            prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
+                ListSerializer(String.serializer()),
+                currentSet.sorted(),
+            )
+            prefs[KEY_ENABLED_SENSORS_INITIALIZED] = true
+        }
+    }
+
+    suspend fun setSensorsEnabled(sensorKeys: Collection<String>, enabled: Boolean) {
+        if (sensorKeys.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val currentSet = runCatching {
+                val currentJson = prefs[KEY_ENABLED_SENSORS] ?: "[]"
+                json.decodeFromString(ListSerializer(String.serializer()), currentJson).toMutableSet()
+            }.getOrDefault(mutableSetOf())
+            if (enabled) {
+                currentSet += sensorKeys
+            } else {
+                currentSet -= sensorKeys.toSet()
+            }
+            prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
+                ListSerializer(String.serializer()),
+                currentSet.sorted(),
+            )
+            prefs[KEY_ENABLED_SENSORS_INITIALIZED] = true
         }
     }
 
