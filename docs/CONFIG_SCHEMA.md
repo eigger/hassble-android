@@ -43,8 +43,10 @@ devices: [ ... ]                    # 아래 참조
   instance_mode: mac           # mac(기본) | shared
   match:                       # 지정한 항목은 **모두** 일치해야 함 (AND)
     mac: "A4:C1:38:..."
-    service_data_uuid: "181a"
+    service_data_uuid: "181a"  # service_data 또는 광고 service_uuids 목록
     manufacturer_id: 0x004C
+    manufacturer_hex_prefix: "0215"      # 선택: manufacturer payload hex 접두사
+    manufacturer_min_length: 24          # 선택: manufacturer payload 최소 바이트
     name_prefix: "LYWSD"
   sensors:
     - key: temperature

@@ -58,6 +58,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 val deviceAddress = result.device.address
                 val scanRecord = result.data?.scanRecord
                 val serviceData = scanRecord?.serviceData ?: emptyMap()
+                val advertisedServiceUuids = scanRecord?.serviceUuids.orEmpty()
                 val manufacturerData = scanRecord?.manufacturerSpecificData
                 val rawBytes = scanRecord?.bytes
 
@@ -72,18 +73,19 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             hasServiceUuid = { uuid ->
                                 val target = uuid.uppercase()
                                 serviceData.keys.any { it.uuid.toString().uppercase().contains(target) }
+                                    || advertisedServiceUuids.any {
+                                        it.uuid.toString().uppercase().contains(target)
+                                    }
                             },
-                            hasManufacturerId = { id ->
-                                manufacturerData?.get(id) != null
+                            manufacturerPayload = { id ->
+                                manufacturerData?.get(id)?.value?.takeIf { it.isNotEmpty() }
                             },
                         )
                     ) {
                         continue
                     }
 
-                    val manufacturerHex = match.manufacturerId?.let { id ->
-                        manufacturerData?.get(id)?.value?.let { AdvertisementMatcher.bytesToHex(it) }
-                    }
+                    val manufacturerHex = resolveManufacturerHex(manufacturerData, match.manufacturerId)
                     val serviceDataHex = match.serviceDataUuid?.let { uuid ->
                         val target = uuid.uppercase()
                         serviceData.entries.firstOrNull { (key, _) ->
@@ -125,6 +127,25 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
 
     private fun bytesToHex(bytes: ByteArray): String =
         bytes.joinToString("") { String.format("%02X", it) }
+
+    private fun resolveManufacturerHex(
+        manufacturerData: android.util.SparseArray<no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>?,
+        preferredId: Int?,
+    ): String? {
+        preferredId?.let { id ->
+            manufacturerData?.get(id)?.value
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { return bytesToHex(it) }
+        }
+        if (manufacturerData == null || manufacturerData.size() == 0) return null
+        var best: ByteArray? = null
+        for (i in 0 until manufacturerData.size()) {
+            val payload = manufacturerData.valueAt(i)?.value ?: continue
+            if (payload.isEmpty()) continue
+            if (best == null || payload.size > best.size) best = payload
+        }
+        return best?.let { bytesToHex(it) }
+    }
 }
 
 /**

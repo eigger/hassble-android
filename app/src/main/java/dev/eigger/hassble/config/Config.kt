@@ -44,6 +44,10 @@ data class MatchConfig(
     val mac: String? = null,
     @SerialName("service_data_uuid") val serviceDataUuid: String? = null,
     @SerialName("manufacturer_id") val manufacturerId: Int? = null,
+    /** manufacturer payload(hex, 대소문자 무시)가 이 문자열로 시작해야 함. Jaalee iBeacon: 0215 */
+    @SerialName("manufacturer_hex_prefix") val manufacturerHexPrefix: String? = null,
+    /** manufacturer payload 최소 바이트 수. Jaalee JHT: 24 */
+    @SerialName("manufacturer_min_length") val manufacturerMinLength: Int? = null,
     @SerialName("name_prefix") val namePrefix: String? = null,
 )
 
