@@ -32,13 +32,20 @@ jobs:
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
-      - name: Build APKs
-        run: ./gradlew assembleDebug assembleRelease
+      - name: Decode keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "${{ github.workspace }}/hassble-release.jks"
 
-      - name: Upload APKs to Release
+      - name: Build release APK
+        run: ./gradlew assembleRelease
+        env:
+          KEYSTORE_FILE: ${{ github.workspace }}/hassble-release.jks
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+
+      - name: Upload APK to Release
         run: |
           gh release upload "$RELEASE_TAG" \
-            app/build/outputs/apk/debug/*.apk \
             app/build/outputs/apk/release/*.apk \
             --clobber
         env:
