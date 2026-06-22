@@ -188,8 +188,20 @@ private fun HomeScreen() {
             if (res.isSuccess) {
                 loadedConfig = res.getOrNull()
             } else {
-                configError = res.exceptionOrNull()?.message
+                val exception = res.exceptionOrNull()
+                val userFriendlyError = when (exception) {
+                    is java.net.UnknownHostException -> "네트워크 연결 실패: 서버 주소를 찾을 수 없습니다."
+                    is java.net.ConnectException -> "서버 연결 실패: URL을 확인해 주세요."
+                    is java.io.IOException -> "네트워크 데이터 읽기 오류가 발생했습니다."
+                    is com.charleskorn.kaml.YamlException -> "설정 파일(YAML) 구문 오류가 발생했습니다. 들여쓰기 등을 확인해 주세요.\n(상세: ${exception.localizedMessage})"
+                    is kotlinx.serialization.SerializationException -> "설정 파일 데이터 분석 오류가 발생했습니다.\n(상세: ${exception.localizedMessage})"
+                    else -> "설정을 로드할 수 없습니다. URL 및 파일을 확인해 주세요.\n(상세: ${exception?.localizedMessage})"
+                }
+                configError = userFriendlyError
                 loadedConfig = loader.loadCache()
+                if (loadedConfig != null) {
+                    Toast.makeText(context, "최신 설정을 불러오지 못해 캐시된 설정을 사용합니다.", Toast.LENGTH_LONG).show()
+                }
             }
         } else {
             loadedConfig = loader.loadCache()
