@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogEntry
 import dev.eigger.hassble.service.LogType
@@ -1495,6 +1497,7 @@ private fun StatusBadge(isRunning: Boolean, connState: ConnectionState, connecti
 private fun LogsTabContent() {
     var isLiveActive by remember { mutableStateOf(LiveEventLogger.isLiveActive) }
     val logsList = remember { mutableStateListOf<LogEntry>() }
+    var filterText by remember { mutableStateOf("") }
 
     LaunchedEffect(isLiveActive) {
         LiveEventLogger.isLiveActive = isLiveActive
@@ -1571,24 +1574,78 @@ private fun LogsTabContent() {
             }
         }
 
+        OutlinedTextField(
+            value = filterText,
+            onValueChange = { filterText = it },
+            placeholder = { Text(stringResource(R.string.logs_filter_placeholder), color = Color.Gray, fontSize = 13.sp) },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(18.dp)
+                )
+            },
+            trailingIcon = {
+                if (filterText.isNotEmpty()) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Clear",
+                        tint = Color.Gray,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { filterText = "" }
+                    )
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Color.White),
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
+                cursorColor = MaterialTheme.colorScheme.primary
+            )
+        )
+
         Card(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.4f)),
             border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
         ) {
+            val filteredLogs = remember {
+                androidx.compose.runtime.derivedStateOf {
+                    val query = filterText
+                    if (query.isBlank()) {
+                        logsList.toList()
+                    } else {
+                        logsList.filter { entry ->
+                            entry.message.contains(query, ignoreCase = true) ||
+                                entry.timestamp.contains(query, ignoreCase = true) ||
+                                entry.type.name.contains(query, ignoreCase = true)
+                        }
+                    }
+                }
+            }.value
+
             val listState = rememberLazyListState()
 
-            LaunchedEffect(logsList.size) {
-                if (logsList.isNotEmpty() && !listState.isScrollInProgress) {
-                    listState.animateScrollToItem(logsList.size - 1)
+            LaunchedEffect(filteredLogs.size) {
+                if (filteredLogs.isNotEmpty() && !listState.isScrollInProgress) {
+                    listState.animateScrollToItem(filteredLogs.size - 1)
                 }
             }
 
-            if (logsList.isEmpty()) {
+            if (filteredLogs.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "No logs yet. Enable Live Logs to see traffic.",
+                        text = if (logsList.isEmpty()) {
+                            "No logs yet. Enable Live Logs to see traffic."
+                        } else {
+                            "No logs match the filter."
+                        },
                         color = Color.Gray,
                         fontSize = 14.sp
                     )
@@ -1599,7 +1656,7 @@ private fun LogsTabContent() {
                     modifier = Modifier.fillMaxSize().padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(logsList) { logEntry ->
+                    items(filteredLogs) { logEntry ->
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                             verticalAlignment = Alignment.Top

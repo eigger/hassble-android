@@ -152,4 +152,5 @@
     <string name="tab_logs">Logs</string>
     <string name="live_logs_enable">Live Logs</string>
     <string name="logs_clear">Clear</string>
+    <string name="logs_filter_placeholder">Filter logs (e.g. MAC, mfr ID, OBD…)</string>
 </resources>
