@@ -84,6 +84,23 @@ class BleGatewayService : Service() {
             return START_STICKY
         }
 
+        if (intent?.action == ACTION_DISABLE_DEVICE) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            scope.launch {
+                val repository = HassSettingsRepository(this@BleGatewayService)
+                repository.setDeviceDisabled(deviceId, true)
+                val uniqueIds = runtime?.entityUniqueIdsForDevice(deviceId) ?: emptyList()
+                ws?.removeEntitiesByUniqueIds(uniqueIds)
+            }
+            return START_STICKY
+        }
+
+        if (intent?.action == ACTION_ENABLE_DEVICE) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            scope.launch { HassSettingsRepository(this@BleGatewayService).setDeviceDisabled(deviceId, false) }
+            return START_STICKY
+        }
+
         val haUrl = intent?.getStringExtra(EXTRA_HA_URL) ?: return START_NOT_STICKY
         val token = intent.getStringExtra(EXTRA_TOKEN) ?: return START_NOT_STICKY
         currentGitUrl = intent.getStringExtra(EXTRA_GIT_URL) ?: return START_NOT_STICKY
@@ -134,6 +151,7 @@ class BleGatewayService : Service() {
         _usingCachedConfig.value = false
 
         configJob = scope.launch {
+            HassSettingsRepository(this@BleGatewayService).clearDisabledDevices()
             val presets = ObdPresetStore.fromYaml(
                 assets.open("obd_presets.yaml").bufferedReader().readText(),
             )
@@ -156,6 +174,14 @@ class BleGatewayService : Service() {
             currentConfig = config
             val defaultEnabled = defaultEnabled(config)
             val repository = HassSettingsRepository(applicationContext)
+
+            val newConfigIds = config.devices.map { it.id }.toSet()
+            val removedIds = repository.getRemovedDeviceIds(newConfigIds)
+            if (removedIds.isNotEmpty()) {
+                LiveEventLogger.log(LogType.LINK, "Config 변경: 삭제된 기기 HA 정리 중 (${removedIds.joinToString()})")
+                removedIds.forEach { deviceId -> ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
+            }
+            repository.updateKnownDeviceIds(newConfigIds)
 
             if (runtime == null) {
                 val onLinkStatus: (DeviceLinkStatus) -> Unit = { status ->
@@ -192,11 +218,19 @@ class BleGatewayService : Service() {
                     repository.boundDevices,
                     repository.enabledSensors,
                     repository.enabledSensorsInitialized,
-                ) { boundMap, enabledSensors, initialized ->
-                    val effectiveEnabled = if (!initialized) defaultEnabled else enabledSensors
-                    boundMap to effectiveEnabled
-                }.collect { (boundMap, effectiveEnabled) ->
-                    runtime?.apply(config, effectiveEnabled, boundMap)
+                    repository.scanMode,
+                    repository.disabledDevices,
+                ) { args ->
+                    val boundMap = args[0] as Map<*, *>
+                    val enabledSensors = args[1] as Set<*>
+                    val initialized = args[2] as Boolean
+                    val scanMode = args[3] as dev.eigger.hassble.config.BleScanModeOption
+                    val disabledDevices = args[4] as Set<*>
+                    val effectiveEnabled = if (!initialized) defaultEnabled else enabledSensors.filterIsInstance<String>().toSet()
+                    Pair(Triple(boundMap.entries.associate { it.key.toString() to it.value.toString() }, effectiveEnabled, scanMode), disabledDevices.filterIsInstance<String>().toSet())
+                }.collect { (triple, disabledDevices) ->
+                    val (boundMap, effectiveEnabled, scanMode) = triple
+                    runtime?.apply(config, effectiveEnabled, boundMap, scanMode, disabledDevices)
                 }
             }
             updateNotification()
@@ -310,7 +344,10 @@ class BleGatewayService : Service() {
         const val EXTRA_TOKEN = "token"
         const val EXTRA_GIT_URL = "git_url"
         const val EXTRA_GIT_TOKEN = "git_token"
+        private const val EXTRA_DEVICE_ID = "device_id"
         private const val ACTION_RELOAD_CONFIG = "dev.eigger.hassble.RELOAD_CONFIG"
+        private const val ACTION_DISABLE_DEVICE = "dev.eigger.hassble.DISABLE_DEVICE"
+        private const val ACTION_ENABLE_DEVICE = "dev.eigger.hassble.ENABLE_DEVICE"
 
         private val _serviceConnectionState = MutableStateFlow(ConnectionState.Disconnected)
         val serviceConnectionState: StateFlow<ConnectionState> = _serviceConnectionState.asStateFlow()
@@ -357,6 +394,16 @@ class BleGatewayService : Service() {
 
         fun stop(context: Context) {
             context.stopService(Intent(context, BleGatewayService::class.java))
+        }
+
+        fun disableDevice(context: Context, deviceId: String) {
+            context.startService(Intent(context, BleGatewayService::class.java)
+                .setAction(ACTION_DISABLE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
+        }
+
+        fun enableDevice(context: Context, deviceId: String) {
+            context.startService(Intent(context, BleGatewayService::class.java)
+                .setAction(ACTION_ENABLE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
         }
     }
 }

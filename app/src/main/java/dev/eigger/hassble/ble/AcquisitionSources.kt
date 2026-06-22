@@ -1,5 +1,6 @@
 package dev.eigger.hassble.ble
 
+import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.config.DeviceConfig
 import kotlinx.coroutines.flow.Flow
 
@@ -21,7 +22,7 @@ data class RawReading(
 
 /** 경로 A: 광고 passive scan. match를 ScanFilter로 변환. */
 interface AdvertisementScanner {
-    fun scan(devices: List<DeviceConfig>): Flow<RawReading>
+    fun scan(devices: List<DeviceConfig>, scanMode: BleScanModeOption = BleScanModeOption.LOW_LATENCY): Flow<RawReading>
     fun stop()
 }
 
