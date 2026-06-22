@@ -32,7 +32,6 @@ app/                        Android App (Kotlin/Compose, Config/Decoding/Filteri
 docs/DESIGN.md              Architecture Design
 docs/PROTOCOL.md            App ↔ HA WebSocket Protocol (App perspective)
 docs/CONFIG_SCHEMA.md       Git Configuration YAML Schema
-config.example.yaml         Example configuration file to be uploaded to Git
 ```
 
 > **Home Assistant component is in a separate repository**: `ws_bridge` (Generic WebSocket Bridge) is maintained at [hass-ws-bridge](https://github.com/eigger/hass-ws-bridge). The protocol specification is also hosted there in `PROTOCOL.md`.
@@ -40,7 +39,7 @@ config.example.yaml         Example configuration file to be uploaded to Git
 ## Quick Start (Summary)
 
 - **Home Assistant Component**: Install `ws_bridge` via HACS or manually from [hass-ws-bridge](https://github.com/eigger/hass-ws-bridge) → Add integration "WebSocket Bridge" (no configuration needed).
-- **App**: Build the app in Android Studio (or download from GitHub Releases) → Enter **HA URL + Long-Lived Access Token + Config Git URL** → Select sensors → Start.
+- **App**: Build the app in Android Studio (or download from GitHub Releases) → Enter **HA URL + Long-Lived Access Token + Config Git URL** (Default config repository: [eigger/hassble-config](https://github.com/eigger/hassble-config)) → Select sensors → Start.
 - A Home Assistant Long-Lived Access Token is required (no MQTT broker is needed).
 
 ## Status
