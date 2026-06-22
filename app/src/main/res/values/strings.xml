@@ -49,4 +49,6 @@
     <string name="hide_notif_icon_btn">Hide Notification Icon</string>
     <string name="hide_notif_icon_desc">To hide the persistent notification icon, disable notifications for this app in system settings.</string>
     <string name="go_to_settings_btn">Go to Settings</string>
+    <string name="retry_btn">Retry</string>
+    <string name="reload_config_btn">Reload Config</string>
 </resources>

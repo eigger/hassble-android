@@ -175,11 +175,16 @@ private fun HomeScreen() {
         ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
     }
     val loader = remember { ConfigLoader(File(context.filesDir, "config.yaml"), presets) }
+    val isRunning by BleGatewayService.isServiceRunning.collectAsState()
+    val connState by BleGatewayService.serviceConnectionState.collectAsState()
+
     var loadedConfig by remember { mutableStateOf<GatewayConfig?>(null) }
     var configError by remember { mutableStateOf<String?>(null) }
     var isConfigLoading by remember { mutableStateOf(false) }
+    var reloadTrigger by remember { mutableStateOf(0) }
 
-    LaunchedEffect(gitUrlInput, gitTokenInput) {
+    LaunchedEffect(gitUrlInput, gitTokenInput, reloadTrigger) {
+        if (isRunning) return@LaunchedEffect
         if (gitUrlInput.isNotBlank()) {
             isConfigLoading = true
             configError = null
@@ -207,9 +212,6 @@ private fun HomeScreen() {
             loadedConfig = loader.loadCache()
         }
     }
-
-    val isRunning by BleGatewayService.isServiceRunning.collectAsState()
-    val connState by BleGatewayService.serviceConnectionState.collectAsState()
 
     val permissionsToRequest = mutableListOf<String>().apply {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -362,16 +364,56 @@ private fun HomeScreen() {
             }
         }
 
-        Text(text = stringResource(R.string.devices_adapters_list), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(top = 8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.devices_adapters_list),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            if (!isRunning) {
+                Button(
+                    onClick = { reloadTrigger++ },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), contentColor = MaterialTheme.colorScheme.primary),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Text(text = stringResource(R.string.reload_config_btn), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
 
         if (isConfigLoading) {
             Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
         } else if (configError != null && loadedConfig == null) {
-            Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)), border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(text = stringResource(R.string.config_load_error, configError ?: ""), color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = stringResource(R.string.config_load_error, configError ?: ""),
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 14.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Button(
+                        onClick = { reloadTrigger++ },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(text = stringResource(R.string.retry_btn), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         } else if (loadedConfig == null || loadedConfig?.devices?.isEmpty() == true) {

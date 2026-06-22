@@ -49,4 +49,6 @@
     <string name="hide_notif_icon_btn">알림창 아이콘 숨기기</string>
     <string name="hide_notif_icon_desc">상단 알림창 아이콘을 숨기려면 시스템 설정에서 이 앱의 알림을 비활성화하세요.</string>
     <string name="go_to_settings_btn">설정 이동</string>
+    <string name="retry_btn">재시도</string>
+    <string name="reload_config_btn">다시 읽기</string>
 </resources>
