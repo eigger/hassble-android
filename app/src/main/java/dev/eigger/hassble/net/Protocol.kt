@@ -1,5 +1,7 @@
 package dev.eigger.hassble.net
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -11,9 +13,11 @@ import kotlinx.serialization.json.JsonElement
 const val WS_DOMAIN = "ws_bridge"
 
 // ── 앱 → HA: 엔티티 선언 ──────────────────────────────────────────────────────
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class EntityMsg(
     val id: Int,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val type: String = "$WS_DOMAIN/entity",
     @SerialName("unique_id") val uniqueId: String,
     val platform: String,                 // sensor|binary_sensor|text_sensor|switch|number|select|button

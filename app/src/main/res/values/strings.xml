@@ -133,7 +133,7 @@
     <string name="control_type_number">number</string>
     <string name="control_type_select">select</string>
     <string name="control_type_button">button</string>
-    <string name="obd_limitation_hint">Some vehicles need ISO-TP multi-frame support (not yet available).</string>
+    <string name="obd_reconnecting_hint">OBD adapter disconnected. Reconnecting automatically…</string>
     <!-- Notification -->
     <string name="notif_connected_sensors">Connected · %1$d sensor values</string>
     <string name="notif_auth_failed">Auth failed — check token</string>

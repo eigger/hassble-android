@@ -127,7 +127,7 @@
     <string name="control_type_number">숫자</string>
     <string name="control_type_select">선택</string>
     <string name="control_type_button">버튼</string>
-    <string name="obd_limitation_hint">일부 차량은 ISO-TP 멀티프레임 지원이 필요합니다 (아직 미지원).</string>
+    <string name="obd_reconnecting_hint">OBD 어댑터 연결이 끊겼습니다. 자동으로 재연결합니다…</string>
     <string name="notif_connected_sensors">연결됨 · 센서 값 %1$d개</string>
     <string name="notif_auth_failed">인증 실패 — 토큰 확인</string>
     <string name="notif_bridge_timeout">ws_bridge 응답 없음</string>

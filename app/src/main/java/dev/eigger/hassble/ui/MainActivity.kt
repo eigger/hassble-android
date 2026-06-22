@@ -13,11 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -63,6 +59,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -114,6 +111,7 @@ import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.HassSettingsRepository
 import dev.eigger.hassble.config.ObdPresetStore
 import dev.eigger.hassble.config.Source
+import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.net.ConnectionIssue
 import dev.eigger.hassble.net.ConnectionState
@@ -674,7 +672,8 @@ private fun SensorsTabContent(
     onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
@@ -787,7 +786,7 @@ private fun SensorsTabContent(
             }
         }
 
-        item { Spacer(modifier = Modifier.height(8.dp)) }
+        item { Spacer(modifier = Modifier.height(4.dp)) }
     }
 }
 
@@ -836,7 +835,13 @@ private fun DeviceConfigCard(
     val enabledCount = deviceSensorKeys.count { it in enabledSensors }
     var expanded by remember(device.id) { mutableStateOf(false) }
 
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier
@@ -877,13 +882,12 @@ private fun DeviceConfigCard(
                 )
             }
 
-            AnimatedVisibility(
-                visible = expanded,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut(),
-            ) {
-                Column {
+            if (expanded) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(modifier = Modifier.height(12.dp))
+                    val showPerSensorValues = isRunning &&
+                        !(device.source == Source.advertisement && discoveredInstances.isNotEmpty())
+
                     if (device.sensors.isNotEmpty()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -950,7 +954,7 @@ private fun DeviceConfigCard(
                                         ),
                                     )
                                 }
-                                if (isRunning && checked) {
+                                if (showPerSensorValues && checked) {
                                     Text(
                                         text = if (latest != null) {
                                             stringResource(
@@ -970,31 +974,39 @@ private fun DeviceConfigCard(
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                     }
-            if (device.controls.isNotEmpty()) {
-                Text(
-                    text = stringResource(R.string.ha_controls),
-                    fontSize = 12.sp,
-                    color = Color.Gray,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                device.controls.forEach { control ->
-                    val label = control.name ?: control.key.replace('_', ' ').replaceFirstChar { it.uppercase() }
-                    Text(
-                        text = "$label · ${controlTypeLabel(control.type)}",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                    )
-                    Text(
-                        text = stringResource(R.string.controls_ha_only_hint, controlTypeLabel(control.type)),
-                        color = Color.Gray,
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-            Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.2f)).padding(12.dp)) {
+
+                    if (device.controls.isNotEmpty()) {
+                        Text(
+                            text = stringResource(R.string.ha_controls),
+                            fontSize = 12.sp,
+                            color = Color.Gray,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        device.controls.forEach { control ->
+                            val label = control.name ?: control.key.replace('_', ' ').replaceFirstChar { it.uppercase() }
+                            Text(
+                                text = "$label · ${controlTypeLabel(control.type)}",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                            )
+                            Text(
+                                text = stringResource(R.string.controls_ha_only_hint, controlTypeLabel(control.type)),
+                                color = Color.Gray,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(bottom = 4.dp),
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.Black.copy(alpha = 0.2f))
+                            .padding(12.dp),
+                    ) {
                 when (device.source) {
                     Source.advertisement -> {
                         val reg = advertisementRegistrationKind(device)
@@ -1027,9 +1039,15 @@ private fun DeviceConfigCard(
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
                                 )
-                                discoveredInstances.forEach { inst ->
+                                discoveredInstances.forEachIndexed { index, inst ->
+                                    if (index > 0) {
+                                        HorizontalDivider(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            color = Color.Gray.copy(alpha = 0.25f),
+                                        )
+                                    }
                                     val macBased = reg.macBasedPerInstance
-                                    Column(modifier = Modifier.padding(top = 8.dp)) {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically,
@@ -1086,10 +1104,12 @@ private fun DeviceConfigCard(
                         }
                     }
                     Source.gatt_notify, Source.obd -> {
-                        if (device.source == Source.obd) {
+                        if (device.source == Source.obd && isRunning &&
+                            linkStatus?.state == DeviceLinkState.Error
+                        ) {
                             Text(
-                                text = stringResource(R.string.obd_limitation_hint),
-                                color = Color.Gray,
+                                text = stringResource(R.string.obd_reconnecting_hint),
+                                color = Color(0xFFFF9100),
                                 fontSize = 10.sp,
                                 modifier = Modifier.padding(bottom = 6.dp),
                             )
@@ -1137,7 +1157,7 @@ private fun DeviceConfigCard(
                         }
                     }
                 }
-            }
+                    }
                 }
             }
         }

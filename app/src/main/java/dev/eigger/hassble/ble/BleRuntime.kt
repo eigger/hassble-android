@@ -7,6 +7,7 @@ import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.PublishRule
 import dev.eigger.hassble.config.SensorConfig
 import dev.eigger.hassble.config.Source
+import dev.eigger.hassble.config.SourceField
 import dev.eigger.hassble.decode.Decoder
 import dev.eigger.hassble.decode.ValueFilter
 import dev.eigger.hassble.net.CommandPayload
@@ -168,7 +169,6 @@ class BleRuntime(
     // ── BLE raw → 디코딩 → 필터 → push ──────────────────────────────────────
     private fun onReading(r: RawReading) {
         val d = devices[r.deviceId] ?: return
-        val bytes = Decoder.hexToBytes(r.rawHex) ?: return
         val out = mutableListOf<Pair<String, Any>>()
 
         when (d.source) {
@@ -181,7 +181,9 @@ class BleRuntime(
                 recordAdvertisementSeen(d, mac, r.deviceName, instanceId)
                 for (s in d.sensors) {
                     if (!isEnabled(d.id, s.key) || s.decode == null) continue
-                    if (s.minLength != null && bytes.size < s.minLength) continue
+                    val bytes = advertisementPayloadBytes(r, s.sourceField) ?: continue
+                    val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
+                    if (bytes.size < minLen) continue
                     emit(d, instanceId, s, Decoder.decodeStructured(bytes, s.decode), out)
                 }
             }
@@ -193,15 +195,26 @@ class BleRuntime(
                 emit(d, d.id, s, runCatching { Decoder.evalFormula(s.formula, data) }.getOrNull(), out)
             }
             Source.gatt_notify -> {
+                val bytes = Decoder.hexToBytes(r.rawHex) ?: return
                 onLinkDataReceived(d.id, System.currentTimeMillis())
                 for (s in d.sensors) {
                     if (!isEnabled(d.id, s.key) || s.decode == null) continue
-                    if (s.minLength != null && bytes.size < s.minLength) continue
+                    val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
+                    if (bytes.size < minLen) continue
                     emit(d, d.id, s, Decoder.decodeStructured(bytes, s.decode), out)
                 }
             }
         }
         ws.sendStates(out)
+    }
+
+    private fun advertisementPayloadBytes(r: RawReading, field: SourceField): ByteArray? {
+        val hex = when (field) {
+            SourceField.manufacturer_data -> r.manufacturerHex
+            SourceField.service_data -> r.serviceDataHex
+            SourceField.raw -> r.fullScanHex
+        } ?: r.rawHex
+        return Decoder.hexToBytes(hex)
     }
 
     private fun emit(
