@@ -22,7 +22,7 @@ data class RawReading(
 
 /** 경로 A: 광고 passive scan. match를 ScanFilter로 변환. */
 interface AdvertisementScanner {
-    fun scan(devices: List<DeviceConfig>, scanMode: BleScanModeOption = BleScanModeOption.LOW_LATENCY): Flow<RawReading>
+    fun scan(devices: List<DeviceConfig>, scanMode: BleScanModeOption = BleScanModeOption.BALANCED): Flow<RawReading>
     fun stop()
 }
 
