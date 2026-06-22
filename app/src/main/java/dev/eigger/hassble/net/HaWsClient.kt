@@ -1,6 +1,7 @@
 package dev.eigger.hassble.net
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,7 +12,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -36,7 +36,7 @@ enum class ConnectionState {
  *  2) ws_bridge/connect 구독 → HA가 command 이벤트를 push
  *  3) ws_bridge/entity(선언), ws_bridge/state(배치 갱신), ws_bridge/availability
  *
- * MQTT/추가 포트 없음.
+ * auth_ok 및 connect result 수신 전에는 메시지를 큐에 보관한다.
  */
 class HaWsClient(
     private val baseUrl: String,
@@ -46,22 +46,37 @@ class HaWsClient(
     private val scope: CoroutineScope,
     private val http: OkHttpClient = OkHttpClient(),
 ) {
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = false
+        explicitNulls = false
+    }
     private val idGen = AtomicInteger(1)
     private var ws: WebSocket? = null
+    private var connectMessageId: Int? = null
+    private var bridgeTimeoutJob: Job? = null
+    private val pendingMessages = mutableListOf<String>()
 
     private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 64)
-    val events: SharedFlow<JsonObject> = _events.asSharedFlow()  // command 등 HA→앱
+    val events: SharedFlow<JsonObject> = _events.asSharedFlow()
 
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    private val _connectionIssue = MutableStateFlow(ConnectionIssue.None)
+    val connectionIssue: StateFlow<ConnectionIssue> = _connectionIssue.asStateFlow()
+
     private var isClosedManually = false
+    private var authFailed = false
     private var reconnectDelayMs = 2000L
 
     fun connect() {
         if (_connectionState.value != ConnectionState.Disconnected) return
         isClosedManually = false
+        authFailed = false
+        connectMessageId = null
+        pendingMessages.clear()
+        _connectionIssue.value = ConnectionIssue.None
         _connectionState.value = ConnectionState.Connecting
 
         val protocol = if (baseUrl.startsWith("https")) "wss" else "ws"
@@ -73,19 +88,22 @@ class HaWsClient(
 
     fun close() {
         isClosedManually = true
+        bridgeTimeoutJob?.cancel()
+        connectMessageId = null
+        pendingMessages.clear()
         _connectionState.value = ConnectionState.Disconnected
+        _connectionIssue.value = ConnectionIssue.None
         ws?.close(1000, "Closed manually")
         ws = null
     }
 
     fun declareEntity(msg: EntityMsg) {
-        send(json.encodeToString(EntityMsg.serializer(), msg.copy(id = idGen.getAndIncrement())))
+        enqueueOrSend(json.encodeToString(EntityMsg.serializer(), msg.copy(id = idGen.getAndIncrement())))
     }
 
-    /** 상태 배치 전송. value는 Number/String/Boolean. */
     fun sendStates(states: List<Pair<String, Any>>) {
-        if (states.isEmpty() || _connectionState.value != ConnectionState.Connected) return
-        send(buildJsonObject {
+        if (states.isEmpty()) return
+        enqueueOrSend(buildJsonObject {
             put("id", idGen.getAndIncrement())
             put("type", "$WS_DOMAIN/state")
             put("states", buildJsonArray {
@@ -103,8 +121,7 @@ class HaWsClient(
     }
 
     fun sendAvailability(deviceId: String, online: Boolean) {
-        if (_connectionState.value != ConnectionState.Connected) return
-        send(buildJsonObject {
+        enqueueOrSend(buildJsonObject {
             put("id", idGen.getAndIncrement())
             put("type", "$WS_DOMAIN/availability")
             put("device_id", deviceId)
@@ -112,27 +129,64 @@ class HaWsClient(
         }.toString())
     }
 
+    private fun enqueueOrSend(text: String) {
+        if (_connectionState.value == ConnectionState.Connected) {
+            send(text)
+        } else {
+            pendingMessages += text
+        }
+    }
+
     private fun send(text: String) {
         ws?.send(text)
     }
 
+    private fun flushPendingMessages() {
+        val queued = pendingMessages.toList()
+        pendingMessages.clear()
+        for (text in queued) send(text)
+    }
+
     private fun subscribe() {
+        val msgId = idGen.getAndIncrement()
+        connectMessageId = msgId
         send(buildJsonObject {
-            put("id", idGen.getAndIncrement())
+            put("id", msgId)
             put("type", "$WS_DOMAIN/connect")
             put("gateway_id", gatewayId)
             put("name", gatewayName)
         }.toString())
+        startBridgeTimeout()
+    }
+
+    private fun startBridgeTimeout() {
+        bridgeTimeoutJob?.cancel()
+        bridgeTimeoutJob = scope.launch {
+            delay(15_000)
+            if (_connectionState.value == ConnectionState.Connecting) {
+                _connectionIssue.value = ConnectionIssue.BridgeNotResponding
+                ws?.close(1000, "Bridge timeout")
+            }
+        }
+    }
+
+    private fun onConnectResult() {
+        bridgeTimeoutJob?.cancel()
         _connectionState.value = ConnectionState.Connected
-        reconnectDelayMs = 2000L // Reset reconnect backoff on success
+        _connectionIssue.value = ConnectionIssue.None
+        reconnectDelayMs = 2000L
+        flushPendingMessages()
     }
 
     private fun triggerReconnection() {
-        if (isClosedManually) return
+        if (isClosedManually || authFailed) return
+        bridgeTimeoutJob?.cancel()
+        connectMessageId = null
+        pendingMessages.clear()
         _connectionState.value = ConnectionState.Disconnected
         scope.launch {
             delay(reconnectDelayMs)
-            reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L) // Exponential backoff max 30s
+            reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
             connect()
         }
     }
@@ -142,20 +196,40 @@ class HaWsClient(
             val msg = json.parseToJsonElement(text).jsonObject
             when (msg["type"]?.jsonPrimitive?.content) {
                 "auth_required" -> send(buildJsonObject {
-                    put("type", "auth"); put("access_token", token)
+                    put("type", "auth")
+                    put("access_token", token)
                 }.toString())
                 "auth_ok" -> subscribe()
+                "auth_invalid" -> {
+                    authFailed = true
+                    pendingMessages.clear()
+                    bridgeTimeoutJob?.cancel()
+                    _connectionIssue.value = ConnectionIssue.AuthFailed
+                    _connectionState.value = ConnectionState.Disconnected
+                    webSocket.close(1000, "Auth failed")
+                }
+                "result" -> {
+                    val id = msg["id"]?.jsonPrimitive?.content?.toIntOrNull()
+                    if (id != null && id == connectMessageId) {
+                        onConnectResult()
+                    }
+                }
                 "event" -> msg["event"]?.let { _events.tryEmit(it.jsonObject) }
             }
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            if (_connectionIssue.value == ConnectionIssue.None && !authFailed) {
+                _connectionIssue.value = ConnectionIssue.NetworkError
+            }
             triggerReconnection()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            if (_connectionIssue.value == ConnectionIssue.None) {
+                _connectionIssue.value = ConnectionIssue.NetworkError
+            }
             triggerReconnection()
         }
     }
 }
-

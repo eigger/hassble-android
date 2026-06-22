@@ -28,6 +28,9 @@ devices: [ ... ]                    # 아래 참조
 | `id` | ✅ | 고유 식별자 (topic/엔티티 키에 사용) |
 | `name` | ✅ | HA 표시 이름 |
 | `source` | ✅ | `advertisement` \| `gatt_notify` \| `obd` |
+| `instance_mode` | | advertisement 전용. `mac`(기본)=MAC별 엔티티, `shared`=프로필 ID 하나로 덮어쓰기 |
+
+예시 파일: 리포 루트 [`config.example.yaml`](../config.example.yaml)
 | `sensors` | △ | 센서 목록 (읽기) |
 | `controls` | | 제어 목록 (HA→BLE, gatt_notify/obd) |
 
@@ -37,6 +40,7 @@ devices: [ ... ]                    # 아래 참조
 - id: xiaomi_lywsd03
   name: "거실 온습도계"
   source: advertisement
+  instance_mode: mac           # mac(기본) | shared
   match:                       # 아래 중 하나 이상
     mac: "A4:C1:38:..."
     service_data_uuid: "181a"
@@ -50,6 +54,13 @@ devices: [ ... ]                    # 아래 참조
       source_field: service_data   # service_data | manufacturer_data | raw
       decode: { offset: 6, length: 2, type: int16, endian: big, scale: 0.1 }
 ```
+
+`instance_mode` 동작 (advertisement만 해당):
+
+| 값 | 동작 |
+|----|------|
+| `mac` (기본) | `match.mac` 없으면 스캔된 MAC마다 `{id}_{MAC}` 엔티티 생성. `match.mac` 있으면 단일 기기로 `{id}` 사용 |
+| `shared` | 항상 `{id}` 하나. 여러 기기가 같은 프로필에 매칭되면 **마지막 광고 값**으로 덮어씀. 게이트웨이 시작 시 엔티티 선언 |
 
 ## source: gatt_notify
 
@@ -108,6 +119,7 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 | 필드 | 설명 |
 |------|------|
 | `key` | 센서 키 |
+| `platform` | `sensor`(기본) \| `binary_sensor` \| `text_sensor` (읽기 전용 문자열, HA에는 `sensor`로 선언) |
 | `preset` | 내장 preset 이름 (mode/pid/formula/unit 자동). `pid`와 배타 |
 | `mode` | `"01"`(표준) / `"22"`(UDS 확장). 기본 `01` |
 | `pid` | PID hex (mode 01: 2자리, mode 22: 4자리) |
@@ -123,14 +135,20 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 |------|------|
 | `offset` | 시작 바이트 |
 | `length` | 길이 |
-| `type` | int8/uint8/int16/uint16/int32/uint32/float32 |
+| `type` | int8/uint8/int16/uint16/int32/uint32/float32/**timestamp**/**string** |
 | `endian` | big / little (기본 big) |
 | `bitmask` | 비트 추출 (선택) |
 | `scale` | 곱할 계수 (기본 1) |
 | `offset_value` | 더할 값 (기본 0) |
 | `map` | enum 매핑 `{0: P, 1: R}` |
 
-값 = `raw * scale + offset_value`.
+값 = `raw * scale + offset_value` (timestamp/string 제외).
+
+센서 필드 `min_length`: manufacturer/service 데이터 최소 바이트 길이. 미만이면 스킵.
+
+`timestamp` 타입: `offset`부터 4바이트를 **월·일·시·분**(uint8)으로 읽어 ISO 8601 문자열 반환 (예: `2026-06-22T14:30:00`). 연도는 디코딩 시점의 현재 연도. `device_class: timestamp`와 함께 사용.
+
+`string` 타입: `offset`부터 `length`바이트를 ASCII 문자로 연결. `platform: text_sensor`와 함께 사용 (예: 주차 위치 코드 2자).
 
 ## publish 억제 (통신 완화, 값 기반 — 앱)
 

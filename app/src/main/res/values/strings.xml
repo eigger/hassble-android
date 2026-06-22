@@ -17,7 +17,7 @@
     <string name="git_token_optional">Git Access Token (Optional)</string>
     <string name="devices_adapters_list">Devices &amp; Adapters</string>
     <string name="config_load_error">Cannot load configuration:\n%1$s</string>
-    <string name="no_devices_configured">No devices configured. Enter Git URL above to load settings.</string>
+    <string name="no_devices_configured">No devices configured. Enter Git URL in the Gateway tab to load settings.</string>
     <string name="fill_all_fields_toast">Please fill in all HA settings and configuration URL.</string>
     <string name="stop_gateway">Stop Gateway</string>
     <string name="start_gateway">Start Gateway</string>
@@ -51,4 +51,93 @@
     <string name="go_to_settings_btn">Go to Settings</string>
     <string name="retry_btn">Retry</string>
     <string name="reload_config_btn">Reload Config</string>
+    <string name="tab_gateway">Gateway</string>
+    <string name="tab_sensors">Sensors</string>
+    <string name="enabled_sensors">Enabled Sensors</string>
+    <string name="sensors_enabled_summary">%1$d/%2$d enabled</string>
+    <string name="sensors_enable_all">Enable all</string>
+    <string name="sensors_disable_all">Disable all</string>
+    <string name="status_badge_offline">Offline</string>
+    <string name="status_badge_connected">Connected</string>
+    <string name="status_badge_connecting">Connecting</string>
+    <string name="status_badge_error">Error</string>
+    <string name="sensor_edit_locked_running">Stop gateway to edit enabled sensors.</string>
+    <string name="instance_mode_mac">Instance mode: per MAC</string>
+    <string name="instance_mode_shared">Instance mode: shared entity</string>
+    <string name="adv_reg_mac_per_device">Per-MAC entity</string>
+    <string name="adv_reg_fixed_mac">Fixed MAC (%1$s)</string>
+    <string name="adv_reg_shared">Shared entity</string>
+    <string name="adv_reg_mac_per_device_hint">Each scanned MAC gets its own Home Assistant entity.</string>
+    <string name="adv_reg_fixed_mac_hint">Only advertisements from the configured MAC are collected.</string>
+    <string name="adv_reg_shared_hint">All matching advertisers share one entity; last packet wins.</string>
+    <string name="adv_instance_entity_id">Entity: %1$s</string>
+    <string name="adv_instance_mac_based">MAC-based</string>
+    <string name="adv_instance_not_mac_based">Not MAC-based</string>
+    <string name="sensor_last_values">Last values</string>
+    <string name="sensor_no_data">No data yet</string>
+    <string name="sensor_value_updated">%1$s · %2$s</string>
+    <string name="discovered_devices_waiting">Start gateway to discover BLE advertisers.</string>
+    <string name="discovered_devices_count">%1$d device(s) detected</string>
+    <string name="last_seen_just_now">Just now</string>
+    <string name="last_seen_seconds">%1$d sec ago</string>
+    <string name="last_seen_minutes">%1$d min ago</string>
+    <string name="last_seen_hours">%1$d hr ago</string>
+    <!-- Onboarding -->
+    <string name="onboarding_title">Getting Started</string>
+    <string name="onboarding_step_ws_bridge">Install the ws_bridge integration in Home Assistant (HACS or manual).</string>
+    <string name="onboarding_step_token">Create a Long-Lived Access Token in HA Profile → Security.</string>
+    <string name="onboarding_step_git">Enter your HA URL, token, and config Git URL below.</string>
+    <string name="onboarding_step_sensors">Open the Sensors tab, enable sensors, then start the gateway.</string>
+    <string name="onboarding_done">Got it</string>
+    <string name="open_ws_bridge_repo">Open ws_bridge repository</string>
+    <string name="ws_bridge_url">https://github.com/eigger/hass-ws-bridge</string>
+    <string name="show_onboarding_again">Setup guide</string>
+    <!-- Connection issues -->
+    <string name="status_badge_auth_failed">Auth failed</string>
+    <string name="status_badge_network_error">Network error</string>
+    <string name="status_badge_bridge_timeout">ws_bridge timeout</string>
+    <string name="connection_issue_auth">Token rejected. Check your Long-Lived Access Token.</string>
+    <string name="connection_issue_network">Cannot reach Home Assistant. Check URL and network.</string>
+    <string name="connection_issue_bridge">HA connected but ws_bridge did not respond. Install/configure ws_bridge integration.</string>
+    <string name="test_connection_btn">Test connection</string>
+    <string name="test_connection_ok">Connection OK</string>
+    <string name="test_connection_auth_failed">Auth failed (HTTP %1$d)</string>
+    <string name="test_connection_failed">Connection failed: %1$s</string>
+    <!-- Config errors -->
+    <string name="config_err_unknown_host">Network error: host not found.</string>
+    <string name="config_err_connect">Cannot connect. Check the Git URL.</string>
+    <string name="config_err_io">Network read error.</string>
+    <string name="config_err_yaml">YAML syntax error.\n(%1$s)</string>
+    <string name="config_err_parse">Config parse error.\n(%1$s)</string>
+    <string name="config_err_generic">Cannot load config.\n(%1$s)</string>
+    <string name="config_cache_banner">Using cached config. Latest fetch failed.</string>
+    <string name="config_cache_toast">Using cached config.</string>
+    <string name="service_config_load_failed">Config load failed. Gateway has no devices.</string>
+    <string name="service_error_banner">Gateway error: %1$s</string>
+    <string name="reload_config_running_hint">Reloads config without stopping the gateway.</string>
+    <!-- Permissions -->
+    <string name="permissions_missing_title">Permissions required</string>
+    <string name="permissions_missing_desc">Bluetooth and notification permissions are needed for BLE scanning and background service.</string>
+    <string name="permissions_open_settings">Open app settings</string>
+    <!-- Device link -->
+    <string name="link_state_connecting">Connecting…</string>
+    <string name="link_state_connected">Connected</string>
+    <string name="link_state_polling">Polling</string>
+    <string name="link_state_error">Connection error</string>
+    <string name="link_last_data">Last data: %1$s</string>
+    <string name="bind_locked_running">Stop gateway to change device binding.</string>
+    <!-- Controls -->
+    <string name="ha_controls">Home Assistant controls</string>
+    <string name="controls_ha_only_hint">Controlled from Home Assistant (%1$s)</string>
+    <string name="control_type_switch">switch</string>
+    <string name="control_type_number">number</string>
+    <string name="control_type_select">select</string>
+    <string name="control_type_button">button</string>
+    <string name="obd_limitation_hint">Some vehicles need ISO-TP multi-frame support (not yet available).</string>
+    <!-- Notification -->
+    <string name="notif_connected_sensors">Connected · %1$d sensor values</string>
+    <string name="notif_auth_failed">Auth failed — check token</string>
+    <string name="notif_bridge_timeout">ws_bridge not responding</string>
+    <string name="notif_config_error">Config load failed</string>
+    <string name="settings_saved">Settings saved</string>
 </resources>

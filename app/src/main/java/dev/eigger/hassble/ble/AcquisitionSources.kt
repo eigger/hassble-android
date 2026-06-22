@@ -11,6 +11,8 @@ data class RawReading(
     val deviceId: String,
     val source: String,        // advertisement | gatt_notify | obd
     val rawHex: String,
+    val macAddress: String? = null,
+    val deviceName: String? = null,
 )
 
 /** 경로 A: 광고 passive scan. match를 ScanFilter로 변환. */

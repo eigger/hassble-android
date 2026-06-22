@@ -1,0 +1,17 @@
+devices:
+  - id: example_sensor
+    name: "Example BLE Sensor"
+    source: advertisement
+    instance_mode: mac
+    match:
+      name_prefix: "MyDevice"
+    sensors:
+      - key: temperature
+        unit: "°C"
+        state_class: measurement
+        decode:
+          offset: 0
+          length: 2
+          type: int16
+          endian: little
+          scale: 0.1

@@ -4,6 +4,7 @@ import dev.eigger.hassble.config.DataType
 import dev.eigger.hassble.config.DecodeConfig
 import dev.eigger.hassble.config.Endian
 import net.objecthunter.exp4j.ExpressionBuilder
+import java.util.Calendar
 
 /**
  * 바이트 → 값 디코더 (앱 측). 광고/notify/OBD 공유.
@@ -15,11 +16,17 @@ object Decoder {
 
     fun decodeStructured(bytes: ByteArray, c: DecodeConfig): Any? {
         if (c.offset + c.length > bytes.size) return null
+        if (c.type == DataType.timestamp) return decodeTimestamp(bytes, c.offset)
+        if (c.type == DataType.string) {
+            val slice = bytes.copyOfRange(c.offset, c.offset + c.length)
+            return slice.map { (it.toInt() and 0xFF).toChar() }.joinToString("")
+        }
         val slice = bytes.copyOfRange(c.offset, c.offset + c.length)
         var raw = toLong(slice, c.type, c.endian)
         c.bitmask?.let { raw = raw and it }
         if (c.map.isNotEmpty()) return c.map[raw.toString()] ?: raw.toString()
         return when (c.type) {
+            DataType.timestamp -> decodeTimestamp(bytes, c.offset)
             DataType.float32 -> Float.fromBits(raw.toInt()) * c.scale + c.offsetValue
             else -> raw * c.scale + c.offsetValue
         }
@@ -60,6 +67,18 @@ object Decoder {
             DataType.int32 -> v.toInt().toLong()
             else -> v
         }
+    }
+
+    /** offset부터 4바이트: month, day, hour, minute → ISO 8601 (연도는 현재 연도). */
+    private fun decodeTimestamp(bytes: ByteArray, offset: Int): String? {
+        if (offset + 4 > bytes.size) return null
+        val month = bytes[offset].toInt() and 0xFF
+        val day = bytes[offset + 1].toInt() and 0xFF
+        val hour = bytes[offset + 2].toInt() and 0xFF
+        val minute = bytes[offset + 3].toInt() and 0xFF
+        if (month !in 1..12 || day !in 1..31 || hour !in 0..23 || minute !in 0..59) return null
+        val year = Calendar.getInstance().get(Calendar.YEAR)
+        return "%04d-%02d-%02dT%02d:%02d:00".format(year, month, day, hour, minute)
     }
 
     fun hexToBytes(h: String): ByteArray? {

@@ -16,7 +16,7 @@ data class EntityMsg(
     val id: Int,
     val type: String = "$WS_DOMAIN/entity",
     @SerialName("unique_id") val uniqueId: String,
-    val platform: String,                 // sensor|binary_sensor|switch|number|select|button
+    val platform: String,                 // sensor|binary_sensor|text_sensor|switch|number|select|button
     val name: String,
     val device: DeviceRef? = null,
     @SerialName("device_class") val deviceClass: String? = null,

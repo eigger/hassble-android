@@ -12,12 +12,18 @@ data class GatewayConfig(
     val version: Int = 1,
     val defaults: Defaults = Defaults(),
     val devices: List<DeviceConfig> = emptyList(),
-)
+) {
+    fun allSensorKeys(): Set<String> =
+        devices.flatMap { d -> d.sensors.map { "${d.id}/${it.key}" } }.toSet()
+}
 
 @Serializable
 data class Defaults(val publish: PublishRule = PublishRule())
 
 enum class Source { advertisement, gatt_notify, obd }
+
+/** advertisement 전용: mac=스캔 MAC별 엔티티, shared=프로필 ID 하나(마지막 광고가 덮어씀) */
+enum class AdvertisementInstanceMode { mac, shared }
 
 @Serializable
 data class DeviceConfig(
@@ -25,6 +31,7 @@ data class DeviceConfig(
     val name: String,
     val source: Source,
     val match: MatchConfig? = null,
+    @SerialName("instance_mode") val instanceMode: AdvertisementInstanceMode = AdvertisementInstanceMode.mac,
     val gatt: GattConfig? = null,
     val obd: ObdConfig? = null,
     val sensors: List<SensorConfig> = emptyList(),
@@ -61,7 +68,7 @@ data class ObdConfig(
 @Serializable
 data class SensorConfig(
     val key: String,
-    val platform: String = "sensor",       // sensor | binary_sensor
+    val platform: String = "sensor",       // sensor | binary_sensor | text_sensor
     @SerialName("device_class") val deviceClass: String? = null,
     val unit: String? = null,
     @SerialName("state_class") val stateClass: String? = null,
@@ -70,6 +77,7 @@ data class SensorConfig(
     @SerialName("accuracy_decimals") val accuracyDecimals: Int? = null,
     // advertisement / gatt_notify
     @SerialName("source_field") val sourceField: SourceField = SourceField.raw,
+    @SerialName("min_length") val minLength: Int? = null,
     val decode: DecodeConfig? = null,
     // obd
     val preset: String? = null,
@@ -96,7 +104,7 @@ data class DecodeConfig(
     val map: Map<String, String> = emptyMap(),
 )
 
-enum class DataType { int8, uint8, int16, uint16, int32, uint32, float32 }
+enum class DataType { int8, uint8, int16, uint16, int32, uint32, float32, timestamp, string }
 enum class Endian { big, little }
 
 @Serializable
