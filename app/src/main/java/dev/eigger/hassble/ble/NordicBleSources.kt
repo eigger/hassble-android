@@ -31,6 +31,8 @@ import no.nordicsemi.android.kotlin.ble.client.main.service.ClientBleGattCharact
 import no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray
 import no.nordicsemi.android.kotlin.ble.core.data.BleWriteType
 import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
+import dev.eigger.hassble.service.LiveEventLogger
+import dev.eigger.hassble.service.LogType
 import java.util.UUID
 
 private const val TAG = "HassBleSources"
@@ -46,11 +48,13 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     override fun scan(devices: List<DeviceConfig>): Flow<RawReading> = flow {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "BLUETOOTH_SCAN permission not granted")
+            LiveEventLogger.log(LogType.LINK, "BLE scan failed: BLUETOOTH_SCAN permission not granted")
             return@flow
         }
 
         val scanner = BleScanner(context)
         Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles")
+        LiveEventLogger.log(LogType.LINK, "Starting Nordic BLE scan for ${devices.size} profiles...")
 
         try {
             scanner.scan().collect { result ->
@@ -61,6 +65,28 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 val advertisedServiceUuids = scanRecord?.serviceUuids.orEmpty()
                 val manufacturerData = scanRecord?.manufacturerSpecificData
                 val rawBytes = scanRecord?.bytes
+
+                if (LiveEventLogger.isLiveActive) {
+                    val mfrHex = manufacturerData?.let {
+                        val list = mutableListOf<String>()
+                        for (i in 0 until it.size()) {
+                            val id = it.keyAt(i)
+                            val bytes = it.valueAt(i).value
+                            list.add("0x%04X: %s".format(id, bytes.joinToString("") { String.format("%02X", it) }))
+                        }
+                        list.joinToString(", ")
+                    }
+                    val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
+                        "${key.uuid.toString().takeLast(8).uppercase()}: ${value.value.joinToString("") { String.format("%02X", it) }}"
+                    }
+                    val logMsg = buildString {
+                        append("addr=$deviceAddress")
+                        if (deviceName.isNotBlank()) append(", name='$deviceName'")
+                        if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
+                        if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
+                    }
+                    LiveEventLogger.log(LogType.ADV, logMsg)
+                }
 
                 if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
                     val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }
@@ -130,6 +156,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in BleScanner stream", e)
+            LiveEventLogger.log(LogType.LINK, "BLE scanner error: ${e.localizedMessage}")
         }
     }
 
