@@ -76,7 +76,7 @@ object Decoder {
         }
     }
 
-    /** offset부터 4바이트: month, day, hour, minute → ISO 8601 (연도는 현재 연도). */
+    /** offset부터 4바이트: month, day, hour, minute → ISO 8601 (연도는 현재 연도) + timezone offset. */
     private fun decodeTimestamp(bytes: ByteArray, offset: Int): String? {
         if (offset + 4 > bytes.size) return null
         val month = bytes[offset].toInt() and 0xFF
@@ -84,8 +84,21 @@ object Decoder {
         val hour = bytes[offset + 2].toInt() and 0xFF
         val minute = bytes[offset + 3].toInt() and 0xFF
         if (month !in 1..12 || day !in 1..31 || hour !in 0..23 || minute !in 0..59) return null
-        val year = Calendar.getInstance().get(Calendar.YEAR)
-        return "%04d-%02d-%02dT%02d:%02d:00".format(year, month, day, hour, minute)
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.MONTH, month - 1)
+            set(Calendar.DAY_OF_MONTH, day)
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val year = cal.get(Calendar.YEAR)
+        val offsetMs = cal.timeZone.getOffset(cal.timeInMillis)
+        val offsetHours = Math.abs(offsetMs / 3600000)
+        val offsetMinutes = Math.abs((offsetMs / 60000) % 60)
+        val sign = if (offsetMs >= 0) "+" else "-"
+        val tzOffset = "%s%02d:%02d".format(sign, offsetHours, offsetMinutes)
+        return "%04d-%02d-%02dT%02d:%02d:00%s".format(year, month, day, hour, minute, tzOffset)
     }
 
     fun hexToBytes(h: String): ByteArray? {
