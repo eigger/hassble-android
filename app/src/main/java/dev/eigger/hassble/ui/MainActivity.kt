@@ -455,6 +455,13 @@ private fun HomeScreen() {
                     },
                     haRefreshToken = savedHaRefreshToken,
                     haTokenLastRefreshed = haTokenLastRefreshed,
+                    onClearOAuth = {
+                        scope.launch {
+                            repository.clearHaRefreshToken()
+                            repository.saveHaSettings(urlInput, "")
+                            tokenInput = ""
+                        }
+                    },
                     gitUrlInput = gitUrlInput,
                     onGitUrlChange = { gitUrlInput = it },
                     gitTokenInput = gitTokenInput,
@@ -466,7 +473,7 @@ private fun HomeScreen() {
                     isBatteryIgnored = isBatteryIgnored,
                     onShowOnboarding = { showOnboarding = true },
                     onStartGateway = {
-                        if (urlInput.isNotBlank() && tokenInput.isNotBlank() && gitUrlInput.isNotBlank()) {
+                        if (urlInput.isNotBlank() && (tokenInput.isNotBlank() || savedHaRefreshToken.isNotBlank()) && gitUrlInput.isNotBlank()) {
                             scope.launch {
                                 repository.saveHaSettings(urlInput, tokenInput)
                                 repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
@@ -581,6 +588,7 @@ private fun GatewayTabContent(
     onTokenChange: (String) -> Unit,
     haRefreshToken: String,
     haTokenLastRefreshed: Long,
+    onClearOAuth: () -> Unit,
     gitUrlInput: String,
     onGitUrlChange: (String) -> Unit,
     gitTokenInput: String,
@@ -684,9 +692,12 @@ private fun GatewayTabContent(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(text = stringResource(R.string.oauth_active_chip), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             Text(text = stringResource(R.string.oauth_last_refreshed, formatLastRefreshed(context, haTokenLastRefreshed)), color = Color.Gray, fontSize = 10.sp)
+                        }
+                        TextButton(onClick = onClearOAuth, enabled = inputsEnabled) {
+                            Text(stringResource(R.string.oauth_logout_btn), color = Color.Gray, fontSize = 11.sp)
                         }
                     }
                 }
@@ -733,8 +744,10 @@ private fun GatewayTabContent(
                 ) {
                     Text(stringResource(R.string.oauth_login_btn), color = Color.Black, fontWeight = FontWeight.Bold)
                 }
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(value = tokenInput, onValueChange = onTokenChange, label = { Text(stringResource(R.string.long_lived_token)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                if (haRefreshToken.isBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(value = tokenInput, onValueChange = onTokenChange, label = { Text(stringResource(R.string.long_lived_token)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(value = gitUrlInput, onValueChange = onGitUrlChange, label = { Text(stringResource(R.string.git_config_url)) }, enabled = inputsEnabled, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 Spacer(modifier = Modifier.height(8.dp))

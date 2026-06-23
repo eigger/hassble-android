@@ -161,6 +161,7 @@
     <string name="oauth_token_fetch_failed_toast">Failed to fetch tokens: %1$s</string>
     <string name="oauth_active_chip">OAuth Auto Login Active</string>
     <string name="oauth_last_refreshed">Last token refresh: %1$s</string>
+    <string name="oauth_logout_btn">Use manual token</string>
     <string name="oauth_expired_notif_title">HassBle Auth Expired</string>
     <string name="oauth_expired_notif_text">HA session has expired. Please open the app and login again.</string>
     <string name="git_private_repo_checkbox">Use Private Repository (Github Token)</string>
