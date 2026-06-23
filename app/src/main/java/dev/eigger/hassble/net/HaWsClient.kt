@@ -2,6 +2,7 @@ package dev.eigger.hassble.net
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -50,10 +51,12 @@ enum class ConnectionState {
  */
 class HaWsClient(
     private val baseUrl: String,
-    private val token: String,
+    private var token: String,
     private val gatewayId: String,
     private val gatewayName: String,
     private val scope: CoroutineScope,
+    private val refreshToken: String? = null,
+    private val onTokenRefreshed: (suspend (String) -> Unit)? = null,
     private val http: OkHttpClient = OkHttpClient.Builder()
         .pingInterval(5, java.util.concurrent.TimeUnit.SECONDS)
         .build(),
@@ -113,6 +116,14 @@ class HaWsClient(
         _connectionIssue.value = ConnectionIssue.None
         ws?.close(1000, "Closed manually")
         ws = null
+    }
+
+    fun reconnectImmediately() {
+        if (isClosedManually) return
+        if (_connectionState.value == ConnectionState.Disconnected) {
+            reconnectDelayMs = 500L
+            connect()
+        }
     }
 
     fun declareEntity(msg: EntityMsg) {
@@ -276,6 +287,15 @@ class HaWsClient(
         }
     }
 
+    private fun handleAuthFailed(webSocket: WebSocket) {
+        authFailed = true
+        pendingMessages.clear()
+        bridgeTimeoutJob?.cancel()
+        _connectionIssue.value = ConnectionIssue.AuthFailed
+        _connectionState.value = ConnectionState.Disconnected
+        webSocket.close(1000, "Auth failed")
+    }
+
     private inner class Listener : WebSocketListener() {
         override fun onMessage(webSocket: WebSocket, text: String) {
             LiveEventLogger.log(LogType.RX, "WS: $text")
@@ -287,12 +307,26 @@ class HaWsClient(
                 }.toString())
                 "auth_ok" -> subscribe()
                 "auth_invalid" -> {
-                    authFailed = true
-                    pendingMessages.clear()
-                    bridgeTimeoutJob?.cancel()
-                    _connectionIssue.value = ConnectionIssue.AuthFailed
-                    _connectionState.value = ConnectionState.Disconnected
-                    webSocket.close(1000, "Auth failed")
+                    if (refreshToken.isNullOrBlank()) {
+                        LiveEventLogger.log(LogType.LINK, "[OAuth] 인증 실패: 리프레시 토큰이 없습니다. 수동 입력 토큰이 무효합니다.")
+                        handleAuthFailed(webSocket)
+                    } else {
+                        LiveEventLogger.log(LogType.LINK, "[OAuth] 엑세스 토큰 만료 감지, 자동 갱신을 시도합니다.")
+                        scope.launch(Dispatchers.IO) {
+                            val result = HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
+                            if (result.isSuccess) {
+                                val newToken = result.getOrThrow()
+                                token = newToken
+                                onTokenRefreshed?.invoke(newToken)
+                                reconnectDelayMs = 500L
+                                LiveEventLogger.log(LogType.LINK, "[OAuth] 토큰 자동 갱신 성공 (수명 30분 연장)")
+                                webSocket.close(4000, "Token refreshed, reconnecting")
+                            } else {
+                                LiveEventLogger.log(LogType.LINK, "[OAuth] 토큰 자동 갱신 실패: ${result.exceptionOrNull()?.localizedMessage}")
+                                handleAuthFailed(webSocket)
+                            }
+                        }
+                    }
                 }
                 "result" -> {
                     val id = msg["id"]?.jsonPrimitive?.content?.toIntOrNull()
@@ -315,7 +349,7 @@ class HaWsClient(
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            if (_connectionIssue.value == ConnectionIssue.None && !authFailed) {
+            if (code != 4000 && _connectionIssue.value == ConnectionIssue.None && !authFailed) {
                 _connectionIssue.value = ConnectionIssue.NetworkError
             }
             triggerReconnection()
