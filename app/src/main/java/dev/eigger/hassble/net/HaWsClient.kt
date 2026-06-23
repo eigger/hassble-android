@@ -227,6 +227,12 @@ class HaWsClient(
             put("name", gatewayName)
             put("app_version", BuildConfig.VERSION_NAME)
         }.toString())
+        // ws_bridge 재시작 이벤트 구독 (HA 빠른 재부팅 대응)
+        send(buildJsonObject {
+            put("id", idGen.getAndIncrement())
+            put("type", "subscribe_events")
+            put("event_type", "hassble_ws_bridge_loaded")
+        }.toString())
         startBridgeTimeout()
     }
 
@@ -295,7 +301,16 @@ class HaWsClient(
                         if (id == connectMessageId) onConnectResult()
                     }
                 }
-                "event" -> msg["event"]?.let { _events.tryEmit(it.jsonObject) }
+                "event" -> {
+                    val event = msg["event"]?.jsonObject ?: return
+                    val eventType = event["event_type"]?.jsonPrimitive?.contentOrNull
+                    if (eventType == "hassble_ws_bridge_loaded") {
+                        // ws_bridge 재시작 감지 → 즉시 재구독
+                        resubscribe()
+                    } else {
+                        _events.tryEmit(event)
+                    }
+                }
             }
         }
 

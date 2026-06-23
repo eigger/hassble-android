@@ -150,9 +150,7 @@ class BleGatewayService : Service() {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
             while (true) {
-                delay(60_000)
-                // ws_bridge가 살아있는 상태로 HA만 재시작된 경우를 대비해 주기적으로 재구독
-                ws?.resubscribe()
+                delay(300_000)
                 publishGatewayStates(ws)
             }
         }
