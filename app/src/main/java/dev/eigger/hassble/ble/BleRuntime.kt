@@ -68,11 +68,11 @@ class BleRuntime(
         ws.events.onEach(::onEvent).launchIn(scope)
     }
 
-    fun redeclareEntities() {
+    fun redeclareEntities(resetStates: Boolean = true) {
         if (!::config.isInitialized) return
         declaredAdvInstances.clear()
         for (d in config.devices) {
-            declareAndPrepare(d)
+            declareAndPrepare(d, resetStates)
         }
     }
 
@@ -103,14 +103,14 @@ class BleRuntime(
         startSources()
     }
 
-    private fun declareAndPrepare(d: DeviceConfig) {
+    private fun declareAndPrepare(d: DeviceConfig, resetStates: Boolean = true) {
         if (d.id in disabledIds) return
         // match.mac 없는 광고 프로필은 첫 패킷 수신 시 MAC별로 동적 선언
         if (isDynamicAdvertisement(d)) return
-        declareEntitiesForInstance(d, d.id, d.name)
+        declareEntitiesForInstance(d, d.id, d.name, resetStates)
     }
 
-    private fun declareEntitiesForInstance(d: DeviceConfig, instanceId: String, deviceDisplayName: String) {
+    private fun declareEntitiesForInstance(d: DeviceConfig, instanceId: String, deviceDisplayName: String, resetStates: Boolean = true) {
         val ref = DeviceRef(instanceId, deviceDisplayName)
         val newSensorUids = mutableListOf<String>()
         for (s in d.sensors) {
@@ -126,7 +126,7 @@ class BleRuntime(
             ))
             newSensorUids += entityUid
         }
-        ws.sendInitialStates(newSensorUids)
+        if (resetStates) ws.sendInitialStates(newSensorUids)
         for (c in d.controls) {
             val entityUid = uid(instanceId, c.key)
             controls[entityUid] = d to c

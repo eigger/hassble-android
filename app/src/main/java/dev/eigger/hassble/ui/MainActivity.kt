@@ -126,6 +126,7 @@ import dev.eigger.hassble.net.ConnectionIssue
 import dev.eigger.hassble.net.ConnectionState
 import dev.eigger.hassble.net.HaConnectionTester
 import dev.eigger.hassble.service.BleGatewayService
+import androidx.compose.runtime.mutableIntStateOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -317,6 +318,18 @@ private fun HomeScreen() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(permObserver) }
     }
 
+    // BLE 데이터 수신 속도 측정 → 고양이 달리기 속도
+    var bleDataRate by remember { mutableIntStateOf(0) }
+    var bleDataCounter by remember { mutableIntStateOf(0) }
+    LaunchedEffect(sensorLastValues) { bleDataCounter++ }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            bleDataRate = bleDataCounter
+            bleDataCounter = 0
+        }
+    }
+
     var scanningDevice by remember { mutableStateOf<DeviceConfig?>(null) }
     var selectedTab by remember { mutableStateOf(0) }
 
@@ -421,6 +434,8 @@ private fun HomeScreen() {
                 2 -> LogsTabContent()
             }
         }
+
+        CatRunOverlay(dataRate = bleDataRate)
 
         NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
             NavigationBarItem(

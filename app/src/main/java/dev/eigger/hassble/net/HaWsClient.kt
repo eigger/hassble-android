@@ -31,6 +31,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 enum class ConnectionState {
@@ -54,7 +55,7 @@ class HaWsClient(
     private val gatewayName: String,
     private val scope: CoroutineScope,
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .pingInterval(15, java.util.concurrent.TimeUnit.SECONDS)
+        .pingInterval(5, java.util.concurrent.TimeUnit.SECONDS)
         .build(),
 ) {
     private val json = Json {
@@ -77,9 +78,14 @@ class HaWsClient(
     private val _connectionIssue = MutableStateFlow(ConnectionIssue.None)
     val connectionIssue: StateFlow<ConnectionIssue> = _connectionIssue.asStateFlow()
 
+    // true = initial/reconnect (reset states), false = periodic resubscribe (keep states)
+    private val _bridgeConnected = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
+    val bridgeConnected: SharedFlow<Boolean> = _bridgeConnected.asSharedFlow()
+
     private var isClosedManually = false
     private var authFailed = false
     private var reconnectDelayMs = 2000L
+    private val resubscribePending = AtomicBoolean(false)
     private val pendingRequests = java.util.concurrent.ConcurrentHashMap<Int, CompletableDeferred<JsonObject>>()
 
     fun connect() {
@@ -221,6 +227,12 @@ class HaWsClient(
             put("name", gatewayName)
             put("app_version", BuildConfig.VERSION_NAME)
         }.toString())
+        // ws_bridge 재시작 이벤트 구독 (HA 빠른 재부팅 대응)
+        send(buildJsonObject {
+            put("id", idGen.getAndIncrement())
+            put("type", "subscribe_events")
+            put("event_type", "hassble_ws_bridge_loaded")
+        }.toString())
         startBridgeTimeout()
     }
 
@@ -235,12 +247,20 @@ class HaWsClient(
         }
     }
 
+    fun resubscribe() {
+        if (_connectionState.value != ConnectionState.Connected) return
+        resubscribePending.set(true)
+        subscribe()
+    }
+
     private fun onConnectResult() {
         bridgeTimeoutJob?.cancel()
+        val isResubscribe = resubscribePending.getAndSet(false)
         _connectionState.value = ConnectionState.Connected
         _connectionIssue.value = ConnectionIssue.None
         reconnectDelayMs = 2000L
         flushPendingMessages()
+        _bridgeConnected.tryEmit(!isResubscribe)
     }
 
     private fun triggerReconnection() {
@@ -281,7 +301,16 @@ class HaWsClient(
                         if (id == connectMessageId) onConnectResult()
                     }
                 }
-                "event" -> msg["event"]?.let { _events.tryEmit(it.jsonObject) }
+                "event" -> {
+                    val event = msg["event"]?.jsonObject ?: return
+                    val eventType = event["event_type"]?.jsonPrimitive?.contentOrNull
+                    if (eventType == "hassble_ws_bridge_loaded") {
+                        // ws_bridge 재시작 감지 → 즉시 재구독
+                        resubscribe()
+                    } else {
+                        _events.tryEmit(event)
+                    }
+                }
             }
         }
 
