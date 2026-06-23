@@ -2115,6 +2115,7 @@ private fun GitConfigSection(
     onFileChange: (String) -> Unit,
     onTokenChange: (String) -> Unit,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var yamlFiles by remember { mutableStateOf<List<String>>(emptyList()) }
     var isBrowsing by remember { mutableStateOf(false) }
