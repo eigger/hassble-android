@@ -128,24 +128,31 @@ class BleGatewayService : Service() {
 
         wsStateJob?.cancel()
         wsStateJob = scope.launch {
+            launch {
+                // ws_bridge 연결/재연결 시 엔티티 재선언
+                // resetStates=true: 실제 재연결 (unknown으로 초기화)
+                // resetStates=false: 주기적 재구독 (기존 센서값 유지)
+                client.bridgeConnected.collect { resetStates ->
+                    declareGatewayEntities(client)
+                    publishGatewayStates(client)
+                    runtime?.redeclareEntities(resetStates)
+                }
+            }
             combine(client.connectionState, client.connectionIssue) { state, issue ->
                 state to issue
             }.collect { (state, issue) ->
                 _serviceConnectionState.value = state
                 _connectionIssue.value = issue
                 updateNotification()
-                if (state == ConnectionState.Connected) {
-                    declareGatewayEntities(client)
-                    publishGatewayStates(client)
-                    runtime?.redeclareEntities()
-                }
             }
         }
 
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
             while (true) {
-                delay(300_000)
+                delay(60_000)
+                // ws_bridge가 살아있는 상태로 HA만 재시작된 경우를 대비해 주기적으로 재구독
+                ws?.resubscribe()
                 publishGatewayStates(ws)
             }
         }

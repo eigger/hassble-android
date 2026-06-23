@@ -31,6 +31,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 enum class ConnectionState {
@@ -54,7 +55,7 @@ class HaWsClient(
     private val gatewayName: String,
     private val scope: CoroutineScope,
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .pingInterval(15, java.util.concurrent.TimeUnit.SECONDS)
+        .pingInterval(5, java.util.concurrent.TimeUnit.SECONDS)
         .build(),
 ) {
     private val json = Json {
@@ -77,9 +78,14 @@ class HaWsClient(
     private val _connectionIssue = MutableStateFlow(ConnectionIssue.None)
     val connectionIssue: StateFlow<ConnectionIssue> = _connectionIssue.asStateFlow()
 
+    // true = initial/reconnect (reset states), false = periodic resubscribe (keep states)
+    private val _bridgeConnected = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
+    val bridgeConnected: SharedFlow<Boolean> = _bridgeConnected.asSharedFlow()
+
     private var isClosedManually = false
     private var authFailed = false
     private var reconnectDelayMs = 2000L
+    private val resubscribePending = AtomicBoolean(false)
     private val pendingRequests = java.util.concurrent.ConcurrentHashMap<Int, CompletableDeferred<JsonObject>>()
 
     fun connect() {
@@ -235,12 +241,20 @@ class HaWsClient(
         }
     }
 
+    fun resubscribe() {
+        if (_connectionState.value != ConnectionState.Connected) return
+        resubscribePending.set(true)
+        subscribe()
+    }
+
     private fun onConnectResult() {
         bridgeTimeoutJob?.cancel()
+        val isResubscribe = resubscribePending.getAndSet(false)
         _connectionState.value = ConnectionState.Connected
         _connectionIssue.value = ConnectionIssue.None
         reconnectDelayMs = 2000L
         flushPendingMessages()
+        _bridgeConnected.tryEmit(!isResubscribe)
     }
 
     private fun triggerReconnection() {
