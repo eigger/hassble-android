@@ -57,6 +57,20 @@ private const val TAG = "HassBleSources"
 class NordicAdvertisementScanner(private val context: Context) : AdvertisementScanner {
     private var scanJob: Job? = null
 
+    // Simple cache to merge ADV_IND and SCAN_RSP data per MAC address
+    private val manufacturerDataCache = mutableMapOf<String, android.util.SparseArray<no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
+    private val serviceDataCache = mutableMapOf<String, Map<android.os.ParcelUuid, no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
+    private val serviceUuidsCache = mutableMapOf<String, List<android.os.ParcelUuid>>()
+
+    private fun getShortUuid(uuid: java.util.UUID): String {
+        val s = uuid.toString().uppercase()
+        return if (s.endsWith("-0000-1000-8000-00805F9B34FB")) {
+            s.substring(4, 8)
+        } else {
+            s
+        }
+    }
+
     override fun scan(devices: List<DeviceConfig>, scanMode: BleScanModeOption): Flow<RawReading> = flow {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "BLUETOOTH_SCAN permission not granted")
@@ -84,9 +98,29 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 val deviceName = result.device.name ?: ""
                 val deviceAddress = result.device.address
                 val scanRecord = result.data?.scanRecord
-                val serviceData = scanRecord?.serviceData ?: emptyMap()
-                val advertisedServiceUuids = scanRecord?.serviceUuids.orEmpty()
-                val manufacturerData = scanRecord?.manufacturerSpecificData
+                val isConnectable = result.data?.isConnectable
+
+                // Update caches with new data if available
+                scanRecord?.manufacturerSpecificData?.let {
+                    if (it.size() > 0) {
+                        manufacturerDataCache[deviceAddress] = it
+                    }
+                }
+                scanRecord?.serviceData?.let {
+                    if (it.isNotEmpty()) {
+                        serviceDataCache[deviceAddress] = it
+                    }
+                }
+                scanRecord?.serviceUuids?.let {
+                    if (it.isNotEmpty()) {
+                        serviceUuidsCache[deviceAddress] = it
+                    }
+                }
+
+                // Use merged data for matching and decoding
+                val manufacturerData = manufacturerDataCache[deviceAddress] ?: scanRecord?.manufacturerSpecificData
+                val serviceData = serviceDataCache[deviceAddress] ?: scanRecord?.serviceData ?: emptyMap()
+                val advertisedServiceUuids = serviceUuidsCache[deviceAddress] ?: scanRecord?.serviceUuids.orEmpty()
                 val rawBytes = scanRecord?.bytes
 
                 if (LiveEventLogger.isLiveActive) {
@@ -100,20 +134,21 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                         list.joinToString(", ")
                     }
                     val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
-                        "${key.uuid.toString().takeLast(8).uppercase()}: ${value.value.joinToString("") { String.format("%02X", it) }}"
+                        "${getShortUuid(key.uuid)}: ${value.value.joinToString("") { String.format("%02X", it) }}"
                     }
                     val logMsg = buildString {
                         append("addr=$deviceAddress")
                         if (deviceName.isNotBlank()) append(", name='$deviceName'")
                         if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
                         if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
+                        isConnectable?.let { append(", connectable=$it") }
                     }
                     LiveEventLogger.log(LogType.ADV, logMsg)
                 }
 
                 if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
                     val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }
-                    val svcUuids = serviceData.keys.map { it.uuid.toString().takeLast(8) }
+                    val svcUuids = serviceData.keys.map { getShortUuid(it.uuid) }
                     Log.d(TAG, "ADV addr=$deviceAddress name='$deviceName' mfr=$mfrIds svc=$svcUuids")
                 }
 
@@ -173,6 +208,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             manufacturerHex = manufacturerHex,
                             serviceDataHex = serviceDataHex,
                             fullScanHex = fullScanHex,
+                            isConnectable = isConnectable,
                         ),
                     )
                 }
@@ -186,6 +222,9 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     override fun stop() {
         scanJob?.cancel()
         scanJob = null
+        manufacturerDataCache.clear()
+        serviceDataCache.clear()
+        serviceUuidsCache.clear()
     }
 
     private fun bytesToHex(bytes: ByteArray): String =

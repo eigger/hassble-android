@@ -223,6 +223,7 @@ class BleRuntime(
             if (d.source == Source.advertisement) {
                 r.manufacturerHex?.let { append(", mfg=$it") }
                 r.serviceDataHex?.let { append(", svc=$it") }
+                r.isConnectable?.let { append(", connectable=$it") }
             } else {
                 append(", raw=${r.rawHex}")
             }
