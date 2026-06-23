@@ -20,6 +20,7 @@ import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -112,14 +113,6 @@ class BleRuntime(
         this.disabledIds = disabledIds
         this.autoConnectDisabledIds = autoConnectDisabledIds
 
-        // Cache parameters for next call
-        this.lastConfig = config
-        this.lastEnabled = enabledKeys
-        this.lastBoundDevices = boundDevices
-        this.lastScanMode = scanMode
-        this.lastDisabledIds = disabledIds
-        this.lastAutoConnectDisabledIds = autoConnectDisabledIds
-
         if (oldConfig == null) {
             // First run: complete initialization
             devices.clear(); filters.clear(); obdIndex.clear(); controls.clear()
@@ -187,6 +180,14 @@ class BleRuntime(
                 }
             }
         }
+
+        // Cache parameters for next call
+        this.lastConfig = config
+        this.lastEnabled = enabledKeys
+        this.lastBoundDevices = boundDevices
+        this.lastScanMode = scanMode
+        this.lastDisabledIds = disabledIds
+        this.lastAutoConnectDisabledIds = autoConnectDisabledIds
     }
 
     private fun declareAndPrepare(d: DeviceConfig, resetStates: Boolean = true) {
@@ -314,43 +315,54 @@ class BleRuntime(
         declareAndPrepare(d)
 
         val resolved = resolveDeviceMac(d)
-        when (resolved.source) {
-            Source.gatt_notify -> {
-                val mac = resolved.gatt?.mac
-                if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
-                    val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
-                    if (keys.isNotEmpty()) {
-                        val job = gatt.connect(resolved, waitForDevice = {
-                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                            scanner.scanForMac(mac, scanMode).first()
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
-                        }).onEach(::onReading).launchIn(scope)
-                        deviceConnectionJobs[resolved.id] = job
-                    } else {
-                        onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+        val job = scope.launch {
+            val oldJob = deviceConnectionJobs[resolved.id]
+            if (oldJob != null && oldJob.isActive) {
+                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: cancelling previous active job before reconnecting")
+                oldJob.cancelAndJoin()
+            }
+
+            when (resolved.source) {
+                Source.gatt_notify -> {
+                    val mac = resolved.gatt?.mac
+                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
+                        val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
+                        if (keys.isNotEmpty()) {
+                            gatt.connect(resolved, waitForDevice = {
+                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                                scanner.scanForMac(mac, scanMode).first()
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                            }).collect { reading ->
+                                onReading(reading)
+                            }
+                        } else {
+                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+                        }
                     }
                 }
-            }
-            Source.obd -> {
-                val mac = resolved.obd?.mac
-                if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
-                    val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
-                    if (keys.isNotEmpty()) {
-                        val job = obd.connect(resolved, keys, waitForDevice = {
-                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                            scanner.scanForMac(mac, scanMode).first()
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
-                        }).onEach(::onReading).launchIn(scope)
-                        deviceConnectionJobs[resolved.id] = job
-                    } else {
-                        onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+                Source.obd -> {
+                    val mac = resolved.obd?.mac
+                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
+                        val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
+                        if (keys.isNotEmpty()) {
+                            obd.connect(resolved, keys, waitForDevice = {
+                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                                scanner.scanForMac(mac, scanMode).first()
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                            }).collect { reading ->
+                                onReading(reading)
+                            }
+                        } else {
+                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+                        }
                     }
                 }
+                else -> {}
             }
-            else -> {}
         }
+        deviceConnectionJobs[resolved.id] = job
     }
 
     private fun startSources() {
