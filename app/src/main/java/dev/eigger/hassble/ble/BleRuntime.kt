@@ -20,6 +20,7 @@ import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -47,6 +48,7 @@ class BleRuntime(
     private val onDiscoveredAdvChanged: (List<DiscoveredAdvInstance>) -> Unit = {},
     private val onSensorValuesChanged: (List<SensorLastValue>) -> Unit = {},
     private val onLinkDataReceived: (String, Long) -> Unit = { _, _ -> },
+    private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val jobs = mutableListOf<Job>()
@@ -182,14 +184,24 @@ class BleRuntime(
                 Source.gatt_notify -> {
                     val mac = resolved.gatt?.mac
                     if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
-                        jobs += gatt.connect(resolved).onEach(::onReading).launchIn(scope)
+                        jobs += gatt.connect(resolved, waitForDevice = {
+                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                            scanner.scanForMac(mac, scanMode).first()
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                        }).onEach(::onReading).launchIn(scope)
                     }
                 }
                 Source.obd -> {
                     val mac = resolved.obd?.mac
                     if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
-                        jobs += obd.connect(resolved, keys).onEach(::onReading).launchIn(scope)
+                        jobs += obd.connect(resolved, keys, waitForDevice = {
+                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                            scanner.scanForMac(mac, scanMode).first()
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                        }).onEach(::onReading).launchIn(scope)
                     }
                 }
                 else -> {}

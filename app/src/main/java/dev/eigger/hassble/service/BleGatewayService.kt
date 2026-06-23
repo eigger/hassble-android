@@ -254,6 +254,7 @@ class BleGatewayService : Service() {
                             onLinkStatus(cur.copy(state = dev.eigger.hassble.ble.DeviceLinkState.Polling, lastDataMs = ts))
                         }
                     },
+                    onLinkStatus = onLinkStatus,
                 ).also { it.start() }
             }
 

@@ -229,6 +229,24 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         }
     }
 
+    override fun scanForMac(mac: String, scanMode: BleScanModeOption): Flow<Unit> = flow {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "BLUETOOTH_SCAN permission not granted for scanForMac")
+            return@flow
+        }
+        val normalizedMac = mac.uppercase().replace("-", ":")
+        val nativeScanMode = when (scanMode) {
+            BleScanModeOption.LOW_POWER -> BleScanMode.SCAN_MODE_LOW_POWER
+            BleScanModeOption.BALANCED -> BleScanMode.SCAN_MODE_BALANCED
+            BleScanModeOption.LOW_LATENCY -> BleScanMode.SCAN_MODE_LOW_LATENCY
+        }
+        val scanner = BleScanner(context)
+        scanner.scan(settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
+            val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
+            if (addr == normalizedMac) emit(Unit)
+        }
+    }
+
     override fun stop() {
         scanJob?.cancel()
         scanJob = null
@@ -287,36 +305,41 @@ class NordicGattNotifySource(
 ) : GattNotifySource {
     private val activeConnections = mutableMapOf<String, ClientBleGatt>()
 
-    override fun connect(device: DeviceConfig): Flow<RawReading> = flow {
+    override fun connect(device: DeviceConfig, waitForDevice: suspend () -> Unit): Flow<RawReading> = flow {
         val mac = device.gatt?.mac ?: return@flow
         val serviceUuidStr = device.gatt.serviceUuid
         val notifyCharUuidStr = device.gatt.notifyCharUuid
 
-        try {
-            Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
-            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
-            val client = ClientBleGatt.connect(context, mac, scope)
-            activeConnections[device.id] = client
-            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+        while (currentCoroutineContext().isActive) {
+            waitForDevice()
+            try {
+                Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
+                val client = ClientBleGatt.connect(context, mac, scope)
+                activeConnections[device.id] = client
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
-            val services = client.discoverServices()
-            val service = services.findService(uuidFrom(serviceUuidStr))
-            val characteristic = service?.findCharacteristic(uuidFrom(notifyCharUuidStr))
+                val services = client.discoverServices()
+                val service = services.findService(uuidFrom(serviceUuidStr))
+                val characteristic = service?.findCharacteristic(uuidFrom(notifyCharUuidStr))
 
-            if (characteristic != null) {
-                Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
-                characteristic.getNotifications().collect { bytes ->
-                    onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
-                    val hex = bytes.value.joinToString("") { String.format("%02X", it) }
-                    emit(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                if (characteristic != null) {
+                    Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
+                    characteristic.getNotifications().collect { bytes ->
+                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
+                        val hex = bytes.value.joinToString("") { String.format("%02X", it) }
+                        emit(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                    }
+                } else {
+                    throw IllegalStateException("Notify characteristic $notifyCharUuidStr not found")
                 }
-            } else {
-                Log.e(TAG, "Notify characteristic $notifyCharUuidStr not found")
-                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = "Notify char not found"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "GATT session ended for ${device.id}: ${e.message}")
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
+                activeConnections.remove(device.id)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed connecting/subscribing to GATT device ${device.id}", e)
-            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
         }
     }
 
@@ -372,22 +395,22 @@ class NordicElm327Source(
         val pollTarget: PollTarget? = null,
     )
 
-    override fun connect(device: DeviceConfig, enabledKeys: Set<String>): Flow<RawReading> = flow {
+    override fun connect(device: DeviceConfig, enabledKeys: Set<String>, waitForDevice: suspend () -> Unit): Flow<RawReading> = flow {
         val mac = device.obd?.mac ?: return@flow
         while (currentCoroutineContext().isActive) {
+            waitForDevice()
             try {
                 runObdSession(this, device, enabledKeys, mac)
                 break
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "OBD session lost for ${device.id}, reconnecting in ${RECONNECT_DELAY_MS}ms", e)
+                Log.w(TAG, "OBD session ended for ${device.id}: ${e.message}")
                 onLinkStatus(
                     DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message),
                 )
                 teardown(device.id)
-                delay(RECONNECT_DELAY_MS)
-                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
+                // waitForDevice() at top of loop gates the next reconnect attempt
             }
         }
     }
@@ -592,7 +615,7 @@ class NordicElm327Source(
     }
 
     companion object {
-        private const val RECONNECT_DELAY_MS = 5_000L
+
         private const val POLL_LOOP_MS = 10L
         private const val SINGLE_FRAME_TIMEOUT_MS = 2_000L
         private const val MULTIFRAME_TIMEOUT_MS = 5_000L
