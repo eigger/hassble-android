@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">HassBle</string>
-    <string name="app_sub_title">Home Assistant BLE Bridge</string>
+    <string name="app_sub_title">Home Assistant BLE Gateway</string>
     <string name="system_monitor">System Monitor</string>
     <string name="service_running">Service Running</string>
     <string name="status_running">Running</string>

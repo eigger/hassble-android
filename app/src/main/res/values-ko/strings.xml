@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">HassBle</string>
-    <string name="app_sub_title">Home Assistant BLE 브릿지</string>
+    <string name="app_sub_title">Home Assistant BLE 게이트웨이</string>
     <string name="system_monitor">시스템 모니터</string>
     <string name="service_running">서비스 작동</string>
     <string name="status_running">실행 중</string>

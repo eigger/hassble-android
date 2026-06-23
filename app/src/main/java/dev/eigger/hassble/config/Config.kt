@@ -57,6 +57,7 @@ data class GattConfig(
     @SerialName("service_uuid") val serviceUuid: String,
     @SerialName("notify_char_uuid") val notifyCharUuid: String,
     @SerialName("write_char_uuid") val writeCharUuid: String? = null,
+    @SerialName("auto_connect") val autoConnect: Boolean = true,
 )
 
 @Serializable
@@ -67,6 +68,7 @@ data class ObdConfig(
     @SerialName("rx_char_uuid") val rxCharUuid: String = "FFF1",
     @SerialName("tx_delay") val txDelay: String = "50ms",
     @SerialName("init_commands") val initCommands: List<String> = emptyList(),
+    @SerialName("auto_connect") val autoConnect: Boolean = true,
 )
 
 @Serializable

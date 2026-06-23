@@ -34,6 +34,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_SCAN_MODE = stringPreferencesKey("ble_scan_mode")
         private val KEY_DISABLED_DEVICES = stringPreferencesKey("disabled_devices")
         private val KEY_KNOWN_DEVICE_IDS = stringPreferencesKey("known_device_ids")
+        private val KEY_AUTO_CONNECT_DISABLED = stringPreferencesKey("auto_connect_disabled")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -101,6 +102,42 @@ class HassSettingsRepository(private val context: Context) {
 
     suspend fun clearDisabledDevices() {
         context.dataStore.edit { prefs -> prefs.remove(KEY_DISABLED_DEVICES) }
+    }
+
+    val autoConnectDisabled: Flow<Set<String>> = context.dataStore.data.map { prefs ->
+        runCatching {
+            json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_AUTO_CONNECT_DISABLED] ?: "[]").toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun setAutoConnectDisabled(deviceId: String, disabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            val current = runCatching {
+                json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_AUTO_CONNECT_DISABLED] ?: "[]").toMutableSet()
+            }.getOrDefault(mutableSetOf())
+            if (disabled) current.add(deviceId) else current.remove(deviceId)
+            prefs[KEY_AUTO_CONNECT_DISABLED] = json.encodeToString(ListSerializer(String.serializer()), current.sorted())
+        }
+    }
+
+    suspend fun initAutoConnectFromConfig(devices: List<DeviceConfig>) {
+        context.dataStore.edit { prefs ->
+            val current = runCatching {
+                json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_AUTO_CONNECT_DISABLED] ?: "[]").toMutableSet()
+            }.getOrDefault(mutableSetOf())
+            // config에서 auto_connect: false인 기기는 강제로 disabled에 추가
+            // config에서 auto_connect: true(기본)인 기기는 기존 사용자 설정 유지
+            devices.filter { it.source == Source.gatt_notify || it.source == Source.obd }
+                .forEach { d ->
+                    val autoConnect = when (d.source) {
+                        Source.gatt_notify -> d.gatt?.autoConnect != false
+                        Source.obd -> d.obd?.autoConnect != false
+                        else -> true
+                    }
+                    if (!autoConnect) current.add(d.id) else current.remove(d.id)
+                }
+            prefs[KEY_AUTO_CONNECT_DISABLED] = json.encodeToString(ListSerializer(String.serializer()), current.sorted())
+        }
     }
 
     suspend fun getRemovedDeviceIds(newConfigIds: Set<String>): Set<String> {
