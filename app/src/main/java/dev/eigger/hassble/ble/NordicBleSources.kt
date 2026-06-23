@@ -61,6 +61,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     private val manufacturerDataCache = mutableMapOf<String, android.util.SparseArray<no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
     private val serviceDataCache = mutableMapOf<String, Map<android.os.ParcelUuid, no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
     private val serviceUuidsCache = mutableMapOf<String, List<android.os.ParcelUuid>>()
+    private val cacheTimestamps = mutableMapOf<String, Long>()
 
     private fun getShortUuid(uuid: java.util.UUID): String {
         val s = uuid.toString().uppercase()
@@ -101,21 +102,29 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 val isConnectable = result.data?.isConnectable
 
                 // Update caches with new data if available
+                var cacheUpdated = false
                 scanRecord?.manufacturerSpecificData?.let {
                     if (it.size() > 0) {
                         manufacturerDataCache[deviceAddress] = it
+                        cacheUpdated = true
                     }
                 }
                 scanRecord?.serviceData?.let {
                     if (it.isNotEmpty()) {
                         serviceDataCache[deviceAddress] = it
+                        cacheUpdated = true
                     }
                 }
                 scanRecord?.serviceUuids?.let {
                     if (it.isNotEmpty()) {
                         serviceUuidsCache[deviceAddress] = it
+                        cacheUpdated = true
                     }
                 }
+                if (cacheUpdated) {
+                    cacheTimestamps[deviceAddress] = System.currentTimeMillis()
+                }
+                cleanupOldCaches()
 
                 // Use merged data for matching and decoding
                 val manufacturerData = manufacturerDataCache[deviceAddress] ?: scanRecord?.manufacturerSpecificData
@@ -225,6 +234,22 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         manufacturerDataCache.clear()
         serviceDataCache.clear()
         serviceUuidsCache.clear()
+        cacheTimestamps.clear()
+    }
+
+    private fun cleanupOldCaches() {
+        val now = System.currentTimeMillis()
+        val expiredThreshold = 60_000L // 1 minute
+        val expiredAddresses = cacheTimestamps.filter { now - it.value > expiredThreshold }.keys
+        if (expiredAddresses.isNotEmpty()) {
+            for (addr in expiredAddresses) {
+                manufacturerDataCache.remove(addr)
+                serviceDataCache.remove(addr)
+                serviceUuidsCache.remove(addr)
+                cacheTimestamps.remove(addr)
+            }
+            LiveEventLogger.log(LogType.LINK, "BLE 캐시 정리 완료: ${expiredAddresses.size}개 기기 정보 만료됨")
+        }
     }
 
     private fun bytesToHex(bytes: ByteArray): String =

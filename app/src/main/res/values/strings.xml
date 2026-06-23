@@ -126,7 +126,7 @@
     <string name="reload_config_running_hint">Reloads config without stopping the gateway.</string>
     <!-- Permissions -->
     <string name="permissions_missing_title">Permissions required</string>
-    <string name="permissions_missing_desc">Bluetooth and notification permissions are needed for BLE scanning and background service.</string>
+    <string name="permissions_missing_desc">Bluetooth, location, and notification permissions are needed for BLE scanning, beacon tracking, and background service.</string>
     <string name="permissions_open_settings">Open app settings</string>
     <!-- Device link -->
     <string name="link_state_connecting">Connecting…</string>

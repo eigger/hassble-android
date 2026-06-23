@@ -122,7 +122,7 @@
     <string name="service_error_banner">게이트웨이 오류: %1$s</string>
     <string name="reload_config_running_hint">게이트웨이를 정지하지 않고 설정을 다시 읽습니다.</string>
     <string name="permissions_missing_title">권한이 필요합니다</string>
-    <string name="permissions_missing_desc">BLE 스캔과 백그라운드 서비스를 위해 블루투스·알림 권한이 필요합니다.</string>
+    <string name="permissions_missing_desc">BLE 스캔, 비콘(Beacon) 수집 및 백그라운드 작동을 위해 블루투스·위치·알림 권한이 필요합니다.</string>
     <string name="permissions_open_settings">앱 설정 열기</string>
     <string name="link_state_connecting">연결 중…</string>
     <string name="link_state_connected">연결됨</string>

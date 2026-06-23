@@ -191,7 +191,10 @@ class BleGatewayService : Service() {
             val removedIds = repository.getRemovedDeviceIds(newConfigIds)
             if (removedIds.isNotEmpty()) {
                 LiveEventLogger.log(LogType.LINK, "Config 변경: 삭제된 기기 HA 정리 중 (${removedIds.joinToString()})")
-                removedIds.forEach { deviceId -> ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
+                removedIds.forEach { deviceId ->
+                    ws?.removeEntitiesByDeviceIdPrefix(deviceId)
+                    repository.unbindDevice(deviceId)
+                }
             }
             repository.updateKnownDeviceIds(newConfigIds)
             repository.initAutoConnectFromConfig(config.devices)
