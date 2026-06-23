@@ -162,6 +162,7 @@
     <string name="git_file_label">설정 파일</string>
     <string name="browse_files_btn">파일 탐색</string>
     <string name="config_not_set_toast">센서 탭에서 설정 저장소를 먼저 지정해 주세요.</string>
+    <string name="test_connection_oauth_hint">OAuth 활성 — 로그인 시 연결이 확인되었습니다.</string>
     <string name="git_private_repo_checkbox">Private 저장소 사용 (Github Token 입력)</string>
     <string name="invalid_url_format_error">올바른 URL 형식(예: http://192.168.1.100:8123)이 아닙니다.</string>
     <string name="validate_url_required_msg">HA URL이 설정되어 있지 않습니다.</string>

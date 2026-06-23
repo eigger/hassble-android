@@ -754,34 +754,43 @@ private fun GatewayTabContent(
                     OutlinedTextField(value = tokenInput, onValueChange = onTokenChange, label = { Text(stringResource(R.string.long_lived_token)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 }
                 Spacer(modifier = Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            if (urlInput.isBlank() || tokenInput.isBlank()) {
-                                Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
-                            scope.launch {
-                                isTestingConnection = true
-                                when (val result = HaConnectionTester.test(urlInput, tokenInput)) {
-                                    is HaConnectionTester.Result.Ok ->
-                                        Toast.makeText(context, context.getString(R.string.test_connection_ok), Toast.LENGTH_SHORT).show()
-                                    is HaConnectionTester.Result.AuthFailed ->
-                                        Toast.makeText(context, context.getString(R.string.test_connection_auth_failed, result.code), Toast.LENGTH_LONG).show()
-                                    is HaConnectionTester.Result.NetworkError ->
-                                        Toast.makeText(context, context.getString(R.string.test_connection_failed, result.message), Toast.LENGTH_LONG).show()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (haRefreshToken.isNotBlank()) {
+                        Text(
+                            stringResource(R.string.test_connection_oauth_hint),
+                            color = Color.Gray,
+                            fontSize = 11.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                    } else {
+                        Button(
+                            onClick = {
+                                if (urlInput.isBlank() || tokenInput.isBlank()) {
+                                    Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
+                                    return@Button
                                 }
-                                isTestingConnection = false
+                                scope.launch {
+                                    isTestingConnection = true
+                                    when (val result = HaConnectionTester.test(urlInput, tokenInput)) {
+                                        is HaConnectionTester.Result.Ok ->
+                                            Toast.makeText(context, context.getString(R.string.test_connection_ok), Toast.LENGTH_SHORT).show()
+                                        is HaConnectionTester.Result.AuthFailed ->
+                                            Toast.makeText(context, context.getString(R.string.test_connection_auth_failed, result.code), Toast.LENGTH_LONG).show()
+                                        is HaConnectionTester.Result.NetworkError ->
+                                            Toast.makeText(context, context.getString(R.string.test_connection_failed, result.message), Toast.LENGTH_LONG).show()
+                                    }
+                                    isTestingConnection = false
+                                }
+                            },
+                            enabled = !isTestingConnection,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), contentColor = MaterialTheme.colorScheme.primary),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            if (isTestingConnection) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text(stringResource(R.string.test_connection_btn), fontSize = 12.sp)
                             }
-                        },
-                        enabled = !isTestingConnection,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), contentColor = MaterialTheme.colorScheme.primary),
-                        shape = RoundedCornerShape(8.dp),
-                    ) {
-                        if (isTestingConnection) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text(stringResource(R.string.test_connection_btn), fontSize = 12.sp)
                         }
                     }
                     Button(
