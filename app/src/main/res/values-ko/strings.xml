@@ -158,7 +158,6 @@
     <string name="oauth_clear_title">수동 토큰으로 전환할까요?</string>
     <string name="oauth_clear_body">OAuth 세션이 삭제됩니다. 다시 연결하려면 장기 액세스 토큰을 직접 입력해야 합니다.</string>
     <string name="oauth_clear_confirm">전환</string>
-    <string name="cancel">취소</string>
     <string name="oauth_expired_notif_title">HassBle 인증 만료</string>
     <string name="oauth_expired_notif_text">HA 인증 세션이 만료되었습니다. 다시 로그인해 주세요.</string>
     <string name="git_config_section_title">설정 저장소</string>

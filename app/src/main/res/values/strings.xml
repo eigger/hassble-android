@@ -165,7 +165,6 @@
     <string name="oauth_clear_title">Switch to manual token?</string>
     <string name="oauth_clear_body">Your OAuth session will be cleared. You will need to enter a long-lived access token to reconnect.</string>
     <string name="oauth_clear_confirm">Switch</string>
-    <string name="cancel">Cancel</string>
     <string name="oauth_expired_notif_title">HassBle Auth Expired</string>
     <string name="oauth_expired_notif_text">HA session has expired. Please open the app and login again.</string>
     <string name="git_config_section_title">Config Repository</string>
