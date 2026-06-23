@@ -129,8 +129,12 @@ import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.net.ConnectionIssue
 import dev.eigger.hassble.net.ConnectionState
+import dev.eigger.hassble.net.GitHubHelper
 import dev.eigger.hassble.net.HaConnectionTester
 import dev.eigger.hassble.service.BleGatewayService
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.runtime.mutableIntStateOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -247,13 +251,20 @@ private fun HomeScreen() {
 
     var urlInput by remember { mutableStateOf("") }
     var tokenInput by remember { mutableStateOf("") }
-    var gitUrlInput by remember { mutableStateOf("") }
+    var gitRepoInput by remember { mutableStateOf("") }
+    var gitFileInput by remember { mutableStateOf("") }
     var gitTokenInput by remember { mutableStateOf("") }
 
-    LaunchedEffect(savedHaUrl, savedHaToken, savedGitUrl, savedGitToken) {
+    val gitUrlInput = GitHubHelper.buildRawUrl(gitRepoInput, gitFileInput)
+
+    LaunchedEffect(savedHaUrl, savedHaToken) {
         urlInput = savedHaUrl
         tokenInput = savedHaToken
-        gitUrlInput = savedGitUrl
+    }
+    LaunchedEffect(savedGitUrl, savedGitToken) {
+        val parsed = GitHubHelper.parseGitUrl(savedGitUrl)
+        gitRepoInput = parsed?.repoShort ?: savedGitUrl
+        gitFileInput = parsed?.file ?: ""
         gitTokenInput = savedGitToken ?: ""
     }
 
@@ -462,10 +473,6 @@ private fun HomeScreen() {
                             tokenInput = ""
                         }
                     },
-                    gitUrlInput = gitUrlInput,
-                    onGitUrlChange = { gitUrlInput = it },
-                    gitTokenInput = gitTokenInput,
-                    onGitTokenChange = { gitTokenInput = it },
                     startOnBoot = startOnBoot,
                     onStartOnBootChange = { scope.launch { repository.saveStartOnBoot(it) } },
                     scanMode = scanMode,
@@ -473,15 +480,17 @@ private fun HomeScreen() {
                     isBatteryIgnored = isBatteryIgnored,
                     onShowOnboarding = { showOnboarding = true },
                     onStartGateway = {
-                        if (urlInput.isNotBlank() && (tokenInput.isNotBlank() || savedHaRefreshToken.isNotBlank()) && gitUrlInput.isNotBlank()) {
-                            scope.launch {
+                        when {
+                            urlInput.isBlank() || (tokenInput.isBlank() && savedHaRefreshToken.isBlank()) ->
+                                Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
+                            gitUrlInput.isBlank() ->
+                                Toast.makeText(context, context.getString(R.string.config_not_set_toast), Toast.LENGTH_SHORT).show()
+                            else -> scope.launch {
                                 repository.saveHaSettings(urlInput, tokenInput)
                                 repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
                                 val refreshToken = repository.haRefreshToken.first()
                                 BleGatewayService.start(context, urlInput, tokenInput, refreshToken, gitUrlInput, gitTokenInput.ifBlank { null })
                             }
-                        } else {
-                            Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
                         }
                     },
                     onStopGateway = { BleGatewayService.stop(context) },
@@ -498,6 +507,12 @@ private fun HomeScreen() {
                     discoveredAdv = discoveredAdv,
                     sensorLastValues = sensorLastValues,
                     deviceLinkStatuses = deviceLinkStatuses,
+                    gitRepoInput = gitRepoInput,
+                    gitFileInput = gitFileInput,
+                    gitTokenInput = gitTokenInput,
+                    onGitRepoChange = { gitRepoInput = it },
+                    onGitFileChange = { gitFileInput = it },
+                    onGitTokenChange = { gitTokenInput = it },
                     onReloadConfig = { reloadTrigger++ },
                     onBindClick = { scanningDevice = it },
                     onUnbindClick = { deviceId -> scope.launch { repository.unbindDevice(deviceId) } },
@@ -589,10 +604,6 @@ private fun GatewayTabContent(
     haRefreshToken: String,
     haTokenLastRefreshed: Long,
     onClearOAuth: () -> Unit,
-    gitUrlInput: String,
-    onGitUrlChange: (String) -> Unit,
-    gitTokenInput: String,
-    onGitTokenChange: (String) -> Unit,
     startOnBoot: Boolean,
     onStartOnBootChange: (Boolean) -> Unit,
     scanMode: dev.eigger.hassble.config.BleScanModeOption,
@@ -606,12 +617,6 @@ private fun GatewayTabContent(
     val scope = rememberCoroutineScope()
     val inputsEnabled = !isRunning
     var isTestingConnection by remember { mutableStateOf(false) }
-    var showGitTokenField by remember { mutableStateOf(false) }
-    LaunchedEffect(gitTokenInput) {
-        if (gitTokenInput.isNotBlank()) {
-            showGitTokenField = true
-        }
-    }
     val issueMessage = connectionIssueMessage(connectionIssue)
     val gatewayId = remember {
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "hassble"
@@ -747,54 +752,6 @@ private fun GatewayTabContent(
                 if (haRefreshToken.isBlank()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(value = tokenInput, onValueChange = onTokenChange, label = { Text(stringResource(R.string.long_lived_token)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(value = gitUrlInput, onValueChange = onGitUrlChange, label = { Text(stringResource(R.string.git_config_url)) }, enabled = inputsEnabled, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(enabled = inputsEnabled) {
-                            showGitTokenField = !showGitTokenField
-                            if (!showGitTokenField) {
-                                onGitTokenChange("")
-                            }
-                        }
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    androidx.compose.material3.Checkbox(
-                        checked = showGitTokenField,
-                        onCheckedChange = {
-                            showGitTokenField = it
-                            if (!it) {
-                                onGitTokenChange("")
-                            }
-                        },
-                        enabled = inputsEnabled,
-                        colors = androidx.compose.material3.CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary,
-                            uncheckedColor = Color.Gray
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = stringResource(R.string.git_private_repo_checkbox),
-                        color = if (showGitTokenField) Color.White else Color.Gray,
-                        fontSize = 13.sp,
-                        fontWeight = if (showGitTokenField) FontWeight.SemiBold else FontWeight.Normal
-                    )
-                }
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = showGitTokenField,
-                    enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
-                ) {
-                    Column {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(value = gitTokenInput, onValueChange = onGitTokenChange, label = { Text(stringResource(R.string.git_token_optional)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                    }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -982,6 +939,12 @@ private fun SensorsTabContent(
     discoveredAdv: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
     deviceLinkStatuses: List<DeviceLinkStatus>,
+    gitRepoInput: String,
+    gitFileInput: String,
+    gitTokenInput: String,
+    onGitRepoChange: (String) -> Unit,
+    onGitFileChange: (String) -> Unit,
+    onGitTokenChange: (String) -> Unit,
     onReloadConfig: () -> Unit,
     onBindClick: (DeviceConfig) -> Unit,
     onUnbindClick: (String) -> Unit,
@@ -996,6 +959,16 @@ private fun SensorsTabContent(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        item {
+            GitConfigSection(
+                repoInput = gitRepoInput,
+                fileInput = gitFileInput,
+                tokenInput = gitTokenInput,
+                onRepoChange = onGitRepoChange,
+                onFileChange = onGitFileChange,
+                onTokenChange = onGitTokenChange,
+            )
+        }
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2096,4 +2069,155 @@ private fun formatLastRefreshed(context: Context, timestamp: Long): String {
     if (diffHour < 24) return context.getString(R.string.time_hours_ago, diffHour.toInt())
     val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
     return sdf.format(java.util.Date(timestamp))
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GitConfigSection(
+    repoInput: String,
+    fileInput: String,
+    tokenInput: String,
+    onRepoChange: (String) -> Unit,
+    onFileChange: (String) -> Unit,
+    onTokenChange: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var yamlFiles by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isBrowsing by remember { mutableStateOf(false) }
+    var browseError by remember { mutableStateOf<String?>(null) }
+    var dropdownExpanded by remember { mutableStateOf(false) }
+    var showTokenField by remember { mutableStateOf(tokenInput.isNotBlank()) }
+    var lastBrowsedRepo by remember { mutableStateOf("") }
+
+    LaunchedEffect(tokenInput) { if (tokenInput.isNotBlank()) showTokenField = true }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.git_config_section_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+
+            // Repo input row + Browse button
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = repoInput,
+                    onValueChange = {
+                        onRepoChange(it)
+                        if (it != lastBrowsedRepo) { yamlFiles = emptyList(); browseError = null }
+                    },
+                    label = { Text(stringResource(R.string.git_repo_label)) },
+                    placeholder = { Text("username/config-repo", color = Color.Gray, fontSize = 13.sp) },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+                Button(
+                    onClick = {
+                        val repo = repoInput.trim()
+                        scope.launch {
+                            isBrowsing = true
+                            browseError = null
+                            val result = GitHubHelper.fetchYamlFiles(repo, tokenInput.ifBlank { null })
+                            isBrowsing = false
+                            lastBrowsedRepo = repo
+                            result.onSuccess { files ->
+                                yamlFiles = files
+                                browseError = null
+                                if (files.size == 1 && fileInput.isBlank()) onFileChange(files[0])
+                                if (files.isNotEmpty()) dropdownExpanded = true
+                            }.onFailure { e ->
+                                browseError = e.message ?: "Unknown error"
+                            }
+                        }
+                    },
+                    enabled = repoInput.isNotBlank() && !isBrowsing,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ),
+                ) {
+                    if (isBrowsing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                    else Icon(Icons.Default.Search, contentDescription = stringResource(R.string.browse_files_btn))
+                }
+            }
+
+            browseError?.let { err ->
+                Text(err, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+            }
+
+            // File dropdown — shown when files were browsed OR when there's already a selection
+            if (yamlFiles.isNotEmpty() || fileInput.isNotBlank()) {
+                ExposedDropdownMenuBox(
+                    expanded = dropdownExpanded && yamlFiles.isNotEmpty(),
+                    onExpandedChange = { if (yamlFiles.isNotEmpty()) dropdownExpanded = it },
+                ) {
+                    OutlinedTextField(
+                        value = fileInput,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(stringResource(R.string.git_file_label)) },
+                        trailingIcon = {
+                            if (yamlFiles.isNotEmpty()) ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
+                        },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    if (yamlFiles.isNotEmpty()) {
+                        ExposedDropdownMenu(expanded = dropdownExpanded, onDismissRequest = { dropdownExpanded = false }) {
+                            yamlFiles.forEach { file ->
+                                DropdownMenuItem(
+                                    text = { Text(file, fontSize = 13.sp) },
+                                    onClick = { onFileChange(file); dropdownExpanded = false },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Private repo toggle + token field
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { showTokenField = !showTokenField; if (!showTokenField) onTokenChange("") }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.Checkbox(
+                    checked = showTokenField,
+                    onCheckedChange = { showTokenField = it; if (!it) onTokenChange("") },
+                    colors = androidx.compose.material3.CheckboxDefaults.colors(
+                        checkedColor = MaterialTheme.colorScheme.primary,
+                        uncheckedColor = Color.Gray,
+                    ),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    stringResource(R.string.git_private_repo_checkbox),
+                    color = if (showTokenField) Color.White else Color.Gray,
+                    fontSize = 13.sp,
+                    fontWeight = if (showTokenField) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+            AnimatedVisibility(visible = showTokenField, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                OutlinedTextField(
+                    value = tokenInput,
+                    onValueChange = onTokenChange,
+                    label = { Text(stringResource(R.string.git_token_optional)) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                )
+            }
+        }
+    }
 }

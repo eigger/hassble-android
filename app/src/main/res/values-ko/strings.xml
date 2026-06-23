@@ -157,6 +157,11 @@
     <string name="oauth_logout_btn">수동 토큰 사용</string>
     <string name="oauth_expired_notif_title">HassBle 인증 만료</string>
     <string name="oauth_expired_notif_text">HA 인증 세션이 만료되었습니다. 다시 로그인해 주세요.</string>
+    <string name="git_config_section_title">설정 저장소</string>
+    <string name="git_repo_label">GitHub 저장소 (owner/repo)</string>
+    <string name="git_file_label">설정 파일</string>
+    <string name="browse_files_btn">파일 탐색</string>
+    <string name="config_not_set_toast">센서 탭에서 설정 저장소를 먼저 지정해 주세요.</string>
     <string name="git_private_repo_checkbox">Private 저장소 사용 (Github Token 입력)</string>
     <string name="invalid_url_format_error">올바른 URL 형식(예: http://192.168.1.100:8123)이 아닙니다.</string>
     <string name="validate_url_required_msg">HA URL이 설정되어 있지 않습니다.</string>
