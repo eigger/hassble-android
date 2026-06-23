@@ -145,13 +145,10 @@ class BleGatewayService : Service() {
         var lastIssue: ConnectionIssue = ConnectionIssue.None
         wsStateJob = scope.launch {
             launch {
-                // ws_bridge 연결/재연결 시 엔티티 재선언
-                // resetStates=true: 실제 재연결 (unknown으로 초기화)
-                // resetStates=false: 주기적 재구독 (기존 센서값 유지)
-                client.bridgeConnected.collect { resetStates ->
+                client.bridgeConnected.collect {
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
-                    runtime?.redeclareEntities(resetStates)
+                    runtime?.redeclareEntities()
                 }
             }
             combine(client.connectionState, client.connectionIssue) { state, issue ->
