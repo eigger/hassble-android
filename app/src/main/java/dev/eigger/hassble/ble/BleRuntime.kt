@@ -51,7 +51,8 @@ class BleRuntime(
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) {
     private val json = Json { ignoreUnknownKeys = true }
-    private val jobs = mutableListOf<Job>()
+    private var scanJob: Job? = null
+    private val deviceConnectionJobs = mutableMapOf<String, Job>()
 
     private lateinit var config: GatewayConfig
     private lateinit var enabled: Set<String>                 // "deviceId/sensorKey"
@@ -59,6 +60,15 @@ class BleRuntime(
     private var scanMode: BleScanModeOption = BleScanModeOption.BALANCED
     private var disabledIds: Set<String> = emptySet()
     private var autoConnectDisabledIds: Set<String> = emptySet()
+
+    // Cached states for change tracking between apply() calls
+    private var lastConfig: GatewayConfig? = null
+    private var lastEnabled: Set<String> = emptySet()
+    private var lastBoundDevices: Map<String, String> = emptyMap()
+    private var lastScanMode: BleScanModeOption? = null
+    private var lastDisabledIds: Set<String> = emptySet()
+    private var lastAutoConnectDisabledIds: Set<String> = emptySet()
+
     private val devices = mutableMapOf<String, DeviceConfig>()
     private val filters = mutableMapOf<String, ValueFilter>()  // uniqueId → filter
     private val obdIndex = mutableMapOf<String, Map<Pair<String, String>, SensorConfig>>()
@@ -80,30 +90,103 @@ class BleRuntime(
     }
 
     /** 설정 적용 + 사용자가 켠 센서로 엔티티 선언 + BLE 기동. */
-    fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>, scanMode: BleScanModeOption = BleScanModeOption.BALANCED, disabledIds: Set<String> = emptySet(), autoConnectDisabledIds: Set<String> = emptySet()) {
+    fun apply(
+        config: GatewayConfig,
+        enabledKeys: Set<String>,
+        boundDevices: Map<String, String>,
+        scanMode: BleScanModeOption = BleScanModeOption.BALANCED,
+        disabledIds: Set<String> = emptySet(),
+        autoConnectDisabledIds: Set<String> = emptySet()
+    ) {
+        val oldConfig = this.lastConfig
+        val oldEnabled = this.lastEnabled
+        val oldBoundDevices = this.lastBoundDevices
+        val oldScanMode = this.lastScanMode
+        val oldDisabledIds = this.lastDisabledIds
+        val oldAutoConnectDisabledIds = this.lastAutoConnectDisabledIds
+
         this.config = config
         this.enabled = enabledKeys
         this.boundDevices = boundDevices
         this.scanMode = scanMode
         this.disabledIds = disabledIds
         this.autoConnectDisabledIds = autoConnectDisabledIds
-        jobs.forEach { it.cancel() }; jobs.clear(); scanner.stop()
-        devices.clear(); filters.clear(); obdIndex.clear(); controls.clear()
-        declaredAdvInstances.clear()
-        discoveredAdvInstances.clear()
-        lastSensorValues.clear()
-        publishDiscoveredAdv()
-        publishSensorValues()
 
-        for (d in config.devices) {
-            devices[d.id] = d
-            if (d.source == Source.obd) {
-                obdIndex[d.id] = d.sensors.filter { it.pid != null }
-                    .associateBy { it.mode to it.pid!!.uppercase() }
-            }
-            declareAndPrepare(d)
+        // Cache parameters for next call
+        this.lastConfig = config
+        this.lastEnabled = enabledKeys
+        this.lastBoundDevices = boundDevices
+        this.lastScanMode = scanMode
+        this.lastDisabledIds = disabledIds
+        this.lastAutoConnectDisabledIds = autoConnectDisabledIds
+
+        if (oldConfig == null) {
+            // First run: complete initialization
+            devices.clear(); filters.clear(); obdIndex.clear(); controls.clear()
+            declaredAdvInstances.clear()
+            discoveredAdvInstances.clear()
+            lastSensorValues.clear()
+            publishDiscoveredAdv()
+            publishSensorValues()
+
+            startSources()
+            return
         }
-        startSources()
+
+        // --- Active scan (Advertisement) job dynamic detection ---
+        val newAdvDevices = config.devices.filter { it.source == Source.advertisement && it.id !in disabledIds }
+        val oldAdvDevices = oldConfig.devices.filter { it.source == Source.advertisement && it.id !in oldDisabledIds }
+
+        val advChanged = scanMode != oldScanMode ||
+                newAdvDevices.size != oldAdvDevices.size ||
+                newAdvDevices.zip(oldAdvDevices).any { (newD, oldD) -> newD != oldD }
+
+        if (advChanged) {
+            scanJob?.cancel()
+            scanJob = null
+            scanner.stop()
+            if (newAdvDevices.isNotEmpty()) {
+                scanJob = scanner.scan(newAdvDevices, scanMode).onEach(::onReading).launchIn(scope)
+            }
+        }
+
+        // --- Connection devices and advertisement devices change detection ---
+        val currentDeviceIds = config.devices.map { it.id }.toSet()
+        val oldDeviceIds = oldConfig.devices.map { it.id }.toSet()
+
+        // 1. Remove deleted devices
+        val deletedIds = oldDeviceIds - currentDeviceIds
+        for (id in deletedIds) {
+            stopDevice(id)
+        }
+
+        // 2. Add or Update existing devices
+        for (d in config.devices) {
+            val deviceId = d.id
+            val isNewDevice = deviceId !in oldDeviceIds
+
+            // Check if any parameters or states for this device changed
+            val oldD = oldConfig.devices.firstOrNull { it.id == deviceId }
+            val configChanged = oldD != d
+            val boundMacChanged = boundDevices[deviceId] != oldBoundDevices[deviceId]
+            val disabledChanged = (deviceId in disabledIds) != (deviceId in oldDisabledIds)
+            val autoConnectChanged = (deviceId in autoConnectDisabledIds) != (deviceId in oldAutoConnectDisabledIds)
+
+            // Check if active sensors key set for this device changed
+            val newEnabledKeys = enabledKeys.filter { it.startsWith("$deviceId/") }.toSet()
+            val oldEnabledKeys = oldEnabled.filter { it.startsWith("$deviceId/") }.toSet()
+            val sensorsChanged = newEnabledKeys != oldEnabledKeys
+
+            val needsRestart = isNewDevice || configChanged || boundMacChanged || disabledChanged || autoConnectChanged || sensorsChanged
+
+            if (needsRestart) {
+                stopDevice(deviceId)
+                // 만약 disabledIds에 들어가 있다면 새로 시작하지 않고 disconnected 상태를 유지
+                if (deviceId !in disabledIds) {
+                    startDevice(d)
+                }
+            }
+        }
     }
 
     private fun declareAndPrepare(d: DeviceConfig, resetStates: Boolean = true) {
@@ -183,46 +266,100 @@ class BleRuntime(
         ws.sendAvailability(instanceId, true)
     }
 
-    private fun startSources() {
-        val adv = config.devices.filter { it.source == Source.advertisement && it.id !in disabledIds }
-        if (adv.isNotEmpty()) jobs += scanner.scan(adv, scanMode).onEach(::onReading).launchIn(scope)
-        for (d in config.devices) {
-            val resolved = resolveDeviceMac(d)
-            when (resolved.source) {
-                Source.gatt_notify -> {
-                    val mac = resolved.gatt?.mac
-                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
-                        val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
-                        if (keys.isNotEmpty()) {
-                            jobs += gatt.connect(resolved, waitForDevice = {
-                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                                scanner.scanForMac(mac, scanMode).first()
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
-                            }).onEach(::onReading).launchIn(scope)
-                        } else {
-                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
-                        }
-                    }
-                }
-                Source.obd -> {
-                    val mac = resolved.obd?.mac
-                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
-                        val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
-                        if (keys.isNotEmpty()) {
-                            jobs += obd.connect(resolved, keys, waitForDevice = {
-                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                                scanner.scanForMac(mac, scanMode).first()
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
-                            }).onEach(::onReading).launchIn(scope)
-                        } else {
-                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
-                        }
-                    }
-                }
+    private fun stopDevice(deviceId: String) {
+        deviceConnectionJobs[deviceId]?.cancel()
+        deviceConnectionJobs.remove(deviceId)
+
+        val d = devices[deviceId]
+        if (d != null) {
+            when (d.source) {
+                Source.gatt_notify -> gatt.disconnect(deviceId)
+                Source.obd -> obd.disconnect(deviceId)
                 else -> {}
             }
+        } else {
+            gatt.disconnect(deviceId)
+            obd.disconnect(deviceId)
+        }
+
+        devices.remove(deviceId)
+        obdIndex.remove(deviceId)
+
+        val controlKeysToRemove = controls.keys.filter { it.startsWith("${deviceId}_") }
+        controlKeysToRemove.forEach { controls.remove(it) }
+
+        val filterKeysToRemove = filters.keys.filter { it.startsWith("${deviceId}_") }
+        filterKeysToRemove.forEach { filters.remove(it) }
+
+        val sensorKeysToRemove = lastSensorValues.keys.filter { it.startsWith("${deviceId}_") || lastSensorValues[it]?.profileId == deviceId }
+        sensorKeysToRemove.forEach { lastSensorValues.remove(it) }
+        publishSensorValues()
+
+        val advKeysToRemove = discoveredAdvInstances.keys.filter { it.startsWith("$deviceId|") || discoveredAdvInstances[it]?.profileId == deviceId }
+        advKeysToRemove.forEach { discoveredAdvInstances.remove(it) }
+        publishDiscoveredAdv()
+
+        declaredAdvInstances.removeAll { it == deviceId || it.startsWith("${deviceId}_") }
+
+        val mac = boundDevices[deviceId] ?: ""
+        onLinkStatus(DeviceLinkStatus(deviceId, DeviceLinkState.Disconnected, mac))
+    }
+
+    private fun startDevice(d: DeviceConfig) {
+        devices[d.id] = d
+        if (d.source == Source.obd) {
+            obdIndex[d.id] = d.sensors.filter { it.pid != null }
+                .associateBy { it.mode to it.pid!!.uppercase() }
+        }
+        declareAndPrepare(d)
+
+        val resolved = resolveDeviceMac(d)
+        when (resolved.source) {
+            Source.gatt_notify -> {
+                val mac = resolved.gatt?.mac
+                if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
+                    val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
+                    if (keys.isNotEmpty()) {
+                        val job = gatt.connect(resolved, waitForDevice = {
+                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                            scanner.scanForMac(mac, scanMode).first()
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                        }).onEach(::onReading).launchIn(scope)
+                        deviceConnectionJobs[resolved.id] = job
+                    } else {
+                        onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+                    }
+                }
+            }
+            Source.obd -> {
+                val mac = resolved.obd?.mac
+                if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
+                    val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
+                    if (keys.isNotEmpty()) {
+                        val job = obd.connect(resolved, keys, waitForDevice = {
+                            onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                            scanner.scanForMac(mac, scanMode).first()
+                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                        }).onEach(::onReading).launchIn(scope)
+                        deviceConnectionJobs[resolved.id] = job
+                    } else {
+                        onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun startSources() {
+        val adv = config.devices.filter { it.source == Source.advertisement && it.id !in disabledIds }
+        if (adv.isNotEmpty()) {
+            scanJob = scanner.scan(adv, scanMode).onEach(::onReading).launchIn(scope)
+        }
+        for (d in config.devices) {
+            startDevice(d)
         }
     }
 
@@ -353,13 +490,33 @@ class BleRuntime(
     }
 
     fun stop() {
-        jobs.forEach { it.cancel() }
-        jobs.clear()
+        scanJob?.cancel()
+        scanJob = null
+        deviceConnectionJobs.values.forEach { it.cancel() }
+        deviceConnectionJobs.clear()
+
+        if (::config.isInitialized) {
+            for (d in config.devices) {
+                when (d.source) {
+                    Source.gatt_notify -> gatt.disconnect(d.id)
+                    Source.obd -> obd.disconnect(d.id)
+                    else -> {}
+                }
+            }
+        }
+
         scanner.stop()
         discoveredAdvInstances.clear()
         publishDiscoveredAdv()
         lastSensorValues.clear()
         publishSensorValues()
+
+        lastConfig = null
+        lastEnabled = emptySet()
+        lastBoundDevices = emptyMap()
+        lastScanMode = null
+        lastDisabledIds = emptySet()
+        lastAutoConnectDisabledIds = emptySet()
     }
 
     private fun recordSensorValue(
