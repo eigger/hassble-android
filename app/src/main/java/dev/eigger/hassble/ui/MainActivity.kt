@@ -765,7 +765,12 @@ private fun GatewayTabContent(
                             repository.saveHaAuthState(state)
                         }
                         val authUrl = dev.eigger.hassble.net.HaAuthHelper.getAuthorizeUrl(urlInput, state)
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
+                        try {
+                            val customTabsIntent = androidx.browser.customtabs.CustomTabsIntent.Builder().build()
+                            customTabsIntent.launchUrl(context, Uri.parse(authUrl))
+                        } catch (e: Exception) {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
+                        }
                     },
                     enabled = inputsEnabled && urlInput.isNotBlank() && urlInput != "https://" && urlInput != "http://",
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
