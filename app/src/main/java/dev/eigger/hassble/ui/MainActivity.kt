@@ -1316,6 +1316,9 @@ private fun DeviceConfigCard(
                         discoveredInstances = discoveredInstances,
                     )
 
+                    val isConnected = linkStatus?.state == DeviceLinkState.Connected ||
+                            linkStatus?.state == DeviceLinkState.Polling
+
                     if (isRunning && (device.source == Source.gatt_notify || device.source == Source.obd)) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
@@ -1323,10 +1326,11 @@ private fun DeviceConfigCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("자동 연결", fontSize = 12.sp, color = Color.Gray)
+                            Text("자동 연결", fontSize = 12.sp, color = if (isConnected) Color.Gray.copy(alpha = 0.5f) else Color.Gray)
                             Switch(
                                 checked = autoConnect,
                                 onCheckedChange = { onSetAutoConnect(it) },
+                                enabled = !isConnected,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.Black,
                                     checkedTrackColor = MaterialTheme.colorScheme.primary,
@@ -1341,6 +1345,7 @@ private fun DeviceConfigCard(
                             if (isDisabled) {
                                 Button(
                                     onClick = onEnable,
+                                    enabled = !isConnected,
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                                         contentColor = MaterialTheme.colorScheme.primary,
@@ -1353,6 +1358,7 @@ private fun DeviceConfigCard(
                             } else {
                                 Button(
                                     onClick = onDisable,
+                                    enabled = !isConnected,
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
                                         contentColor = MaterialTheme.colorScheme.error,
