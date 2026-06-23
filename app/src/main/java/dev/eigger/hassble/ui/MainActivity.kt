@@ -448,6 +448,7 @@ private fun HomeScreen() {
                     connectionIssue = connectionIssue,
                     urlInput = urlInput,
                     onUrlChange = { urlInput = it },
+                    tokenInput = tokenInput,
                     onTokenChange = {
                         tokenInput = it
                         scope.launch { repository.clearHaRefreshToken() }
