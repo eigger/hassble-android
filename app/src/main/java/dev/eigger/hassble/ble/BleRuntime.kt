@@ -55,6 +55,7 @@ class BleRuntime(
     private var boundDevices: Map<String, String> = emptyMap() // Map of deviceId -> MAC
     private var scanMode: BleScanModeOption = BleScanModeOption.BALANCED
     private var disabledIds: Set<String> = emptySet()
+    private var autoConnectDisabledIds: Set<String> = emptySet()
     private val devices = mutableMapOf<String, DeviceConfig>()
     private val filters = mutableMapOf<String, ValueFilter>()  // uniqueId → filter
     private val obdIndex = mutableMapOf<String, Map<Pair<String, String>, SensorConfig>>()
@@ -76,12 +77,13 @@ class BleRuntime(
     }
 
     /** 설정 적용 + 사용자가 켠 센서로 엔티티 선언 + BLE 기동. */
-    fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>, scanMode: BleScanModeOption = BleScanModeOption.BALANCED, disabledIds: Set<String> = emptySet()) {
+    fun apply(config: GatewayConfig, enabledKeys: Set<String>, boundDevices: Map<String, String>, scanMode: BleScanModeOption = BleScanModeOption.BALANCED, disabledIds: Set<String> = emptySet(), autoConnectDisabledIds: Set<String> = emptySet()) {
         this.config = config
         this.enabled = enabledKeys
         this.boundDevices = boundDevices
         this.scanMode = scanMode
         this.disabledIds = disabledIds
+        this.autoConnectDisabledIds = autoConnectDisabledIds
         jobs.forEach { it.cancel() }; jobs.clear(); scanner.stop()
         devices.clear(); filters.clear(); obdIndex.clear(); controls.clear()
         declaredAdvInstances.clear()
@@ -156,13 +158,13 @@ class BleRuntime(
             when (resolved.source) {
                 Source.gatt_notify -> {
                     val mac = resolved.gatt?.mac
-                    if (!mac.isNullOrBlank()) {
+                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
                         jobs += gatt.connect(resolved).onEach(::onReading).launchIn(scope)
                     }
                 }
                 Source.obd -> {
                     val mac = resolved.obd?.mac
-                    if (!mac.isNullOrBlank()) {
+                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         jobs += obd.connect(resolved, keys).onEach(::onReading).launchIn(scope)
                     }

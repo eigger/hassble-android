@@ -101,6 +101,13 @@ class BleGatewayService : Service() {
             return START_STICKY
         }
 
+        if (intent?.action == ACTION_SET_AUTO_CONNECT) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            val enabled = intent.getBooleanExtra(EXTRA_AUTO_CONNECT, true)
+            scope.launch { HassSettingsRepository(this@BleGatewayService).setAutoConnectDisabled(deviceId, !enabled) }
+            return START_STICKY
+        }
+
         val haUrl = intent?.getStringExtra(EXTRA_HA_URL) ?: return START_NOT_STICKY
         val token = intent.getStringExtra(EXTRA_TOKEN) ?: return START_NOT_STICKY
         currentGitUrl = intent.getStringExtra(EXTRA_GIT_URL) ?: return START_NOT_STICKY
@@ -182,6 +189,7 @@ class BleGatewayService : Service() {
                 removedIds.forEach { deviceId -> ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
             }
             repository.updateKnownDeviceIds(newConfigIds)
+            repository.initAutoConnectFromConfig(config.devices)
 
             if (runtime == null) {
                 val onLinkStatus: (DeviceLinkStatus) -> Unit = { status ->
@@ -220,17 +228,23 @@ class BleGatewayService : Service() {
                     repository.enabledSensorsInitialized,
                     repository.scanMode,
                     repository.disabledDevices,
+                    repository.autoConnectDisabled,
                 ) { args ->
                     val boundMap = args[0] as Map<*, *>
                     val enabledSensors = args[1] as Set<*>
                     val initialized = args[2] as Boolean
                     val scanMode = args[3] as dev.eigger.hassble.config.BleScanModeOption
                     val disabledDevices = args[4] as Set<*>
+                    val autoConnectDisabled = args[5] as Set<*>
                     val effectiveEnabled = if (!initialized) defaultEnabled else enabledSensors.filterIsInstance<String>().toSet()
-                    Pair(Triple(boundMap.entries.associate { it.key.toString() to it.value.toString() }, effectiveEnabled, scanMode), disabledDevices.filterIsInstance<String>().toSet())
-                }.collect { (triple, disabledDevices) ->
+                    Triple(
+                        Triple(boundMap.entries.associate { it.key.toString() to it.value.toString() }, effectiveEnabled, scanMode),
+                        disabledDevices.filterIsInstance<String>().toSet(),
+                        autoConnectDisabled.filterIsInstance<String>().toSet(),
+                    )
+                }.collect { (triple, disabledDevices, autoConnectDisabled) ->
                     val (boundMap, effectiveEnabled, scanMode) = triple
-                    runtime?.apply(config, effectiveEnabled, boundMap, scanMode, disabledDevices)
+                    runtime?.apply(config, effectiveEnabled, boundMap, scanMode, disabledDevices, autoConnectDisabled)
                 }
             }
             updateNotification()
@@ -348,6 +362,8 @@ class BleGatewayService : Service() {
         private const val ACTION_RELOAD_CONFIG = "dev.eigger.hassble.RELOAD_CONFIG"
         private const val ACTION_DISABLE_DEVICE = "dev.eigger.hassble.DISABLE_DEVICE"
         private const val ACTION_ENABLE_DEVICE = "dev.eigger.hassble.ENABLE_DEVICE"
+        private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"
+        private const val EXTRA_AUTO_CONNECT = "auto_connect"
 
         private val _serviceConnectionState = MutableStateFlow(ConnectionState.Disconnected)
         val serviceConnectionState: StateFlow<ConnectionState> = _serviceConnectionState.asStateFlow()
@@ -404,6 +420,13 @@ class BleGatewayService : Service() {
         fun enableDevice(context: Context, deviceId: String) {
             context.startService(Intent(context, BleGatewayService::class.java)
                 .setAction(ACTION_ENABLE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
+        }
+
+        fun setAutoConnect(context: Context, deviceId: String, enabled: Boolean) {
+            context.startService(Intent(context, BleGatewayService::class.java)
+                .setAction(ACTION_SET_AUTO_CONNECT)
+                .putExtra(EXTRA_DEVICE_ID, deviceId)
+                .putExtra(EXTRA_AUTO_CONNECT, enabled))
         }
     }
 }

@@ -224,6 +224,7 @@ private fun HomeScreen() {
     val usingCachedConfigService by BleGatewayService.usingCachedConfig.collectAsState()
     val deviceLinkStatuses by BleGatewayService.deviceLinkStatuses.collectAsState()
     val disabledDeviceIds by repository.disabledDevices.collectAsState(initial = emptySet())
+    val autoConnectDisabledIds by repository.autoConnectDisabled.collectAsState(initial = emptySet())
     val discoveredAdv by BleGatewayService.discoveredAdvInstances.collectAsState()
     val sensorLastValues by BleGatewayService.sensorLastValues.collectAsState()
 
@@ -400,6 +401,7 @@ private fun HomeScreen() {
                     boundDevices = boundDevices,
                     enabledSensors = effectiveEnabledSensors,
                     disabledDeviceIds = disabledDeviceIds,
+                    autoConnectDisabledIds = autoConnectDisabledIds,
                     discoveredAdv = discoveredAdv,
                     sensorLastValues = sensorLastValues,
                     deviceLinkStatuses = deviceLinkStatuses,
@@ -414,6 +416,7 @@ private fun HomeScreen() {
                     },
                     onDisableDevice = { deviceId -> BleGatewayService.disableDevice(context, deviceId) },
                     onEnableDevice = { deviceId -> BleGatewayService.enableDevice(context, deviceId) },
+                    onSetAutoConnect = { deviceId, enabled -> BleGatewayService.setAutoConnect(context, deviceId, enabled) },
                 )
                 2 -> LogsTabContent()
             }
@@ -748,6 +751,7 @@ private fun SensorsTabContent(
     boundDevices: Map<String, String>,
     enabledSensors: Set<String>,
     disabledDeviceIds: Set<String>,
+    autoConnectDisabledIds: Set<String>,
     discoveredAdv: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
     deviceLinkStatuses: List<DeviceLinkStatus>,
@@ -758,6 +762,7 @@ private fun SensorsTabContent(
     onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
     onDisableDevice: (String) -> Unit,
     onEnableDevice: (String) -> Unit,
+    onSetAutoConnect: (String, Boolean) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -864,6 +869,7 @@ private fun SensorsTabContent(
                     enabledSensors = enabledSensors,
                     isRunning = isRunning,
                     isDisabled = device.id in disabledDeviceIds,
+                    autoConnect = device.id !in autoConnectDisabledIds,
                     discoveredInstances = discoveredAdv.filter { it.profileId == device.id },
                     sensorLastValues = sensorLastValues.filter { it.profileId == device.id },
                     linkStatus = deviceLinkStatuses.firstOrNull { it.profileId == device.id },
@@ -873,6 +879,7 @@ private fun SensorsTabContent(
                     onUnbindClick = { onUnbindClick(device.id) },
                     onDisable = { onDisableDevice(device.id) },
                     onEnable = { onEnableDevice(device.id) },
+                    onSetAutoConnect = { enabled -> onSetAutoConnect(device.id, enabled) },
                 )
             }
         }
@@ -913,6 +920,7 @@ private fun DeviceConfigCard(
     enabledSensors: Set<String>,
     isRunning: Boolean,
     isDisabled: Boolean,
+    autoConnect: Boolean,
     discoveredInstances: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
     linkStatus: DeviceLinkStatus?,
@@ -922,6 +930,7 @@ private fun DeviceConfigCard(
     onUnbindClick: () -> Unit,
     onDisable: () -> Unit,
     onEnable: () -> Unit,
+    onSetAutoConnect: (Boolean) -> Unit,
 ) {
     val deviceSensorKeys = remember(device.id, device.sensors) {
         device.sensors.map { "${device.id}/${it.key}" }
@@ -1292,6 +1301,25 @@ private fun DeviceConfigCard(
                         discoveredInstances = discoveredInstances,
                     )
 
+                    if (isRunning && (device.source == Source.gatt_notify || device.source == Source.obd)) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("자동 연결", fontSize = 12.sp, color = Color.Gray)
+                            Switch(
+                                checked = autoConnect,
+                                onCheckedChange = { onSetAutoConnect(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                ),
+                            )
+                        }
+                    }
+
                     if (isRunning) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -1606,7 +1634,7 @@ private fun LogsTabContent() {
     LaunchedEffect(isLiveActive) {
         if (isLiveActive) {
             LiveEventLogger.logFlow.collect { logLine ->
-                if (logsList.size >= 1000) {
+                if (logsList.size >= 500) {
                     logsList.removeAt(0)
                 }
                 logsList.add(logLine)

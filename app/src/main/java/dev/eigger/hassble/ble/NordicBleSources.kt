@@ -38,6 +38,15 @@ import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import java.util.UUID
 
+private fun uuidFrom(str: String): UUID {
+    val s = str.trim()
+    return when (s.length) {
+        4 -> UUID.fromString("0000$s-0000-1000-8000-00805F9B34FB")
+        8 -> UUID.fromString("$s-0000-1000-8000-00805F9B34FB")
+        else -> UUID.fromString(s)
+    }
+}
+
 private const val TAG = "HassBleSources"
 
 /**
@@ -226,8 +235,8 @@ class NordicGattNotifySource(
             onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
             val services = client.discoverServices()
-            val service = services.findService(UUID.fromString(serviceUuidStr))
-            val characteristic = service?.findCharacteristic(UUID.fromString(notifyCharUuidStr))
+            val service = services.findService(uuidFrom(serviceUuidStr))
+            val characteristic = service?.findCharacteristic(uuidFrom(notifyCharUuidStr))
 
             if (characteristic != null) {
                 Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
@@ -254,8 +263,8 @@ class NordicGattNotifySource(
 
         try {
             val services = client.discoverServices()
-            val service = services.findService(UUID.fromString(serviceUuidStr))
-            val characteristic = service?.findCharacteristic(UUID.fromString(writeCharUuidStr))
+            val service = services.findService(uuidFrom(serviceUuidStr))
+            val characteristic = service?.findCharacteristic(uuidFrom(writeCharUuidStr))
             characteristic?.write(DataByteArray(bytes), BleWriteType.NO_RESPONSE)
         } catch (e: Exception) {
             Log.e(TAG, "Error writing to GATT device ${device.id}", e)
@@ -337,9 +346,9 @@ class NordicElm327Source(
         onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
         val services = client.discoverServices()
-        val service = services.findService(UUID.fromString(serviceUuidStr))
-        val txChar = service?.findCharacteristic(UUID.fromString(txCharUuidStr))
-        val rxChar = service?.findCharacteristic(UUID.fromString(rxCharUuidStr))
+        val service = services.findService(uuidFrom(serviceUuidStr))
+        val txChar = service?.findCharacteristic(uuidFrom(txCharUuidStr))
+        val rxChar = service?.findCharacteristic(uuidFrom(rxCharUuidStr))
             ?: throw IllegalStateException("OBD RX characteristic not found")
 
         if (txChar == null) throw IllegalStateException("OBD TX characteristic not found")
@@ -468,8 +477,8 @@ class NordicElm327Source(
 
         try {
             val services = client.discoverServices()
-            val service = services.findService(UUID.fromString(serviceUuidStr))
-            val characteristic = service?.findCharacteristic(UUID.fromString(txCharUuidStr))
+            val service = services.findService(uuidFrom(serviceUuidStr))
+            val characteristic = service?.findCharacteristic(uuidFrom(txCharUuidStr))
             characteristic?.write(DataByteArray(bytes), BleWriteType.NO_RESPONSE)
         } catch (e: Exception) {
             Log.e(TAG, "Error writing raw hex to OBD dongle ${device.id}", e)
