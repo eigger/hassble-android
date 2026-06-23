@@ -731,7 +731,7 @@ private fun GatewayTabContent(
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = {
-                        if (urlInput.isBlank() || urlInput == "https://") {
+                        if (urlInput.isBlank() || urlInput == "https://" || urlInput == "http://") {
                             Toast.makeText(context, context.getString(R.string.ha_url_required_toast), Toast.LENGTH_SHORT).show()
                             return@Button
                         }
@@ -742,7 +742,7 @@ private fun GatewayTabContent(
                         val authUrl = dev.eigger.hassble.net.HaAuthHelper.getAuthorizeUrl(urlInput, state)
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
                     },
-                    enabled = inputsEnabled && urlInput.isNotBlank() && urlInput != "https://",
+                    enabled = inputsEnabled && urlInput.isNotBlank() && urlInput != "https://" && urlInput != "http://",
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
