@@ -126,7 +126,7 @@
     <string name="reload_config_running_hint">Reloads config without stopping the gateway.</string>
     <!-- Permissions -->
     <string name="permissions_missing_title">Permissions required</string>
-    <string name="permissions_missing_desc">Bluetooth and notification permissions are needed for BLE scanning and background service.</string>
+    <string name="permissions_missing_desc">Bluetooth, location, and notification permissions are needed for BLE scanning, beacon tracking, and background service.</string>
     <string name="permissions_open_settings">Open app settings</string>
     <!-- Device link -->
     <string name="link_state_connecting">Connecting…</string>
@@ -153,4 +153,36 @@
     <string name="live_logs_enable">Live Logs</string>
     <string name="logs_clear">Clear</string>
     <string name="logs_filter_placeholder">Filter logs (e.g. MAC, mfr ID, OBD…)</string>
+    <string name="oauth_login_btn">HA OAuth Login</string>
+    <string name="ha_url_required_toast">Please enter HA URL first.</string>
+    <string name="oauth_fetching_token_toast">Fetching HA tokens...</string>
+    <string name="oauth_login_success_toast">HA OAuth login successful.</string>
+    <string name="oauth_csrf_failed_toast">Security verification failed: State token mismatch.</string>
+    <string name="oauth_token_fetch_failed_toast">Failed to fetch tokens: %1$s</string>
+    <string name="oauth_active_chip">OAuth Auto Login Active</string>
+    <string name="oauth_last_refreshed">Last token refresh: %1$s</string>
+    <string name="oauth_expired_notif_title">HassBle Auth Expired</string>
+    <string name="oauth_expired_notif_text">HA session has expired. Please open the app and login again.</string>
+    <string name="git_private_repo_checkbox">Use Private Repository (Github Token)</string>
+    <string name="invalid_url_format_error">Invalid URL format (e.g., http://192.168.1.100:8123).</string>
+    <string name="validate_url_required_msg">HA URL is not configured.</string>
+    <string name="time_no_record">No record</string>
+    <string name="time_just_now">Just now</string>
+    <string name="time_minutes_ago">%1$d mins ago</string>
+    <string name="time_hours_ago">%1$d hours ago</string>
+    <string name="gateway_id_click_to_copy">Gateway ID (Click to copy)</string>
+    <string name="gateway_id_copied">Gateway ID copied to clipboard.</string>
+    <string name="ble_scan_mode">BLE Scan Mode</string>
+    <string name="scan_mode_low_power">Power Saving (Unstable advertisement reception)</string>
+    <string name="scan_mode_balanced">Balanced</string>
+    <string name="scan_mode_low_latency">High Performance (Recommended)</string>
+    <string name="scan_mode_low_power_btn">Power Saving</string>
+    <string name="scan_mode_balanced_btn">Balanced</string>
+    <string name="scan_mode_low_latency_btn">High Performance</string>
+    <string name="device_disabled">Disabled</string>
+    <string name="auto_connect_label">Auto Connect</string>
+    <string name="device_enable_btn">Enable</string>
+    <string name="device_disable_ha_delete_btn">Disable (Delete HA)</string>
+    <string name="notif_warn_channel_name">HassBle Warnings</string>
+    <string name="notif_warn_channel_desc">HassBle warning and status change notifications</string>
 </resources>

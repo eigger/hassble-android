@@ -23,12 +23,13 @@ class BootReceiver : BroadcastReceiver() {
                 if (startOnBoot) {
                     val url = repository.haUrl.first()
                     val token = repository.haToken.first()
+                    val refreshToken = repository.haRefreshToken.first()
                     val gitUrl = repository.gitUrl.first()
                     val gitToken = repository.gitToken.first()
                     
                     if (url.isNotBlank() && token.isNotBlank() && gitUrl.isNotBlank()) {
                         Log.d(TAG, "Settings found, starting BleGatewayService")
-                        BleGatewayService.start(context, url, token, gitUrl, gitToken)
+                        BleGatewayService.start(context, url, token, refreshToken, gitUrl, gitToken)
                     } else {
                         Log.d(TAG, "HassBle settings are incomplete, skipping auto-start")
                     }

@@ -14,6 +14,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -129,11 +134,16 @@ import dev.eigger.hassble.service.BleGatewayService
 import androidx.compose.runtime.mutableIntStateOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.lifecycle.lifecycleScope
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleDeepLink(intent)
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
@@ -151,6 +161,50 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme == "hassble" && data.host == "oauth-callback") {
+            val code = data.getQueryParameter("code")
+            val returnedState = data.getQueryParameter("state")
+            if (code != null) {
+                lifecycleScope.launch {
+                    val repository = HassSettingsRepository(applicationContext)
+                    val savedState = repository.haAuthState.first()
+                    if (savedState.isBlank() || savedState != returnedState) {
+                        Toast.makeText(applicationContext, getString(R.string.oauth_csrf_failed_toast), Toast.LENGTH_LONG).show()
+                        repository.clearHaAuthState()
+                        return@launch
+                    }
+                    repository.clearHaAuthState()
+                    val haUrl = repository.haUrl.first()
+                    if (haUrl.isNotBlank() && haUrl != "https://") {
+                        Toast.makeText(applicationContext, getString(R.string.oauth_fetching_token_toast), Toast.LENGTH_SHORT).show()
+                        val result = withContext(Dispatchers.IO) {
+                            dev.eigger.hassble.net.HaAuthHelper.exchangeCodeForTokens(haUrl, code)
+                        }
+                        if (result.isSuccess) {
+                            val tokens = result.getOrThrow()
+                            repository.saveHaSettings(haUrl, tokens.accessToken)
+                            repository.saveHaRefreshToken(tokens.refreshToken ?: "")
+                            repository.saveHaTokenLastRefreshed(System.currentTimeMillis())
+                            Toast.makeText(applicationContext, getString(R.string.oauth_login_success_toast), Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(applicationContext, getString(R.string.oauth_token_fetch_failed_toast, result.exceptionOrNull()?.localizedMessage), Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        Toast.makeText(applicationContext, getString(R.string.validate_url_required_msg), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
 }
 
 data class ScannedDevice(val name: String, val address: String, val rssi: Int)
@@ -164,6 +218,8 @@ private fun HomeScreen() {
 
     val savedHaUrl by repository.haUrl.collectAsState(initial = "")
     val savedHaToken by repository.haToken.collectAsState(initial = "")
+    val savedHaRefreshToken by repository.haRefreshToken.collectAsState(initial = "")
+    val haTokenLastRefreshed by repository.haTokenLastRefreshed.collectAsState(initial = 0L)
     val savedGitUrl by repository.gitUrl.collectAsState(initial = "")
     val savedGitToken by repository.gitToken.collectAsState(initial = "")
     val boundDevices by repository.boundDevices.collectAsState(initial = emptyMap())
@@ -204,7 +260,19 @@ private fun HomeScreen() {
     LaunchedEffect(urlInput, tokenInput) {
         delay(1000)
         if (urlInput.isNotBlank()) {
-            repository.saveHaSettings(urlInput, tokenInput)
+            var correctedUrl = urlInput.trim()
+            if (correctedUrl != "https://" && correctedUrl != "http://") {
+                if (!correctedUrl.startsWith("http://") && !correctedUrl.startsWith("https://")) {
+                    correctedUrl = "http://$correctedUrl"
+                }
+                if (correctedUrl.endsWith("/")) {
+                    correctedUrl = correctedUrl.trimEnd('/')
+                }
+                if (correctedUrl != urlInput) {
+                    urlInput = correctedUrl
+                }
+            }
+            repository.saveHaSettings(correctedUrl, tokenInput)
         }
     }
     LaunchedEffect(gitUrlInput, gitTokenInput) {
@@ -380,8 +448,12 @@ private fun HomeScreen() {
                     connectionIssue = connectionIssue,
                     urlInput = urlInput,
                     onUrlChange = { urlInput = it },
-                    tokenInput = tokenInput,
-                    onTokenChange = { tokenInput = it },
+                    onTokenChange = {
+                        tokenInput = it
+                        scope.launch { repository.clearHaRefreshToken() }
+                    },
+                    haRefreshToken = savedHaRefreshToken,
+                    haTokenLastRefreshed = haTokenLastRefreshed,
                     gitUrlInput = gitUrlInput,
                     onGitUrlChange = { gitUrlInput = it },
                     gitTokenInput = gitTokenInput,
@@ -397,7 +469,8 @@ private fun HomeScreen() {
                             scope.launch {
                                 repository.saveHaSettings(urlInput, tokenInput)
                                 repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
-                                BleGatewayService.start(context, urlInput, tokenInput, gitUrlInput, gitTokenInput.ifBlank { null })
+                                val refreshToken = repository.haRefreshToken.first()
+                                BleGatewayService.start(context, urlInput, tokenInput, refreshToken, gitUrlInput, gitTokenInput.ifBlank { null })
                             }
                         } else {
                             Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
@@ -505,6 +578,8 @@ private fun GatewayTabContent(
     onUrlChange: (String) -> Unit,
     tokenInput: String,
     onTokenChange: (String) -> Unit,
+    haRefreshToken: String,
+    haTokenLastRefreshed: Long,
     gitUrlInput: String,
     onGitUrlChange: (String) -> Unit,
     gitTokenInput: String,
@@ -522,6 +597,12 @@ private fun GatewayTabContent(
     val scope = rememberCoroutineScope()
     val inputsEnabled = !isRunning
     var isTestingConnection by remember { mutableStateOf(false) }
+    var showGitTokenField by remember { mutableStateOf(false) }
+    LaunchedEffect(gitTokenInput) {
+        if (gitTokenInput.isNotBlank()) {
+            showGitTokenField = true
+        }
+    }
     val issueMessage = connectionIssueMessage(connectionIssue)
     val gatewayId = remember {
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "hassble"
@@ -547,14 +628,14 @@ private fun GatewayTabContent(
                 }, isHighlighted = connState == ConnectionState.Connected)
                 StatusRow(label = stringResource(R.string.gateway_model), value = Build.MODEL, isHighlighted = false)
                 StatusRow(
-                    label = "게이트웨이 ID (클릭하여 복사)",
+                    label = stringResource(R.string.gateway_id_click_to_copy),
                     value = gatewayId,
                     isHighlighted = false,
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                         val clip = android.content.ClipData.newPlainText("Gateway ID", gatewayId)
                         clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "게이트웨이 ID가 복사되었습니다.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.gateway_id_copied), Toast.LENGTH_SHORT).show()
                     }
                 )
                 if (issueMessage != null) {
@@ -580,14 +661,127 @@ private fun GatewayTabContent(
                         Text(stringResource(R.string.show_onboarding_again), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                     }
                 }
+                val repository = remember { HassSettingsRepository(context) }
+                var urlError by remember { mutableStateOf<String?>(null) }
+                LaunchedEffect(urlInput) {
+                    urlError = validateHaUrl(context, urlInput)
+                }
+ 
+                if (haRefreshToken.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "OAuth Active",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(text = stringResource(R.string.oauth_active_chip), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(text = stringResource(R.string.oauth_last_refreshed, formatLastRefreshed(context, haTokenLastRefreshed)), color = Color.Gray, fontSize = 10.sp)
+                        }
+                    }
+                }
+ 
                 Spacer(modifier = Modifier.height(16.dp))
-                OutlinedTextField(value = urlInput, onValueChange = onUrlChange, label = { Text("HA URL") }, enabled = inputsEnabled, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                OutlinedTextField(
+                    value = urlInput,
+                    onValueChange = {
+                        onUrlChange(it)
+                        urlError = validateHaUrl(context, it)
+                    },
+                    label = { Text("HA URL") },
+                    enabled = inputsEnabled,
+                    isError = urlError != null,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                urlError?.let {
+                    Text(
+                        text = it,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        if (urlInput.isBlank() || urlInput == "https://") {
+                            Toast.makeText(context, context.getString(R.string.ha_url_required_toast), Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        val state = java.util.UUID.randomUUID().toString()
+                        scope.launch {
+                            repository.saveHaAuthState(state)
+                        }
+                        val authUrl = dev.eigger.hassble.net.HaAuthHelper.getAuthorizeUrl(urlInput, state)
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
+                    },
+                    enabled = inputsEnabled && urlInput.isNotBlank() && urlInput != "https://",
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.oauth_login_btn), color = Color.Black, fontWeight = FontWeight.Bold)
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(value = tokenInput, onValueChange = onTokenChange, label = { Text(stringResource(R.string.long_lived_token)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(value = gitUrlInput, onValueChange = onGitUrlChange, label = { Text(stringResource(R.string.git_config_url)) }, enabled = inputsEnabled, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(value = gitTokenInput, onValueChange = onGitTokenChange, label = { Text(stringResource(R.string.git_token_optional)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = inputsEnabled) {
+                            showGitTokenField = !showGitTokenField
+                            if (!showGitTokenField) {
+                                onGitTokenChange("")
+                            }
+                        }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.Checkbox(
+                        checked = showGitTokenField,
+                        onCheckedChange = {
+                            showGitTokenField = it
+                            if (!it) {
+                                onGitTokenChange("")
+                            }
+                        },
+                        enabled = inputsEnabled,
+                        colors = androidx.compose.material3.CheckboxDefaults.colors(
+                            checkedColor = MaterialTheme.colorScheme.primary,
+                            uncheckedColor = Color.Gray
+                        )
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.git_private_repo_checkbox),
+                        color = if (showGitTokenField) Color.White else Color.Gray,
+                        fontSize = 13.sp,
+                        fontWeight = if (showGitTokenField) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showGitTokenField,
+                    enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
+                ) {
+                    Column {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(value = gitTokenInput, onValueChange = onGitTokenChange, label = { Text(stringResource(R.string.git_token_optional)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                    }
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
@@ -661,12 +855,12 @@ private fun GatewayTabContent(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "BLE 스캔 모드", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                    Text(text = stringResource(R.string.ble_scan_mode), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
                     Text(
                         text = when (scanMode) {
-                            dev.eigger.hassble.config.BleScanModeOption.LOW_POWER -> "절전 (광고 수신 불안정)"
-                            dev.eigger.hassble.config.BleScanModeOption.BALANCED -> "균형"
-                            dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY -> "고성능 (권장)"
+                            dev.eigger.hassble.config.BleScanModeOption.LOW_POWER -> stringResource(R.string.scan_mode_low_power)
+                            dev.eigger.hassble.config.BleScanModeOption.BALANCED -> stringResource(R.string.scan_mode_balanced)
+                            dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY -> stringResource(R.string.scan_mode_low_latency)
                         },
                         fontSize = 11.sp, color = Color.Gray,
                     )
@@ -674,6 +868,11 @@ private fun GatewayTabContent(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         dev.eigger.hassble.config.BleScanModeOption.entries.forEach { mode ->
                             val selected = scanMode == mode
+                            val btnTextId = when (mode) {
+                                dev.eigger.hassble.config.BleScanModeOption.LOW_POWER -> R.string.scan_mode_low_power_btn
+                                dev.eigger.hassble.config.BleScanModeOption.BALANCED -> R.string.scan_mode_balanced_btn
+                                dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY -> R.string.scan_mode_low_latency_btn
+                            }
                             Button(
                                 onClick = { onScanModeChange(mode) },
                                 colors = ButtonDefaults.buttonColors(
@@ -683,7 +882,7 @@ private fun GatewayTabContent(
                                 shape = RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             ) {
-                                Text(mode.label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                                Text(stringResource(btnTextId), fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
                             }
                         }
                     }
@@ -979,7 +1178,7 @@ private fun DeviceConfigCard(
                         )
                         if (isDisabled) {
                             Text(
-                                text = "비활성화됨",
+                                text = stringResource(R.string.device_disabled),
                                 fontSize = 10.sp,
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier
@@ -1325,7 +1524,7 @@ private fun DeviceConfigCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("자동 연결", fontSize = 12.sp, color = if (isConnected) Color.Gray.copy(alpha = 0.5f) else Color.Gray)
+                            Text(stringResource(R.string.auto_connect_label), fontSize = 12.sp, color = if (isConnected) Color.Gray.copy(alpha = 0.5f) else Color.Gray)
                             Switch(
                                 checked = autoConnect,
                                 onCheckedChange = { onSetAutoConnect(it) },
@@ -1352,7 +1551,7 @@ private fun DeviceConfigCard(
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                 ) {
-                                    Text("활성화", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(stringResource(R.string.device_enable_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             } else {
                                 Button(
@@ -1365,7 +1564,7 @@ private fun DeviceConfigCard(
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                 ) {
-                                    Text("비활성화 (HA 삭제)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(stringResource(R.string.device_disable_ha_delete_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -1860,4 +2059,27 @@ private fun LogsTabContent() {
             }
         }
     }
+}
+
+private fun validateHaUrl(context: Context, url: String): String? {
+    if (url.isBlank() || url == "https://" || url == "http://") return null
+    val regex = "^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$".toRegex()
+    if (!regex.matches(url)) {
+        return context.getString(R.string.invalid_url_format_error)
+    }
+    return null
+}
+
+private fun formatLastRefreshed(context: Context, timestamp: Long): String {
+    if (timestamp <= 0L) return context.getString(R.string.time_no_record)
+    val diffMs = System.currentTimeMillis() - timestamp
+    if (diffMs < 0) return context.getString(R.string.time_just_now)
+    val diffSec = diffMs / 1000
+    if (diffSec < 60) return context.getString(R.string.time_just_now)
+    val diffMin = diffSec / 60
+    if (diffMin < 60) return context.getString(R.string.time_minutes_ago, diffMin.toInt())
+    val diffHour = diffMin / 60
+    if (diffHour < 24) return context.getString(R.string.time_hours_ago, diffHour.toInt())
+    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(timestamp))
 }
