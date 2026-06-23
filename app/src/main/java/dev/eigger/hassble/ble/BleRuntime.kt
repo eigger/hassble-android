@@ -118,12 +118,21 @@ class BleRuntime(
         if (d.source == Source.obd || d.source == Source.gatt_notify) {
             val linkStatusUid = "${instanceId}_link_status"
             ws.declareEntity(EntityMsg(
-                id = 0, uniqueId = linkStatusUid, platform = "sensor",
+                id = 0, uniqueId = linkStatusUid, platform = "binary_sensor",
                 name = "Link Status", device = ref,
-                icon = "mdi:bluetooth-connect",
+                deviceClass = "connectivity",
                 entityCategory = "diagnostic"
             ))
             newSensorUids += linkStatusUid
+
+            val linkStateUid = "${instanceId}_link_state"
+            ws.declareEntity(EntityMsg(
+                id = 0, uniqueId = linkStateUid, platform = "sensor",
+                name = "Link State", device = ref,
+                icon = "mdi:bluetooth-connect",
+                entityCategory = "diagnostic"
+            ))
+            newSensorUids += linkStateUid
         }
 
         for (s in d.sensors) {
@@ -144,7 +153,11 @@ class BleRuntime(
             if (d.source == Source.obd || d.source == Source.gatt_notify) {
                 val currentStatus = BleGatewayService.deviceLinkStatuses.value.firstOrNull { it.profileId == instanceId }
                 val stateStr = currentStatus?.state?.name?.lowercase() ?: "disconnected"
-                ws.sendStates(listOf("${instanceId}_link_status" to stateStr))
+                val isConnected = currentStatus?.state == DeviceLinkState.Connected || currentStatus?.state == DeviceLinkState.Polling
+                ws.sendStates(listOf(
+                    "${instanceId}_link_status" to if (isConnected) "on" else "off",
+                    "${instanceId}_link_state" to stateStr
+                ))
             }
         }
         for (c in d.controls) {
