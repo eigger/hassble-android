@@ -82,11 +82,11 @@ class BleRuntime(
         ws.events.onEach(::onEvent).launchIn(scope)
     }
 
-    fun redeclareEntities(resetStates: Boolean = true) {
+    fun redeclareEntities() {
         if (!::config.isInitialized) return
         declaredAdvInstances.clear()
         for (d in config.devices) {
-            declareAndPrepare(d, resetStates)
+            declareAndPrepare(d)
         }
     }
 
@@ -190,27 +190,26 @@ class BleRuntime(
         this.lastAutoConnectDisabledIds = autoConnectDisabledIds
     }
 
-    private fun declareAndPrepare(d: DeviceConfig, resetStates: Boolean = true) {
+    private fun declareAndPrepare(d: DeviceConfig) {
         if (d.id in disabledIds) return
         // match.mac 없는 광고 프로필은 첫 패킷 수신 시 MAC별로 동적 선언
         if (isDynamicAdvertisement(d)) return
-        declareEntitiesForInstance(d, d.id, d.name, resetStates)
+        declareEntitiesForInstance(d, d.id, d.name)
     }
 
-    private fun declareEntitiesForInstance(d: DeviceConfig, instanceId: String, deviceDisplayName: String, resetStates: Boolean = true) {
+    private fun declareEntitiesForInstance(d: DeviceConfig, instanceId: String, deviceDisplayName: String) {
         val ref = DeviceRef(instanceId, deviceDisplayName)
-        val newSensorUids = mutableListOf<String>()
 
         if (d.source == Source.obd || d.source == Source.gatt_notify) {
-            val linkStatusUid = "${instanceId}_link_status"
             ws.declareEntity(EntityMsg(
-                id = 0, uniqueId = linkStatusUid, platform = "binary_sensor",
+                id = 0, uniqueId = "${instanceId}_link_status", platform = "binary_sensor",
                 name = "Link Status", device = ref,
                 deviceClass = "connectivity",
                 entityCategory = "diagnostic"
             ))
-            newSensorUids += linkStatusUid
-
+            val currentStatus = BleGatewayService.deviceLinkStatuses.value.firstOrNull { it.profileId == instanceId }
+            val isConnected = currentStatus?.state == DeviceLinkState.Connected || currentStatus?.state == DeviceLinkState.Polling
+            ws.sendStates(listOf("${instanceId}_link_status" to if (isConnected) "on" else "off"))
         }
 
         for (s in d.sensors) {
@@ -224,17 +223,6 @@ class BleRuntime(
                 stateClass = s.stateClass, icon = s.icon,
                 entityCategory = s.entityCategory,
             ))
-            newSensorUids += entityUid
-        }
-        if (resetStates) {
-            ws.sendInitialStates(newSensorUids)
-            if (d.source == Source.obd || d.source == Source.gatt_notify) {
-                val currentStatus = BleGatewayService.deviceLinkStatuses.value.firstOrNull { it.profileId == instanceId }
-                val isConnected = currentStatus?.state == DeviceLinkState.Connected || currentStatus?.state == DeviceLinkState.Polling
-                ws.sendStates(listOf(
-                    "${instanceId}_link_status" to if (isConnected) "on" else "off",
-                ))
-            }
         }
         for (c in d.controls) {
             if (d.source == Source.gatt_notify && d.gatt?.writeCharUuid.isNullOrBlank()) {
