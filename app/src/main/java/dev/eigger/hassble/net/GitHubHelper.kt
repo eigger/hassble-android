@@ -43,7 +43,13 @@ object GitHubHelper {
                 if (token != null) reqBuilder.header("Authorization", "Bearer $token")
 
                 val response = client.newCall(reqBuilder.build()).execute()
-                if (!response.isSuccessful) error("HTTP ${response.code}")
+                if (!response.isSuccessful) {
+                    when (response.code) {
+                        401 -> throw GitHubUnauthorizedException()
+                        404 -> throw GitHubNotFoundException()
+                        else -> throw GitHubApiException(response.code, "HTTP ${response.code}")
+                    }
+                }
                 val body = response.body?.string() ?: error("Empty response")
 
                 val tree = JSONObject(body).getJSONArray("tree")
@@ -71,3 +77,7 @@ object GitHubHelper {
         return Triple(owner, repo, branch)
     }
 }
+
+class GitHubUnauthorizedException : Exception("GitHub Token is invalid or unauthorized (401)")
+class GitHubNotFoundException : Exception("GitHub repository or branch not found (404)")
+class GitHubApiException(val code: Int, message: String) : Exception(message)

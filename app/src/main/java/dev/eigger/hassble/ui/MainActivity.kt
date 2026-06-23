@@ -1501,10 +1501,8 @@ private fun DeviceConfigCard(
                                     Text(text = stringResource(R.string.connected_mac, boundMac), color = Color(0xFF00E676), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                                 }
                                 Row {
-                                    if (!isRunning) {
-                                        Text(text = stringResource(R.string.rebind), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
-                                        Text(text = stringResource(R.string.unbind), color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onUnbindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
-                                    }
+                                    Text(text = stringResource(R.string.rebind), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    Text(text = stringResource(R.string.unbind), color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onUnbindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
                                 }
                             }
                             if (isRunning && linkStatus != null) {
@@ -1517,10 +1515,8 @@ private fun DeviceConfigCard(
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(text = stringResource(R.string.connection_needed), color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 }
-                                if (!isRunning) {
-                                    Box(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primary).clickable { onBindClick() }.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                                        Text(text = stringResource(R.string.bind_connect), color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    }
+                                Box(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primary).clickable { onBindClick() }.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                                    Text(text = stringResource(R.string.bind_connect), color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -2165,7 +2161,14 @@ private fun GitConfigSection(
                                 if (files.size == 1 && fileInput.isBlank()) onFileChange(files[0])
                                 if (files.isNotEmpty()) dropdownExpanded = true
                             }.onFailure { e ->
-                                browseError = e.message ?: "Unknown error"
+                                val errMsg = when (e) {
+                                    is dev.eigger.hassble.net.GitHubUnauthorizedException -> context.getString(R.string.github_error_401)
+                                    is dev.eigger.hassble.net.GitHubNotFoundException -> context.getString(R.string.github_error_404)
+                                    is dev.eigger.hassble.net.GitHubApiException -> context.getString(R.string.github_error_generic, e.code)
+                                    else -> e.localizedMessage ?: context.getString(R.string.github_error_network)
+                                }
+                                browseError = errMsg
+                                Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
                             }
                         }
                     },

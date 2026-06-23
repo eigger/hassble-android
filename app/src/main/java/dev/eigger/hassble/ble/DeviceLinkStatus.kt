@@ -3,6 +3,7 @@ package dev.eigger.hassble.ble
 /** GATT/OBD 기기 연결 상태 (UI 표시용). */
 enum class DeviceLinkState {
     Disconnected,
+    Scanning,
     Connecting,
     Connected,
     Polling,

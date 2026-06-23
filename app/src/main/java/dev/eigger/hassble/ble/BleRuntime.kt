@@ -153,6 +153,14 @@ class BleRuntime(
             }
         }
         for (c in d.controls) {
+            if (d.source == Source.gatt_notify && d.gatt?.writeCharUuid.isNullOrBlank()) {
+                LiveEventLogger.log(LogType.LINK, "[Warning] Skip control '${c.key}' for device '${d.id}' because write_char_uuid is missing")
+                continue
+            }
+            if (d.source == Source.obd && d.obd?.txCharUuid.isNullOrBlank()) {
+                LiveEventLogger.log(LogType.LINK, "[Warning] Skip control '${c.key}' for device '${d.id}' because tx_char_uuid is missing")
+                continue
+            }
             val entityUid = uid(instanceId, c.key)
             controls[entityUid] = d to c
             ws.declareEntity(EntityMsg(
@@ -184,24 +192,33 @@ class BleRuntime(
                 Source.gatt_notify -> {
                     val mac = resolved.gatt?.mac
                     if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
-                        jobs += gatt.connect(resolved, waitForDevice = {
+                        val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
+                        if (keys.isNotEmpty()) {
+                            jobs += gatt.connect(resolved, waitForDevice = {
+                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                                scanner.scanForMac(mac, scanMode).first()
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                            }).onEach(::onReading).launchIn(scope)
+                        } else {
                             onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                            scanner.scanForMac(mac, scanMode).first()
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
-                        }).onEach(::onReading).launchIn(scope)
+                        }
                     }
                 }
                 Source.obd -> {
                     val mac = resolved.obd?.mac
                     if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
-                        jobs += obd.connect(resolved, keys, waitForDevice = {
+                        if (keys.isNotEmpty()) {
+                            jobs += obd.connect(resolved, keys, waitForDevice = {
+                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
+                                scanner.scanForMac(mac, scanMode).first()
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                            }).onEach(::onReading).launchIn(scope)
+                        } else {
                             onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                            scanner.scanForMac(mac, scanMode).first()
-                            LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
-                        }).onEach(::onReading).launchIn(scope)
+                        }
                     }
                 }
                 else -> {}

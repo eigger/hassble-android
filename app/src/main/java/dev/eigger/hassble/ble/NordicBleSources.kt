@@ -57,6 +57,7 @@ private const val TAG = "HassBleSources"
  */
 class NordicAdvertisementScanner(private val context: Context) : AdvertisementScanner {
     private var scanJob: Job? = null
+    private val scanner by lazy { BleScanner(context) }
 
     // Simple cache to merge ADV_IND and SCAN_RSP data per MAC address
     private val manufacturerDataCache = mutableMapOf<String, android.util.SparseArray<no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
@@ -80,7 +81,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             return@flow
         }
 
-        val scanner = BleScanner(context)
+        val scanner = this@NordicAdvertisementScanner.scanner
         Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles")
         LiveEventLogger.log(LogType.LINK, "Starting Nordic BLE scan for ${devices.size} profiles...")
 
@@ -240,7 +241,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             BleScanModeOption.BALANCED -> BleScanMode.SCAN_MODE_BALANCED
             BleScanModeOption.LOW_LATENCY -> BleScanMode.SCAN_MODE_LOW_LATENCY
         }
-        val scanner = BleScanner(context)
+        val scanner = this@NordicAdvertisementScanner.scanner
         scanner.scan(settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
             val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
             if (addr == normalizedMac) emit(Unit)
@@ -310,36 +311,40 @@ class NordicGattNotifySource(
         val serviceUuidStr = device.gatt.serviceUuid
         val notifyCharUuidStr = device.gatt.notifyCharUuid
 
-        while (currentCoroutineContext().isActive) {
-            waitForDevice()
-            try {
-                Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
-                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
-                val client = ClientBleGatt.connect(context, mac, scope)
-                activeConnections[device.id] = client
-                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+        try {
+            while (currentCoroutineContext().isActive) {
+                waitForDevice()
+                try {
+                    Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
+                    onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
+                    val client = ClientBleGatt.connect(context, mac, scope)
+                    activeConnections[device.id] = client
+                    onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
-                val services = client.discoverServices()
-                val service = services.findService(uuidFrom(serviceUuidStr))
-                val characteristic = service?.findCharacteristic(uuidFrom(notifyCharUuidStr))
+                    val services = client.discoverServices()
+                    val service = services.findService(uuidFrom(serviceUuidStr))
+                    val characteristic = service?.findCharacteristic(uuidFrom(notifyCharUuidStr))
 
-                if (characteristic != null) {
-                    Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
-                    characteristic.getNotifications().collect { bytes ->
-                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
-                        val hex = bytes.value.joinToString("") { String.format("%02X", it) }
-                        emit(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                    if (characteristic != null) {
+                        Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
+                        characteristic.getNotifications().collect { bytes ->
+                            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
+                            val hex = bytes.value.joinToString("") { String.format("%02X", it) }
+                            emit(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                        }
+                    } else {
+                        throw IllegalStateException("Notify characteristic $notifyCharUuidStr not found")
                     }
-                } else {
-                    throw IllegalStateException("Notify characteristic $notifyCharUuidStr not found")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "GATT session ended for ${device.id}: ${e.message}")
+                    onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
+                    activeConnections.remove(device.id)
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "GATT session ended for ${device.id}: ${e.message}")
-                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
-                activeConnections.remove(device.id)
             }
+        } finally {
+            disconnect(device.id)
         }
     }
 
@@ -381,8 +386,8 @@ class NordicElm327Source(
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) : Elm327Source {
     private val activeConnections = mutableMapOf<String, ClientBleGatt>()
-    private val responseMutex = Mutex()
-    private var pendingDeferred: CompletableDeferred<String>? = null
+    private val deviceMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+    private val pendingDeferreds = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val sessionJobs = mutableMapOf<String, Job>()
 
     private data class PollTarget(
@@ -397,21 +402,24 @@ class NordicElm327Source(
 
     override fun connect(device: DeviceConfig, enabledKeys: Set<String>, waitForDevice: suspend () -> Unit): Flow<RawReading> = flow {
         val mac = device.obd?.mac ?: return@flow
-        while (currentCoroutineContext().isActive) {
-            waitForDevice()
-            try {
-                runObdSession(this, device, enabledKeys, mac)
-                break
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "OBD session ended for ${device.id}: ${e.message}")
-                onLinkStatus(
-                    DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message),
-                )
-                teardown(device.id)
-                // waitForDevice() at top of loop gates the next reconnect attempt
+        try {
+            while (currentCoroutineContext().isActive) {
+                waitForDevice()
+                try {
+                    runObdSession(this, device, enabledKeys, mac)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "OBD session ended for ${device.id}: ${e.message}")
+                    onLinkStatus(
+                        DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message),
+                    )
+                    teardown(device.id)
+                    // waitForDevice() at top of loop gates the next reconnect attempt
+                }
             }
+        } finally {
+            teardown(device.id)
         }
     }
 
@@ -449,7 +457,7 @@ class NordicElm327Source(
                 if (responseBuffer.contains(">")) {
                     val fullResponse = responseBuffer.toString().trim()
                     responseBuffer.clear()
-                    pendingDeferred?.complete(fullResponse)
+                    pendingDeferreds[device.id]?.complete(fullResponse)
                 }
             }
         }
@@ -481,7 +489,7 @@ class NordicElm327Source(
 
                 if (txQueue.isNotEmpty() && now - lastTxAtMs >= txDelayMs) {
                     val item = txQueue.removeFirst()
-                    val resp = sendCommand(txChar, item.cmd)
+                    val resp = sendCommand(device.id, txChar, item.cmd)
                     lastTxAtMs = System.currentTimeMillis()
 
                     if (resp == null && item.pollTarget != null) {
@@ -549,28 +557,32 @@ class NordicElm327Source(
     }
 
     private suspend fun sendCommand(
+        deviceId: String,
         txChar: ClientBleGattCharacteristic,
         cmd: String,
-    ): String? = responseMutex.withLock {
-        val deferred = CompletableDeferred<String>()
-        pendingDeferred = deferred
-        val payload = (cmd + "\r").toByteArray(Charsets.US_ASCII)
-        val timeoutMs = if (cmd.length >= 6) MULTIFRAME_TIMEOUT_MS else SINGLE_FRAME_TIMEOUT_MS
+    ): String? {
+        val mutex = deviceMutexes.getOrPut(deviceId) { Mutex() }
+        return mutex.withLock {
+            val deferred = CompletableDeferred<String>()
+            pendingDeferreds[deviceId] = deferred
+            val payload = (cmd + "\r").toByteArray(Charsets.US_ASCII)
+            val timeoutMs = if (cmd.length >= 6) MULTIFRAME_TIMEOUT_MS else SINGLE_FRAME_TIMEOUT_MS
 
-        try {
-            txChar.write(DataByteArray(payload), BleWriteType.NO_RESPONSE)
-        } catch (e: CancellationException) {
-            pendingDeferred = null
-            throw e
-        } catch (e: Exception) {
-            pendingDeferred = null
-            Log.w(TAG, "OBD write error — connection likely lost: ${e.message}")
-            throw IOException("BLE write failed: ${e.message}", e)
+            try {
+                txChar.write(DataByteArray(payload), BleWriteType.NO_RESPONSE)
+            } catch (e: CancellationException) {
+                pendingDeferreds.remove(deviceId)
+                throw e
+            } catch (e: Exception) {
+                pendingDeferreds.remove(deviceId)
+                Log.w(TAG, "OBD write error — connection likely lost: ${e.message}")
+                throw IOException("BLE write failed: ${e.message}", e)
+            }
+
+            val resp = withTimeoutOrNull(timeoutMs) { deferred.await() }
+            pendingDeferreds.remove(deviceId)
+            resp
         }
-
-        val resp = withTimeoutOrNull(timeoutMs) { deferred.await() }
-        pendingDeferred = null
-        resp
     }
 
     override suspend fun write(device: DeviceConfig, hex: String) {
@@ -596,6 +608,8 @@ class NordicElm327Source(
     private fun teardown(deviceId: String) {
         sessionJobs.remove(deviceId)?.cancel()
         activeConnections.remove(deviceId)?.disconnect()
+        deviceMutexes.remove(deviceId)
+        pendingDeferreds.remove(deviceId)
     }
 
     private fun isDuplicateInit(cmd: String): Boolean {

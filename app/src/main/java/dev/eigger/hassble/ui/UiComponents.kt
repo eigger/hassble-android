@@ -112,6 +112,7 @@ fun sensorDisplayLabel(sensor: SensorConfig): String {
 
 @Composable
 fun linkStateLabel(state: DeviceLinkState): String = when (state) {
+    DeviceLinkState.Scanning -> stringResource(R.string.link_state_scanning)
     DeviceLinkState.Connecting -> stringResource(R.string.link_state_connecting)
     DeviceLinkState.Connected -> stringResource(R.string.link_state_connected)
     DeviceLinkState.Polling -> stringResource(R.string.link_state_polling)
@@ -154,7 +155,7 @@ fun DeviceLinkStatusRow(link: DeviceLinkStatus) {
             color = when (link.state) {
                 DeviceLinkState.Error -> MaterialTheme.colorScheme.error
                 DeviceLinkState.Polling, DeviceLinkState.Connected -> Color(0xFF00E676)
-                DeviceLinkState.Connecting -> Color(0xFFFFD600)
+                DeviceLinkState.Connecting, DeviceLinkState.Scanning -> Color(0xFFFFD600)
                 DeviceLinkState.Disconnected -> Color.Gray
             },
             fontSize = 12.sp,
