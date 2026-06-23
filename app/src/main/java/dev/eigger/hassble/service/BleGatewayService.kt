@@ -201,6 +201,11 @@ class BleGatewayService : Service() {
                     _deviceLinkStatuses.value = _deviceLinkStatuses.value
                         .filter { it.profileId != status.profileId } + status
                     LiveEventLogger.log(LogType.LINK, "device=${status.profileId}, state=${status.state}")
+                    ws?.let { client ->
+                        if (client.connectionState.value == ConnectionState.Connected) {
+                            client.sendStates(listOf("${status.profileId}_link_status" to status.state.name.lowercase()))
+                        }
+                    }
                 }
                 val scanner = dev.eigger.hassble.ble.NordicAdvertisementScanner(this@BleGatewayService)
                 val gattSource = dev.eigger.hassble.ble.NordicGattNotifySource(

@@ -1,5 +1,6 @@
 package dev.eigger.hassble.ble
 
+import dev.eigger.hassble.service.BleGatewayService
 import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.config.ControlConfig
@@ -113,6 +114,18 @@ class BleRuntime(
     private fun declareEntitiesForInstance(d: DeviceConfig, instanceId: String, deviceDisplayName: String, resetStates: Boolean = true) {
         val ref = DeviceRef(instanceId, deviceDisplayName)
         val newSensorUids = mutableListOf<String>()
+
+        if (d.source == Source.obd || d.source == Source.gatt_notify) {
+            val linkStatusUid = "${instanceId}_link_status"
+            ws.declareEntity(EntityMsg(
+                id = 0, uniqueId = linkStatusUid, platform = "sensor",
+                name = "Link Status", device = ref,
+                icon = "mdi:bluetooth-connect",
+                entityCategory = "diagnostic"
+            ))
+            newSensorUids += linkStatusUid
+        }
+
         for (s in d.sensors) {
             if (!isEnabled(d.id, s.key)) continue
             val entityUid = uid(instanceId, s.key)
@@ -126,7 +139,14 @@ class BleRuntime(
             ))
             newSensorUids += entityUid
         }
-        if (resetStates) ws.sendInitialStates(newSensorUids)
+        if (resetStates) {
+            ws.sendInitialStates(newSensorUids)
+            if (d.source == Source.obd || d.source == Source.gatt_notify) {
+                val currentStatus = BleGatewayService.deviceLinkStatuses.value.firstOrNull { it.profileId == instanceId }
+                val stateStr = currentStatus?.state?.name?.lowercase() ?: "disconnected"
+                ws.sendStates(listOf("${instanceId}_link_status" to stateStr))
+            }
+        }
         for (c in d.controls) {
             val entityUid = uid(instanceId, c.key)
             controls[entityUid] = d to c
