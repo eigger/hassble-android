@@ -7,17 +7,25 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.net.URLEncoder
 
 object HaAuthHelper {
     private val client = OkHttpClient()
     private val json = Json { ignoreUnknownKeys = true }
 
-    const val CLIENT_ID = "https://hassble-android.eigger.dev"
+    // GitHub Pages serves <link rel="redirect_uri" href="hassble://oauth-callback" />
+    // so HA's IndieAuth validation can discover the custom scheme redirect URI.
+    const val CLIENT_ID = "https://eigger.github.io/hassble-android"
     const val REDIRECT_URI = "hassble://oauth-callback"
 
     fun getAuthorizeUrl(haUrl: String, state: String): String {
         val cleanUrl = haUrl.trimEnd('/')
-        return "$cleanUrl/auth/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&state=$state"
+        val enc = { s: String -> URLEncoder.encode(s, "UTF-8") }
+        return "$cleanUrl/auth/authorize" +
+            "?response_type=code" +
+            "&client_id=${enc(CLIENT_ID)}" +
+            "&redirect_uri=${enc(REDIRECT_URI)}" +
+            "&state=${enc(state)}"
     }
 
     data class TokenResponse(
