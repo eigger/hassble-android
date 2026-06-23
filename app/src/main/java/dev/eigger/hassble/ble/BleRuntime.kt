@@ -53,7 +53,7 @@ class BleRuntime(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private var scanJob: Job? = null
-    private val deviceConnectionJobs = mutableMapOf<String, Job>()
+    private val deviceConnectionJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     private lateinit var config: GatewayConfig
     private lateinit var enabled: Set<String>                 // "deviceId/sensorKey"
@@ -70,13 +70,13 @@ class BleRuntime(
     private var lastDisabledIds: Set<String> = emptySet()
     private var lastAutoConnectDisabledIds: Set<String> = emptySet()
 
-    private val devices = mutableMapOf<String, DeviceConfig>()
-    private val filters = mutableMapOf<String, ValueFilter>()  // uniqueId → filter
-    private val obdIndex = mutableMapOf<String, Map<Pair<String, String>, SensorConfig>>()
-    private val controls = mutableMapOf<String, Pair<DeviceConfig, ControlConfig>>()  // uniqueId →
-    private val declaredAdvInstances = mutableSetOf<String>()
-    private val discoveredAdvInstances = mutableMapOf<String, DiscoveredAdvInstance>()
-    private val lastSensorValues = mutableMapOf<String, SensorLastValue>()
+    private val devices = java.util.concurrent.ConcurrentHashMap<String, DeviceConfig>()
+    private val filters = java.util.concurrent.ConcurrentHashMap<String, ValueFilter>()  // uniqueId → filter
+    private val obdIndex = java.util.concurrent.ConcurrentHashMap<String, Map<Pair<String, String>, SensorConfig>>()
+    private val controls = java.util.concurrent.ConcurrentHashMap<String, Pair<DeviceConfig, ControlConfig>>()  // uniqueId →
+    private val declaredAdvInstances = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val discoveredAdvInstances = java.util.concurrent.ConcurrentHashMap<String, DiscoveredAdvInstance>()
+    private val lastSensorValues = java.util.concurrent.ConcurrentHashMap<String, SensorLastValue>()
 
     fun start() {
         ws.events.onEach(::onEvent).launchIn(scope)
