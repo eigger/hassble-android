@@ -229,7 +229,6 @@ class BleGatewayService : Service() {
                             val isConnected = status.state == dev.eigger.hassble.ble.DeviceLinkState.Connected || status.state == dev.eigger.hassble.ble.DeviceLinkState.Polling
                             client.sendStates(listOf(
                                 "${status.profileId}_link_status" to if (isConnected) "on" else "off",
-                                "${status.profileId}_link_state" to status.state.name.lowercase()
                             ))
                         }
                     }

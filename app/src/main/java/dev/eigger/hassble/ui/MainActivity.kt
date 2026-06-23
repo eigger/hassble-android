@@ -1252,8 +1252,7 @@ private fun DeviceConfigCard(
             if (expanded) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(modifier = Modifier.height(12.dp))
-                    val showPerSensorValues = isRunning &&
-                        !(device.source == Source.advertisement && discoveredInstances.isNotEmpty())
+                    val showPerSensorValues = isRunning
 
                     if (device.sensors.isNotEmpty()) {
                         Row(
