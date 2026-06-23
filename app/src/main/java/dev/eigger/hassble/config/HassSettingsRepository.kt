@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -23,6 +24,9 @@ class HassSettingsRepository(private val context: Context) {
     companion object {
         private val KEY_HA_URL = stringPreferencesKey("ha_url")
         private val KEY_HA_TOKEN = stringPreferencesKey("ha_token")
+        private val KEY_HA_REFRESH_TOKEN = stringPreferencesKey("ha_refresh_token")
+        private val KEY_HA_AUTH_STATE = stringPreferencesKey("ha_auth_state")
+        private val KEY_HA_TOKEN_LAST_REFRESHED = longPreferencesKey("ha_token_last_refreshed")
         private val KEY_GIT_URL = stringPreferencesKey("git_url")
         private val KEY_GIT_TOKEN = stringPreferencesKey("git_token")
         private val KEY_BOUND_DEVICES = stringPreferencesKey("bound_devices")
@@ -47,6 +51,18 @@ class HassSettingsRepository(private val context: Context) {
 
     val haToken: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[KEY_HA_TOKEN] ?: ""
+    }
+
+    val haRefreshToken: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_HA_REFRESH_TOKEN] ?: ""
+    }
+
+    val haAuthState: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_HA_AUTH_STATE] ?: ""
+    }
+
+    val haTokenLastRefreshed: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[KEY_HA_TOKEN_LAST_REFRESHED] ?: 0L
     }
 
     val gitUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -170,6 +186,36 @@ class HassSettingsRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[KEY_HA_URL] = url
             prefs[KEY_HA_TOKEN] = token
+        }
+    }
+
+    suspend fun saveHaRefreshToken(token: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_HA_REFRESH_TOKEN] = token
+        }
+    }
+
+    suspend fun clearHaRefreshToken() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(KEY_HA_REFRESH_TOKEN)
+        }
+    }
+
+    suspend fun saveHaAuthState(state: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_HA_AUTH_STATE] = state
+        }
+    }
+
+    suspend fun clearHaAuthState() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(KEY_HA_AUTH_STATE)
+        }
+    }
+
+    suspend fun saveHaTokenLastRefreshed(time: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_HA_TOKEN_LAST_REFRESHED] = time
         }
     }
 

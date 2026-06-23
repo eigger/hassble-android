@@ -45,6 +45,7 @@ class BleGatewayService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var ws: HaWsClient? = null
     private var runtime: BleRuntime? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private var configJob: Job? = null
     private var wsStateJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -71,6 +72,7 @@ class BleGatewayService : Service() {
         super.onCreate()
         _isServiceRunning.value = true
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        registerNetworkCallback()
         startForeground(NOTIF_ID, buildNotification())
     }
 
@@ -110,23 +112,37 @@ class BleGatewayService : Service() {
 
         val haUrl = intent?.getStringExtra(EXTRA_HA_URL) ?: return START_NOT_STICKY
         val token = intent.getStringExtra(EXTRA_TOKEN) ?: return START_NOT_STICKY
+        val refreshToken = intent.getStringExtra(EXTRA_REFRESH_TOKEN)
         currentGitUrl = intent.getStringExtra(EXTRA_GIT_URL) ?: return START_NOT_STICKY
         currentGitToken = intent.getStringExtra(EXTRA_GIT_TOKEN)
-
+ 
         if (ws == null) {
-            setupWebSocket(haUrl, token)
+            setupWebSocket(haUrl, token, refreshToken)
         }
         reloadConfig()
         return START_STICKY
     }
 
-    private fun setupWebSocket(haUrl: String, token: String) {
-        val client = HaWsClient(haUrl, token, gatewayId(), android.os.Build.MODEL, scope).also {
+    private fun setupWebSocket(haUrl: String, token: String, refreshToken: String?) {
+        val client = HaWsClient(
+            baseUrl = haUrl,
+            token = token,
+            gatewayId = gatewayId(),
+            gatewayName = android.os.Build.MODEL,
+            scope = scope,
+            refreshToken = refreshToken,
+            onTokenRefreshed = { newToken ->
+                val repo = HassSettingsRepository(applicationContext)
+                repo.saveHaSettings(haUrl, newToken)
+                repo.saveHaTokenLastRefreshed(System.currentTimeMillis())
+            }
+        ).also {
             it.connect()
             ws = it
         }
 
         wsStateJob?.cancel()
+        var lastIssue: ConnectionIssue = ConnectionIssue.None
         wsStateJob = scope.launch {
             launch {
                 // ws_bridge 연결/재연결 시 엔티티 재선언
@@ -144,6 +160,10 @@ class BleGatewayService : Service() {
                 _serviceConnectionState.value = state
                 _connectionIssue.value = issue
                 updateNotification()
+                if (issue == ConnectionIssue.AuthFailed && lastIssue != ConnectionIssue.AuthFailed) {
+                    showAuthExpiredNotification()
+                }
+                lastIssue = issue
             }
         }
 
@@ -310,6 +330,7 @@ class BleGatewayService : Service() {
             ))
         }
         unregisterReceiver(batteryReceiver)
+        unregisterNetworkCallback()
         configJob?.cancel()
         settingsJob?.cancel()
         wsStateJob?.cancel()
@@ -330,7 +351,53 @@ class BleGatewayService : Service() {
         super.onDestroy()
     }
 
+    private fun showAuthExpiredNotification() {
+        val mgr = getSystemService(NotificationManager::class.java) ?: return
+        val warnChannelId = "ble_gateway_warning"
+        if (mgr.getNotificationChannel(warnChannelId) == null) {
+            val channel = NotificationChannel(warnChannelId, getString(R.string.notif_warn_channel_name), NotificationManager.IMPORTANCE_HIGH).apply {
+                description = getString(R.string.notif_warn_channel_desc)
+                enableVibration(true)
+                enableLights(true)
+            }
+            mgr.createNotificationChannel(channel)
+        }
+        val openIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notif = NotificationCompat.Builder(this, warnChannelId)
+            .setContentTitle(getString(R.string.oauth_expired_notif_title))
+            .setContentText(getString(R.string.oauth_expired_notif_text))
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentIntent(openIntent)
+            .setAutoCancel(true)
+            .setDefaults(Notification.DEFAULT_ALL)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        mgr.notify(2, notif)
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) {
+                ws?.reconnectImmediately()
+            }
+        }
+        networkCallback = cb
+        cm.registerDefaultNetworkCallback(cb)
+    }
+
+    private fun unregisterNetworkCallback() {
+        val cb = networkCallback ?: return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        cm.unregisterNetworkCallback(cb)
+        networkCallback = null
+    }
 
     private fun updateNotification() {
         val mgr = getSystemService(NotificationManager::class.java)
@@ -373,6 +440,7 @@ class BleGatewayService : Service() {
         private const val NOTIF_ID = 1
         const val EXTRA_HA_URL = "ha_url"
         const val EXTRA_TOKEN = "token"
+        const val EXTRA_REFRESH_TOKEN = "refresh_token"
         const val EXTRA_GIT_URL = "git_url"
         const val EXTRA_GIT_TOKEN = "git_token"
         private const val EXTRA_DEVICE_ID = "device_id"
@@ -406,10 +474,11 @@ class BleGatewayService : Service() {
         private val _usingCachedConfig = MutableStateFlow(false)
         val usingCachedConfig: StateFlow<Boolean> = _usingCachedConfig.asStateFlow()
 
-        fun start(context: Context, haUrl: String, token: String, gitUrl: String, gitToken: String?) {
+        fun start(context: Context, haUrl: String, token: String, refreshToken: String?, gitUrl: String, gitToken: String?) {
             val i = Intent(context, BleGatewayService::class.java)
                 .putExtra(EXTRA_HA_URL, haUrl)
                 .putExtra(EXTRA_TOKEN, token)
+                .putExtra(EXTRA_REFRESH_TOKEN, refreshToken)
                 .putExtra(EXTRA_GIT_URL, gitUrl)
                 .putExtra(EXTRA_GIT_TOKEN, gitToken)
             context.startForegroundService(i)
