@@ -14,6 +14,7 @@ import dev.eigger.hassble.config.parseDurationMs
 import dev.eigger.hassble.decode.ObdResponseParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -449,6 +450,7 @@ class NordicElm327Source(
         var currentPreCommands: List<String> = emptyList()
         var lastTxAtMs = 0L
         var collectIdx = 0
+        var consecutiveTimeouts = 0
 
         try {
             while (currentCoroutineContext().isActive) {
@@ -458,6 +460,17 @@ class NordicElm327Source(
                     val item = txQueue.removeFirst()
                     val resp = sendCommand(txChar, item.cmd)
                     lastTxAtMs = System.currentTimeMillis()
+
+                    if (resp == null && item.pollTarget != null) {
+                        consecutiveTimeouts++
+                        Log.w(TAG, "OBD PID timeout ($consecutiveTimeouts/${MAX_CONSECUTIVE_TIMEOUTS}) for ${item.cmd}")
+                        if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+                            LiveEventLogger.log(LogType.LINK, "OBD disconnect detected: $consecutiveTimeouts consecutive timeouts")
+                            throw IOException("OBD not responding after $consecutiveTimeouts timeouts")
+                        }
+                    } else if (resp != null) {
+                        consecutiveTimeouts = 0
+                    }
 
                     if (!elmReady && item.pollTarget == null && txQueue.isEmpty()) {
                         elmReady = true
@@ -523,14 +536,18 @@ class NordicElm327Source(
 
         try {
             txChar.write(DataByteArray(payload), BleWriteType.NO_RESPONSE)
-            val resp = withTimeoutOrNull(timeoutMs) { deferred.await() }
+        } catch (e: CancellationException) {
             pendingDeferred = null
-            return resp
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Error executing OBD command $cmd", e)
             pendingDeferred = null
-            return null
+            Log.w(TAG, "OBD write error — connection likely lost: ${e.message}")
+            throw IOException("BLE write failed: ${e.message}", e)
         }
+
+        val resp = withTimeoutOrNull(timeoutMs) { deferred.await() }
+        pendingDeferred = null
+        resp
     }
 
     override suspend fun write(device: DeviceConfig, hex: String) {
@@ -579,5 +596,6 @@ class NordicElm327Source(
         private const val POLL_LOOP_MS = 10L
         private const val SINGLE_FRAME_TIMEOUT_MS = 2_000L
         private const val MULTIFRAME_TIMEOUT_MS = 5_000L
+        private const val MAX_CONSECUTIVE_TIMEOUTS = 3
     }
 }
