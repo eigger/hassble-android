@@ -617,9 +617,34 @@ private fun GatewayTabContent(
     val scope = rememberCoroutineScope()
     val inputsEnabled = !isRunning
     var isTestingConnection by remember { mutableStateOf(false) }
+    var showClearOAuthDialog by remember { mutableStateOf(false) }
     val issueMessage = connectionIssueMessage(connectionIssue)
     val gatewayId = remember {
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "hassble"
+    }
+
+    if (showClearOAuthDialog) {
+        Dialog(onDismissRequest = { showClearOAuthDialog = false }) {
+            Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(stringResource(R.string.oauth_clear_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.oauth_clear_body), color = Color.Gray, fontSize = 13.sp)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { showClearOAuthDialog = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = { showClearOAuthDialog = false; onClearOAuth() },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(stringResource(R.string.oauth_clear_confirm))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Column(
@@ -701,7 +726,7 @@ private fun GatewayTabContent(
                             Text(text = stringResource(R.string.oauth_active_chip), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             Text(text = stringResource(R.string.oauth_last_refreshed, formatLastRefreshed(context, haTokenLastRefreshed)), color = Color.Gray, fontSize = 10.sp)
                         }
-                        TextButton(onClick = onClearOAuth, enabled = inputsEnabled) {
+                        TextButton(onClick = { showClearOAuthDialog = true }, enabled = inputsEnabled) {
                             Text(stringResource(R.string.oauth_logout_btn), color = Color.Gray, fontSize = 11.sp)
                         }
                     }
