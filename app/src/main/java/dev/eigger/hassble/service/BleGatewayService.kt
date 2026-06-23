@@ -203,7 +203,11 @@ class BleGatewayService : Service() {
                     LiveEventLogger.log(LogType.LINK, "device=${status.profileId}, state=${status.state}")
                     ws?.let { client ->
                         if (client.connectionState.value == ConnectionState.Connected) {
-                            client.sendStates(listOf("${status.profileId}_link_status" to status.state.name.lowercase()))
+                            val isConnected = status.state == dev.eigger.hassble.ble.DeviceLinkState.Connected || status.state == dev.eigger.hassble.ble.DeviceLinkState.Polling
+                            client.sendStates(listOf(
+                                "${status.profileId}_link_status" to if (isConnected) "on" else "off",
+                                "${status.profileId}_link_state" to status.state.name.lowercase()
+                            ))
                         }
                     }
                 }
