@@ -249,13 +249,14 @@ private fun getVibrator(context: Context): Vibrator =
 
 private fun startPurrVibration(vibrator: Vibrator) {
     if (!vibrator.hasVibrator()) return
+    // 고양이 골골음: ~28Hz 규칙 리듬 (22ms on / 13ms off)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val t = longArrayOf(0, 30, 20, 30, 20, 60, 40, 30, 20, 30)
-        val a = intArrayOf(0, 80, 0, 90, 0, 140, 0, 80, 0, 100)
-        vibrator.vibrate(VibrationEffect.createWaveform(t, a, 0))
+        val t = longArrayOf(0, 22, 13)   // on, off 반복
+        val a = intArrayOf(0, 110, 0)
+        vibrator.vibrate(VibrationEffect.createWaveform(t, a, 1))  // index 1부터 루프
     } else {
         @Suppress("DEPRECATION")
-        vibrator.vibrate(longArrayOf(0, 30, 20, 30, 20, 60), 0)
+        vibrator.vibrate(longArrayOf(0, 22, 13), 1)
     }
 }
 
