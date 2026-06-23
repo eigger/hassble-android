@@ -166,7 +166,7 @@ class HaWsClient(
         if (_connectionState.value != ConnectionState.Connected) return
         val response = sendRequest("config/entity_registry/list") ?: return
         val entities = runCatching { response["result"]?.jsonArray }.getOrNull() ?: return
-        val prefix = "${deviceId}_"
+        val prefix = "${gatewayId}__${deviceId}_"
         for (entity in entities) {
             val obj = runCatching { entity.jsonObject }.getOrNull() ?: continue
             val uid = obj["unique_id"]?.jsonPrimitive?.contentOrNull ?: continue
@@ -178,7 +178,7 @@ class HaWsClient(
 
     suspend fun removeEntitiesByUniqueIds(uniqueIds: List<String>) {
         if (uniqueIds.isEmpty() || _connectionState.value != ConnectionState.Connected) return
-        val uniqueIdSet = uniqueIds.toSet()
+        val uniqueIdSet = uniqueIds.map { "${gatewayId}__$it" }.toSet()
         val response = sendRequest("config/entity_registry/list") ?: return
         val entities = runCatching { response["result"]?.jsonArray }.getOrNull() ?: return
         for (entity in entities) {
