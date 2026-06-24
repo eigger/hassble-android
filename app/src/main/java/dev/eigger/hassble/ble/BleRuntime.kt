@@ -266,7 +266,6 @@ class BleRuntime(
                 deviceClass = s.deviceClass,
                 unit = if (isTextSensor) null else s.unit,
                 stateClass = if (isTextSensor) null else s.stateClass,
-                suggestedDisplayPrecision = if (isTextSensor) null else s.accuracyDecimals,
                 icon = s.icon,
                 entityCategory = s.entityCategory,
             ))
