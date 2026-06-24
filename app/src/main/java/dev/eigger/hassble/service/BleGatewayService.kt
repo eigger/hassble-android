@@ -93,6 +93,18 @@ class BleGatewayService : Service() {
             return START_STICKY
         }
 
+        if (intent?.action == ACTION_CONNECT_DEVICE) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            runtime?.connectDevice(deviceId)
+            return START_STICKY
+        }
+
+        if (intent?.action == ACTION_DISCONNECT_DEVICE) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            runtime?.disconnectDevice(deviceId)
+            return START_STICKY
+        }
+
         val haUrl = intent?.getStringExtra(EXTRA_HA_URL) ?: return START_NOT_STICKY
         val token = intent.getStringExtra(EXTRA_TOKEN) ?: return START_NOT_STICKY
         val refreshToken = intent.getStringExtra(EXTRA_REFRESH_TOKEN)
@@ -440,6 +452,8 @@ class BleGatewayService : Service() {
         private const val ACTION_ENABLE_DEVICE = "dev.eigger.hassble.ENABLE_DEVICE"
         private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"
         private const val EXTRA_AUTO_CONNECT = "auto_connect"
+        private const val ACTION_CONNECT_DEVICE = "dev.eigger.hassble.CONNECT_DEVICE"
+        private const val ACTION_DISCONNECT_DEVICE = "dev.eigger.hassble.DISCONNECT_DEVICE"
 
         private val _serviceConnectionState = MutableStateFlow(ConnectionState.Disconnected)
         val serviceConnectionState: StateFlow<ConnectionState> = _serviceConnectionState.asStateFlow()
@@ -504,6 +518,18 @@ class BleGatewayService : Service() {
                 .setAction(ACTION_SET_AUTO_CONNECT)
                 .putExtra(EXTRA_DEVICE_ID, deviceId)
                 .putExtra(EXTRA_AUTO_CONNECT, enabled))
+        }
+
+        fun connectDevice(context: Context, deviceId: String) {
+            context.startService(Intent(context, BleGatewayService::class.java)
+                .setAction(ACTION_CONNECT_DEVICE)
+                .putExtra(EXTRA_DEVICE_ID, deviceId))
+        }
+
+        fun disconnectDevice(context: Context, deviceId: String) {
+            context.startService(Intent(context, BleGatewayService::class.java)
+                .setAction(ACTION_DISCONNECT_DEVICE)
+                .putExtra(EXTRA_DEVICE_ID, deviceId))
         }
     }
 }

@@ -525,6 +525,8 @@ private fun HomeScreen() {
                     onDisableDevice = { deviceId -> BleGatewayService.disableDevice(context, deviceId) },
                     onEnableDevice = { deviceId -> BleGatewayService.enableDevice(context, deviceId) },
                     onSetAutoConnect = { deviceId, enabled -> BleGatewayService.setAutoConnect(context, deviceId, enabled) },
+                    onConnectDevice = { deviceId -> BleGatewayService.connectDevice(context, deviceId) },
+                    onDisconnectDevice = { deviceId -> BleGatewayService.disconnectDevice(context, deviceId) },
                 )
                 2 -> LogsTabContent()
             }
@@ -992,6 +994,8 @@ private fun SensorsTabContent(
     onDisableDevice: (String) -> Unit,
     onEnableDevice: (String) -> Unit,
     onSetAutoConnect: (String, Boolean) -> Unit,
+    onConnectDevice: (String) -> Unit = {},
+    onDisconnectDevice: (String) -> Unit = {},
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1119,6 +1123,8 @@ private fun SensorsTabContent(
                     onDisable = { onDisableDevice(device.id) },
                     onEnable = { onEnableDevice(device.id) },
                     onSetAutoConnect = { enabled -> onSetAutoConnect(device.id, enabled) },
+                    onConnectDevice = { onConnectDevice(device.id) },
+                    onDisconnectDevice = { onDisconnectDevice(device.id) },
                 )
             }
         }
@@ -1170,6 +1176,8 @@ private fun DeviceConfigCard(
     onDisable: () -> Unit,
     onEnable: () -> Unit,
     onSetAutoConnect: (Boolean) -> Unit,
+    onConnectDevice: () -> Unit = {},
+    onDisconnectDevice: () -> Unit = {},
 ) {
     val deviceSensorKeys = remember(device.id, device.sensors) {
         device.sensors.map { "${device.id}/${it.key}" }
@@ -1537,24 +1545,56 @@ private fun DeviceConfigCard(
 
                     val isConnected = linkStatus?.state == DeviceLinkState.Connected ||
                             linkStatus?.state == DeviceLinkState.Polling
+                    val isActive = isConnected ||
+                            linkStatus?.state == DeviceLinkState.Connecting ||
+                            linkStatus?.state == DeviceLinkState.Scanning
 
                     if (isRunning && (device.source == Source.gatt_notify || device.source == Source.obd)) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(stringResource(R.string.auto_connect_label), fontSize = 12.sp, color = if (isConnected) Color.Gray.copy(alpha = 0.5f) else Color.Gray)
-                            Switch(
-                                checked = autoConnect,
-                                onCheckedChange = { onSetAutoConnect(it) },
-                                enabled = !isConnected,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.Black,
-                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                ),
-                            )
+                        val hasMac = if (device.source == Source.gatt_notify) !device.gatt?.mac.isNullOrBlank() else !device.obd?.mac.isNullOrBlank()
+                        val hasBoundMac = !boundMac.isNullOrBlank()
+                        if (hasMac || hasBoundMac) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (isActive) {
+                                    OutlinedButton(
+                                        onClick = onDisconnectDevice,
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    ) {
+                                        Text(stringResource(R.string.device_disconnect_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = onConnectDevice,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                            contentColor = MaterialTheme.colorScheme.primary,
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    ) {
+                                        Text(stringResource(R.string.device_connect_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(stringResource(R.string.auto_connect_label), fontSize = 12.sp, color = Color.Gray)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Switch(
+                                        checked = autoConnect,
+                                        onCheckedChange = { onSetAutoConnect(it) },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.Black,
+                                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                        ),
+                                    )
+                                }
+                            }
                         }
                     }
 

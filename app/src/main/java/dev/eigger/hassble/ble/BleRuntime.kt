@@ -216,10 +216,18 @@ class BleRuntime(
             if (!isEnabled(d.id, s.key)) continue
             val entityUid = uid(instanceId, s.key)
             filters[entityUid] = ValueFilter(resolveRule(d, s))
+            val isTextSensor = s.platform == "text_sensor"
+            if (isTextSensor && s.unit != null) {
+                LiveEventLogger.log(LogType.LINK, "[Warning] device='${d.id}' sensor='${s.key}': unit='${s.unit}' is ignored for text_sensor (HA requires numeric values for sensors with units)")
+            }
+            if (!isTextSensor && s.stateClass == null && s.unit != null) {
+                LiveEventLogger.log(LogType.LINK, "[Warning] device='${d.id}' sensor='${s.key}': unit='${s.unit}' set but state_class is missing — HA may reject long-term statistics")
+            }
             ws.declareEntity(EntityMsg(
                 id = 0, uniqueId = entityUid, platform = haPlatform(s),
                 name = title(s.key), device = ref,
-                deviceClass = s.deviceClass, unit = s.unit,
+                deviceClass = s.deviceClass,
+                unit = if (isTextSensor) null else s.unit,
                 stateClass = s.stateClass, icon = s.icon,
                 entityCategory = s.entityCategory,
             ))
@@ -487,6 +495,30 @@ class BleRuntime(
                 else -> {}
             }
         }
+    }
+
+    /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 시작. */
+    fun connectDevice(deviceId: String) {
+        if (!::config.isInitialized) return
+        if (deviceConnectionJobs[deviceId]?.isActive == true) return
+        val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return
+        if (d.id in disabledIds) return
+        startDevice(d)
+    }
+
+    /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 해제. */
+    fun disconnectDevice(deviceId: String) {
+        deviceConnectionJobs[deviceId]?.cancel()
+        deviceConnectionJobs.remove(deviceId)
+        gatt.disconnect(deviceId)
+        obd.disconnect(deviceId)
+        val d = devices[deviceId]
+        val mac = when (d?.source) {
+            Source.gatt_notify -> resolveDeviceMac(d).gatt?.mac
+            Source.obd -> resolveDeviceMac(d).obd?.mac
+            else -> boundDevices[deviceId]
+        }
+        onLinkStatus(DeviceLinkStatus(deviceId, DeviceLinkState.Disconnected, mac))
     }
 
     fun stop() {
