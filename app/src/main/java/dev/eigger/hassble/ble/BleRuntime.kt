@@ -2,6 +2,7 @@ package dev.eigger.hassble.ble
 
 import dev.eigger.hassble.service.BleGatewayService
 import dev.eigger.hassble.config.AdvertisementInstanceMode
+import dev.eigger.hassble.config.effectiveStateClass
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.ControlConfig
@@ -265,7 +266,7 @@ class BleRuntime(
                 name = title(s.key), device = ref,
                 deviceClass = s.deviceClass,
                 unit = if (isTextSensor) null else s.unit,
-                stateClass = if (isTextSensor) null else s.stateClass,
+                stateClass = if (isTextSensor) null else s.effectiveStateClass(),
                 suggestedDisplayPrecision = if (isTextSensor) null else s.accuracyDecimals,
                 icon = s.icon,
                 entityCategory = s.entityCategory,

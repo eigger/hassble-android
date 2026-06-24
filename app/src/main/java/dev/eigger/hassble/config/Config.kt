@@ -96,6 +96,10 @@ data class SensorConfig(
     val publish: PublishRule? = null,
 )
 
+// YAML에서 state_class: none 이 문자열 "none"으로 파싱되는 경우를 null로 정규화
+fun SensorConfig.effectiveStateClass(): String? =
+    stateClass?.takeIf { it.lowercase() != "none" && it.isNotBlank() }
+
 enum class SourceField { service_data, manufacturer_data, raw }
 
 @Serializable

@@ -44,14 +44,16 @@ object ConfigValidator {
             val id = device.id
             val key = s.key
 
+            val effStateClass = s.effectiveStateClass()
+
             // text_sensor에 numeric 전용 속성
             if (isText(s)) {
                 if (s.unit != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
                         "unit='${s.unit}' is ignored for text_sensor — HA requires numeric values for sensors with units")
-                if (s.stateClass != null)
+                if (effStateClass != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "state_class='${s.stateClass}' is ignored for text_sensor")
+                        "state_class='$effStateClass' is ignored for text_sensor")
                 if (s.accuracyDecimals != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
                         "accuracy_decimals is ignored for text_sensor")
@@ -62,15 +64,15 @@ object ConfigValidator {
 
             // 숫자 센서 검증
             if (!isText(s)) {
-                if (s.stateClass != null && s.stateClass !in validStatClasses)
+                if (effStateClass != null && effStateClass !in validStatClasses)
                     issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                        "invalid state_class='${s.stateClass}' — must be one of $validStatClasses")
-                if (s.unit != null && s.stateClass == null)
+                        "invalid state_class='$effStateClass' — must be one of $validStatClasses")
+                if (s.unit != null && effStateClass == null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
                         "unit='${s.unit}' set but state_class is missing — HA may infer measurement and show as graph")
-                if (s.stateClass != null && s.unit == null)
+                if (effStateClass != null && s.unit == null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "state_class='${s.stateClass}' set but unit is missing — HA long-term statistics require a unit")
+                        "state_class='$effStateClass' set but unit is missing — HA long-term statistics require a unit")
                 if (s.deviceClass == "timestamp" && s.accuracyDecimals != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
                         "accuracy_decimals is meaningless for device_class='timestamp'")
@@ -162,7 +164,7 @@ object ConfigValidator {
         for (s in d.sensors) {
             if (s.key in errKeys) continue
             val isText = s.platform == "text_sensor"
-            sb.append("S|${s.key}|${s.platform}|${if (isText) null else s.unit}|${if (isText) null else s.stateClass}|${s.deviceClass}|${s.accuracyDecimals}\n")
+            sb.append("S|${s.key}|${s.platform}|${if (isText) null else s.unit}|${if (isText) null else s.effectiveStateClass()}|${s.deviceClass}|${s.accuracyDecimals}\n")
         }
         for (c in d.controls) {
             if (c.key in errKeys) continue
