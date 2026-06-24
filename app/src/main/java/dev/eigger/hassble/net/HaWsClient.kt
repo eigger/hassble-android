@@ -126,7 +126,7 @@ class HaWsClient(
         if (_connectionState.value == ConnectionState.Disconnected) {
             reconnectDelayMs = 500L
             scope.launch {
-                if (!refreshToken.isNullOrBlank()) {
+                if (!refreshToken.isNullOrBlank() && HaAuthHelper.isTokenExpiringSoon(token)) {
                     val result = withContext(Dispatchers.IO) {
                         HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
                     }
@@ -302,7 +302,7 @@ class HaWsClient(
         scope.launch {
             delay(reconnectDelayMs)
             reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
-            if (!refreshToken.isNullOrBlank()) {
+            if (!refreshToken.isNullOrBlank() && HaAuthHelper.isTokenExpiringSoon(token)) {
                 val result = withContext(Dispatchers.IO) {
                     HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
                 }

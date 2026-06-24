@@ -38,7 +38,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -130,14 +129,11 @@ class BleGatewayService : Service() {
 
     private suspend fun maybeRefreshToken(haUrl: String, token: String, refreshToken: String?): String {
         if (refreshToken.isNullOrBlank()) return token
-        val repo = HassSettingsRepository(applicationContext)
-        val lastRefreshed = repo.haTokenLastRefreshed.first()
-        if (System.currentTimeMillis() - lastRefreshed <= TOKEN_EXPIRY_MS) return token
+        if (!HaAuthHelper.isTokenExpiringSoon(token)) return token
         val result = HaAuthHelper.refreshAccessToken(haUrl, refreshToken)
         return if (result.isSuccess) {
             val newToken = result.getOrThrow()
-            repo.saveHaSettings(haUrl, newToken)
-            repo.saveHaTokenLastRefreshed(System.currentTimeMillis())
+            HassSettingsRepository(applicationContext).saveHaSettings(haUrl, newToken)
             newToken
         } else {
             token
@@ -153,9 +149,7 @@ class BleGatewayService : Service() {
             scope = scope,
             refreshToken = refreshToken,
             onTokenRefreshed = { newToken ->
-                val repo = HassSettingsRepository(applicationContext)
-                repo.saveHaSettings(haUrl, newToken)
-                repo.saveHaTokenLastRefreshed(System.currentTimeMillis())
+                HassSettingsRepository(applicationContext).saveHaSettings(haUrl, newToken)
             }
         ).also {
             it.connect()
@@ -456,7 +450,6 @@ class BleGatewayService : Service() {
     companion object {
         private const val CHANNEL_ID = "ble_gateway"
         private const val NOTIF_ID = 1
-        private const val TOKEN_EXPIRY_MS = 25 * 60 * 1000L
         const val EXTRA_HA_URL = "ha_url"
         const val EXTRA_TOKEN = "token"
         const val EXTRA_REFRESH_TOKEN = "refresh_token"
