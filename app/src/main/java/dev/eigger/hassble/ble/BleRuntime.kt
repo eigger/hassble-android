@@ -3,6 +3,7 @@ package dev.eigger.hassble.ble
 import dev.eigger.hassble.service.BleGatewayService
 import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.BleScanModeOption
+import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.ControlConfig
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
@@ -10,6 +11,8 @@ import dev.eigger.hassble.config.PublishRule
 import dev.eigger.hassble.config.SensorConfig
 import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.config.SourceField
+import dev.eigger.hassble.config.ValidationIssue
+import dev.eigger.hassble.config.ValidationLevel
 import dev.eigger.hassble.decode.Decoder
 import dev.eigger.hassble.decode.ValueFilter
 import dev.eigger.hassble.net.CommandPayload
@@ -77,6 +80,9 @@ class BleRuntime(
     private val declaredAdvInstances = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val discoveredAdvInstances = java.util.concurrent.ConcurrentHashMap<String, DiscoveredAdvInstance>()
     private val lastSensorValues = java.util.concurrent.ConcurrentHashMap<String, SensorLastValue>()
+    private var validationIssues: List<ValidationIssue> = emptyList()
+    // async HA cleanup 진행 중인 deviceId → 완료 전 apply()에서 재시작 방지
+    private val pendingHaCleanupIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     fun start() {
         ws.events.onEach(::onEvent).launchIn(scope)
@@ -87,6 +93,21 @@ class BleRuntime(
         declaredAdvInstances.clear()
         for (d in config.devices) {
             declareAndPrepare(d)
+        }
+    }
+
+    private fun runConfigValidation(config: GatewayConfig) {
+        val issues = ConfigValidator.validate(config)
+        validationIssues = issues
+        if (issues.isEmpty()) return
+        val errors = issues.count { it.level == ValidationLevel.ERROR }
+        val warnings = issues.count { it.level == ValidationLevel.WARNING }
+        LiveEventLogger.log(LogType.LINK, "=== Config Validation: $errors error(s), $warnings warning(s) ===")
+        for (issue in issues) {
+            LiveEventLogger.log(LogType.LINK, issue.toString())
+        }
+        if (errors > 0) {
+            LiveEventLogger.log(LogType.LINK, "=== ${errors} sensor(s)/control(s) will be disabled due to errors ===")
         }
     }
 
@@ -105,6 +126,8 @@ class BleRuntime(
         val oldScanMode = this.lastScanMode
         val oldDisabledIds = this.lastDisabledIds
         val oldAutoConnectDisabledIds = this.lastAutoConnectDisabledIds
+
+        if (config != oldConfig) runConfigValidation(config)
 
         this.config = config
         this.enabled = enabledKeys
@@ -173,10 +196,28 @@ class BleRuntime(
             val needsRestart = isNewDevice || configChanged || boundMacChanged || disabledChanged || autoConnectChanged || sensorsChanged
 
             if (needsRestart) {
+                // async HA cleanup이 진행 중인 device는 그 완료를 기다리지 않고 skip
+                // (이전 async 블록이 구 config로 startDevice를 호출하는 것을 방지)
+                if (deviceId in pendingHaCleanupIds) continue
                 stopDevice(deviceId)
-                // 만약 disabledIds에 들어가 있다면 새로 시작하지 않고 disconnected 상태를 유지
                 if (deviceId !in disabledIds) {
-                    startDevice(d)
+                    val needsHaCleanup = configChanged && oldD != null &&
+                            ConfigValidator.hasSensorStructureChange(oldD, d)
+                    if (needsHaCleanup) {
+                        // 센서 platform/type이 바뀐 경우: HA 구 엔티티를 먼저 삭제 후 재선언
+                        val capturedD = d
+                        pendingHaCleanupIds.add(capturedD.id)
+                        scope.launch {
+                            try {
+                                runCatching { ws.removeEntitiesByDeviceIdPrefix(capturedD.id) }
+                                startDevice(capturedD)
+                            } finally {
+                                pendingHaCleanupIds.remove(capturedD.id)
+                            }
+                        }
+                    } else {
+                        startDevice(d)
+                    }
                 }
             }
         }
@@ -212,37 +253,28 @@ class BleRuntime(
             ws.sendStates(listOf("${instanceId}_link_status" to if (isConnected) "on" else "off"))
         }
 
+        val errorKeys = ConfigValidator.errorKeys(validationIssues, d.id)
         for (s in d.sensors) {
             if (!isEnabled(d.id, s.key)) continue
+            if (s.key in errorKeys) continue
             val entityUid = uid(instanceId, s.key)
             filters[entityUid] = ValueFilter(resolveRule(d, s))
             val isTextSensor = s.platform == "text_sensor"
-            if (isTextSensor && s.unit != null) {
-                LiveEventLogger.log(LogType.LINK, "[Warning] device='${d.id}' sensor='${s.key}': unit='${s.unit}' is ignored for text_sensor (HA requires numeric values for sensors with units)")
-            }
-            if (!isTextSensor && s.stateClass == null && s.unit != null) {
-                LiveEventLogger.log(LogType.LINK, "[Warning] device='${d.id}' sensor='${s.key}': unit='${s.unit}' set but state_class is missing — HA may reject long-term statistics")
-            }
             ws.declareEntity(EntityMsg(
                 id = 0, uniqueId = entityUid, platform = haPlatform(s),
                 name = title(s.key), device = ref,
                 deviceClass = s.deviceClass,
                 unit = if (isTextSensor) null else s.unit,
-                stateClass = s.stateClass,
+                stateClass = if (isTextSensor) null else s.stateClass,
                 suggestedDisplayPrecision = if (isTextSensor) null else s.accuracyDecimals,
                 icon = s.icon,
                 entityCategory = s.entityCategory,
             ))
         }
         for (c in d.controls) {
-            if (d.source == Source.gatt_notify && d.gatt?.writeCharUuid.isNullOrBlank()) {
-                LiveEventLogger.log(LogType.LINK, "[Warning] Skip control '${c.key}' for device '${d.id}' because write_char_uuid is missing")
-                continue
-            }
-            if (d.source == Source.obd && d.obd?.txCharUuid.isNullOrBlank()) {
-                LiveEventLogger.log(LogType.LINK, "[Warning] Skip control '${c.key}' for device '${d.id}' because tx_char_uuid is missing")
-                continue
-            }
+            if (c.key in errorKeys) continue
+            if (d.source == Source.gatt_notify && d.gatt?.writeCharUuid.isNullOrBlank()) continue
+            if (d.source == Source.obd && d.obd?.txCharUuid.isNullOrBlank()) continue
             val entityUid = uid(instanceId, c.key)
             controls[entityUid] = d to c
             ws.declareEntity(EntityMsg(
@@ -307,7 +339,8 @@ class BleRuntime(
     private fun startDevice(d: DeviceConfig) {
         devices[d.id] = d
         if (d.source == Source.obd) {
-            obdIndex[d.id] = d.sensors.filter { it.pid != null }
+            val errKeys = ConfigValidator.errorKeys(validationIssues, d.id)
+            obdIndex[d.id] = d.sensors.filter { it.pid != null && it.key !in errKeys }
                 .associateBy { it.mode to it.pid!!.uppercase() }
         }
         declareAndPrepare(d)
@@ -470,7 +503,7 @@ class BleRuntime(
             else "%.${s.accuracyDecimals}f".format(value).toDouble()
         } else value
         val entityUid = uid(instanceId, s.key)
-        val filter = filters.getOrPut(entityUid) { ValueFilter(resolveRule(d, s)) }
+        val filter = filters[entityUid] ?: return  // not declared (validation error or not enabled)
         if (filter.allow(rounded) != false) {
             out += entityUid to rounded
             recordSensorValue(d.id, instanceId, s.key, rounded, s.unit, s.accuracyDecimals)
@@ -547,6 +580,7 @@ class BleRuntime(
         lastSensorValues.clear()
         publishSensorValues()
 
+        pendingHaCleanupIds.clear()
         lastConfig = null
         lastEnabled = emptySet()
         lastBoundDevices = emptyMap()

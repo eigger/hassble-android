@@ -15,6 +15,7 @@ import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.ConfigLoader
+import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.HassSettingsRepository
 import dev.eigger.hassble.config.ObdPresetStore
@@ -51,6 +52,7 @@ class BleGatewayService : Service() {
     private var currentGitUrl: String = ""
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
+    @Volatile private var pendingEntityCleanupDeviceIds: Set<String> = emptySet()
 
     override fun onCreate() {
         super.onCreate()
@@ -159,7 +161,25 @@ class BleGatewayService : Service() {
                 client.bridgeConnected.collect {
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
+                    // 선언 내용이 바뀐 device의 HA 엔티티를 먼저 제거 후 재선언
+                    val cleanupIds = pendingEntityCleanupDeviceIds
+                    if (cleanupIds.isNotEmpty()) {
+                        pendingEntityCleanupDeviceIds = emptySet()
+                        for (deviceId in cleanupIds) {
+                            runCatching { ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
+                        }
+                        LiveEventLogger.log(LogType.LINK,
+                            "Refreshed HA entities for: ${cleanupIds.joinToString()}")
+                    }
                     runtime?.redeclareEntities()
+                    // 성공적으로 선언 완료 → fingerprint 저장
+                    currentConfig?.let { cfg ->
+                        runCatching {
+                            HassSettingsRepository(this@BleGatewayService).saveEntityFingerprints(cfg)
+                        }.onFailure { e ->
+                            LiveEventLogger.log(LogType.LINK, "[Warning] Failed to save entity fingerprints: ${e.message}")
+                        }
+                    }
                 }
             }
             combine(client.connectionState, client.connectionIssue) { state, issue ->
@@ -196,12 +216,13 @@ class BleGatewayService : Service() {
                 assets.open("obd_presets.yaml").bufferedReader().readText(),
             )
             val loader = ConfigLoader(File(filesDir, "config_cache"), presets)
+            val cachedConfig = runCatching { loader.loadCache(currentGitUrl) }.getOrNull()
             val fetch = loader.load(currentGitUrl, currentGitToken)
             val config = if (fetch.isSuccess) {
                 fetch.getOrNull()
             } else {
                 _usingCachedConfig.value = true
-                loader.loadCache(currentGitUrl)
+                cachedConfig
             }
 
             if (config == null) {
@@ -214,6 +235,15 @@ class BleGatewayService : Service() {
             currentConfig = config
             val defaultEnabled = defaultEnabled(config)
             val repository = HassSettingsRepository(applicationContext)
+
+            // ─── HA 엔티티 fingerprint 비교 ────────────────────────────────────────
+            // config 변경 또는 앱 선언 방식 변경 시 해당 device의 HA 엔티티 자동 cleanup
+            val changed = repository.getChangedDeviceIds(config)
+            if (changed.isNotEmpty()) {
+                pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + changed
+                LiveEventLogger.log(LogType.LINK,
+                    "Entity declaration changed for: ${changed.joinToString()} — HA entities will be refreshed")
+            }
 
             val newConfigIds = config.devices.map { it.id }.toSet()
             val removedIds = repository.getRemovedDeviceIds(newConfigIds)
@@ -342,6 +372,7 @@ class BleGatewayService : Service() {
         ws?.close()
         runtime = null
         ws = null
+        pendingEntityCleanupDeviceIds = emptySet()
         _isServiceRunning.value = false
         _serviceConnectionState.value = ConnectionState.Disconnected
         _connectionIssue.value = ConnectionIssue.None

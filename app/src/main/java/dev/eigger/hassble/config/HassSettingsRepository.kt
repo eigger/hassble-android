@@ -39,6 +39,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_DISABLED_DEVICES = stringPreferencesKey("disabled_devices")
         private val KEY_KNOWN_DEVICE_IDS = stringPreferencesKey("known_device_ids")
         private val KEY_AUTO_CONNECT_DISABLED = stringPreferencesKey("auto_connect_disabled")
+        private val KEY_ENTITY_FINGERPRINTS = stringPreferencesKey("entity_fingerprints")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -341,5 +342,42 @@ class HassSettingsRepository(private val context: Context) {
             val newJson = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), currentMap)
             prefs[KEY_BOUND_DEVICES] = newJson
         }
+    }
+
+    // ── HA 엔티티 선언 fingerprint ────────────────────────────────────────────
+    // 저장된 fingerprint와 현재 config의 실제 선언 내용이 다르면 해당 device를 cleanup 대상으로 반환.
+    suspend fun getChangedDeviceIds(config: GatewayConfig): Set<String> {
+        val prefs = context.dataStore.data.first()
+        val storedJson = prefs[KEY_ENTITY_FINGERPRINTS] ?: "{}"
+        val storedMap = runCatching {
+            json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), storedJson)
+        }.getOrDefault(emptyMap())
+
+        // validate는 한 번만 실행 (O(n) → 루프 내에서 재호출 방지)
+        val issues = ConfigValidator.validate(config)
+        return config.devices
+            .filter { d ->
+                val current = ConfigValidator.computeEffectiveFingerprint(d, issues)
+                storedMap[d.id] != current
+            }
+            .map { it.id }
+            .toSet()
+    }
+
+    suspend fun saveEntityFingerprints(config: GatewayConfig) {
+        // validate는 한 번만 실행
+        val issues = ConfigValidator.validate(config)
+        context.dataStore.edit { prefs ->
+            val newMap = config.devices.associate { d ->
+                d.id to ConfigValidator.computeEffectiveFingerprint(d, issues)
+            }
+            prefs[KEY_ENTITY_FINGERPRINTS] = json.encodeToString(
+                MapSerializer(String.serializer(), String.serializer()), newMap
+            )
+        }
+    }
+
+    suspend fun clearEntityFingerprints() {
+        context.dataStore.edit { prefs -> prefs.remove(KEY_ENTITY_FINGERPRINTS) }
     }
 }
