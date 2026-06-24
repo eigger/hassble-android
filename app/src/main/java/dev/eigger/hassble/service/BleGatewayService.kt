@@ -391,8 +391,15 @@ class BleGatewayService : Service() {
                 ws?.reconnectImmediately()
             }
         }
-        networkCallback = cb
-        cm.registerDefaultNetworkCallback(cb)
+        try {
+            val request = android.net.NetworkRequest.Builder()
+                .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            networkCallback = cb
+            cm.registerNetworkCallback(request, cb)
+        } catch (e: Exception) {
+            android.util.Log.w("BleGatewayService", "Failed to register network callback: ${e.message}")
+        }
     }
 
     private fun unregisterNetworkCallback() {
