@@ -146,7 +146,9 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 
 값 = `raw * scale + offset_value` (timestamp/string 제외).
 
-센서 필드 `min_length`: manufacturer/service 데이터 최소 바이트 길이. 미만이면 스킵.
+센서 필드 `min_length` / `length`:
+- `min_length`: manufacturer/service 데이터 최소 바이트 길이. 미만이면 스킵.
+- `length`: manufacturer/service 데이터 정확한 바이트 길이. 일치하지 않으면 스킵.
 
 `timestamp` 타입: `offset`부터 4바이트를 **월·일·시·분**(uint8)으로 읽어 ISO 8601 문자열 반환 (예: `2026-06-22T14:30:00`). 연도는 디코딩 시점의 현재 연도. `device_class: timestamp`와 함께 사용.
 
