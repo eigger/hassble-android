@@ -190,16 +190,10 @@ class HaWsClient(
 
     suspend fun removeEntitiesByDeviceIdPrefix(deviceId: String) {
         if (_connectionState.value != ConnectionState.Connected) return
-        val response = sendRequest("config/entity_registry/list") ?: return
-        val entities = runCatching { response["result"]?.jsonArray }.getOrNull() ?: return
-        val prefix = "${gatewayId}__${deviceId}_"
-        for (entity in entities) {
-            val obj = runCatching { entity.jsonObject }.getOrNull() ?: continue
-            val uid = obj["unique_id"]?.jsonPrimitive?.contentOrNull ?: continue
-            if (!uid.startsWith(prefix)) continue
-            val entityId = obj["entity_id"]?.jsonPrimitive?.contentOrNull ?: continue
-            sendRequest("config/entity_registry/remove") { put("entity_id", entityId) }
-        }
+        // ws_bridge/remove 를 사용해야 ws_bridge 내부의 _created set도 함께 정리됨.
+        // native config/entity_registry/remove 는 HA 레지스트리만 삭제하고 _created는 그대로 남아
+        // 이후 redeclare 시 _create()가 skip되어 엔티티가 재등록되지 않는 버그 발생.
+        sendRequest("$WS_DOMAIN/remove") { put("device_id", deviceId) }
     }
 
     suspend fun removeEntitiesByUniqueIds(uniqueIds: List<String>) {
