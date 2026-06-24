@@ -121,9 +121,11 @@ class BleGatewayService : Service() {
             scope.launch {
                 val activeToken = maybeRefreshToken(haUrl, token, refreshToken)
                 setupWebSocket(haUrl, activeToken, refreshToken)
+                reloadConfig()
             }
+        } else {
+            reloadConfig()
         }
-        reloadConfig()
         return START_STICKY
     }
 
