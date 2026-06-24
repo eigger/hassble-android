@@ -26,6 +26,7 @@ data class EntityMsg(
     @SerialName("device_class") val deviceClass: String? = null,
     @SerialName("unit_of_measurement") val unit: String? = null,
     @SerialName("state_class") val stateClass: String? = null,
+    @SerialName("suggested_display_precision") val suggestedDisplayPrecision: Int? = null,
     val icon: String? = null,
     @SerialName("entity_category") val entityCategory: String? = null,
     val options: List<String>? = null,    // select

@@ -228,7 +228,9 @@ class BleRuntime(
                 name = title(s.key), device = ref,
                 deviceClass = s.deviceClass,
                 unit = if (isTextSensor) null else s.unit,
-                stateClass = s.stateClass, icon = s.icon,
+                stateClass = s.stateClass,
+                suggestedDisplayPrecision = if (isTextSensor) null else s.accuracyDecimals,
+                icon = s.icon,
                 entityCategory = s.entityCategory,
             ))
         }
@@ -463,8 +465,10 @@ class BleRuntime(
         out: MutableList<Pair<String, Any>>,
     ) {
         if (value == null) return
-        val rounded = if (s.accuracyDecimals != null && value is Double)
-            "%.${s.accuracyDecimals}f".format(value).toDouble() else value
+        val rounded: Any = if (s.accuracyDecimals != null && value is Double) {
+            if (s.accuracyDecimals == 0) "%.0f".format(value).toLong()
+            else "%.${s.accuracyDecimals}f".format(value).toDouble()
+        } else value
         val entityUid = uid(instanceId, s.key)
         val filter = filters.getOrPut(entityUid) { ValueFilter(resolveRule(d, s)) }
         if (filter.allow(rounded) != false) {
