@@ -27,11 +27,28 @@ object LiveEventLogger {
     private val _logFlow = MutableSharedFlow<LogEntry>(extraBufferCapacity = 500)
     val logFlow = _logFlow.asSharedFlow()
 
+    private val _logs = mutableListOf<LogEntry>()
+    val logs: List<LogEntry>
+        get() = synchronized(_logs) { ArrayList(_logs) }
+
     private val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
 
     fun log(type: LogType, message: String) {
         if (!isLiveActive) return
         val timestamp = dateFormat.format(Date())
-        _logFlow.tryEmit(LogEntry(timestamp, type, message))
+        val entry = LogEntry(timestamp, type, message)
+        synchronized(_logs) {
+            if (_logs.size >= 500) {
+                _logs.removeAt(0)
+            }
+            _logs.add(entry)
+        }
+        _logFlow.tryEmit(entry)
+    }
+
+    fun clearLogs() {
+        synchronized(_logs) {
+            _logs.clear()
+        }
     }
 }

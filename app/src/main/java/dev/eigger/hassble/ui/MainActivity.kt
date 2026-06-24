@@ -630,9 +630,6 @@ private fun GatewayTabContent(
     var isTestingConnection by remember { mutableStateOf(false) }
     var showClearOAuthDialog by remember { mutableStateOf(false) }
     val issueMessage = connectionIssueMessage(connectionIssue)
-    val gatewayId = remember {
-        android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "hassble"
-    }
 
     if (showClearOAuthDialog) {
         Dialog(onDismissRequest = { showClearOAuthDialog = false }) {
@@ -677,17 +674,6 @@ private fun GatewayTabContent(
                     ConnectionState.Disconnected -> stringResource(R.string.status_disconnected)
                 }, isHighlighted = connState == ConnectionState.Connected)
                 StatusRow(label = stringResource(R.string.gateway_model), value = Build.MODEL, isHighlighted = false)
-                StatusRow(
-                    label = stringResource(R.string.gateway_id_click_to_copy),
-                    value = gatewayId,
-                    isHighlighted = false,
-                    onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText("Gateway ID", gatewayId)
-                        clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, context.getString(R.string.gateway_id_copied), Toast.LENGTH_SHORT).show()
-                    }
-                )
                 if (issueMessage != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = issueMessage, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
@@ -1973,8 +1959,13 @@ private fun StatusBadge(isRunning: Boolean, connState: ConnectionState, connecti
 
 @Composable
 private fun LogsTabContent() {
+    val context = LocalContext.current
     var isLiveActive by remember { mutableStateOf(LiveEventLogger.isLiveActive) }
-    val logsList = remember { mutableStateListOf<LogEntry>() }
+    val logsList = remember {
+        mutableStateListOf<LogEntry>().apply {
+            addAll(LiveEventLogger.logs)
+        }
+    }
     var filterText by remember { mutableStateOf("") }
 
     LaunchedEffect(isLiveActive) {
@@ -2030,7 +2021,23 @@ private fun LogsTabContent() {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { logsList.clear() },
+                        onClick = {
+                            shareLogs(context, logsList)
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.08f),
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(stringResource(R.string.logs_share), fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = {
+                            logsList.clear()
+                            LiveEventLogger.clearLogs()
+                        },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color.White.copy(alpha = 0.08f),
                             contentColor = Color.White
@@ -2189,6 +2196,31 @@ private fun LogsTabContent() {
                 }
             }
         }
+    }
+}
+
+private fun shareLogs(context: Context, logs: List<LogEntry>) {
+    if (logs.isEmpty()) {
+        Toast.makeText(context, "No logs to share", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val logString = logs.joinToString("\n") { "[${it.timestamp}] [${it.type.name}] ${it.message}" }
+    try {
+        val file = java.io.File(context.cacheDir, "hassble_logs.txt")
+        file.writeText(logString)
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file
+        )
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, context.getString(R.string.logs_share)))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Failed to share logs: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
 
