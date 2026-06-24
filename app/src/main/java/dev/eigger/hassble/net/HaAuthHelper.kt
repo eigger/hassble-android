@@ -66,6 +66,17 @@ object HaAuthHelper {
         }
     }
 
+    fun isTokenExpiringSoon(token: String, thresholdMs: Long = 5 * 60 * 1000L): Boolean {
+        return try {
+            val payload = token.split(".").getOrNull(1) ?: return true
+            val decoded = String(android.util.Base64.decode(payload, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
+            val exp = org.json.JSONObject(decoded).getLong("exp") * 1000L
+            System.currentTimeMillis() > exp - thresholdMs
+        } catch (e: Exception) {
+            true
+        }
+    }
+
     fun refreshAccessToken(haUrl: String, refreshToken: String): Result<String> {
         val cleanUrl = haUrl.trimEnd('/')
         val url = "$cleanUrl/auth/token"
