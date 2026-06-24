@@ -173,8 +173,12 @@ class BleGatewayService : Service() {
                     }
                     runtime?.redeclareEntities()
                     // 성공적으로 선언 완료 → fingerprint 저장
-                    currentConfig?.let {
-                        runCatching { HassSettingsRepository(this@BleGatewayService).saveEntityFingerprints(it) }
+                    currentConfig?.let { cfg ->
+                        runCatching {
+                            HassSettingsRepository(this@BleGatewayService).saveEntityFingerprints(cfg)
+                        }.onFailure { e ->
+                            LiveEventLogger.log(LogType.LINK, "[Warning] Failed to save entity fingerprints: ${e.message}")
+                        }
                     }
                 }
             }

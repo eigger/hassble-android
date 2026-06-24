@@ -353,9 +353,11 @@ class HassSettingsRepository(private val context: Context) {
             json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), storedJson)
         }.getOrDefault(emptyMap())
 
+        // validate는 한 번만 실행 (O(n) → 루프 내에서 재호출 방지)
+        val issues = ConfigValidator.validate(config)
         return config.devices
             .filter { d ->
-                val current = ConfigValidator.computeEffectiveFingerprint(config, d.id)
+                val current = ConfigValidator.computeEffectiveFingerprint(d, issues)
                 storedMap[d.id] != current
             }
             .map { it.id }
@@ -363,9 +365,11 @@ class HassSettingsRepository(private val context: Context) {
     }
 
     suspend fun saveEntityFingerprints(config: GatewayConfig) {
+        // validate는 한 번만 실행
+        val issues = ConfigValidator.validate(config)
         context.dataStore.edit { prefs ->
             val newMap = config.devices.associate { d ->
-                d.id to ConfigValidator.computeEffectiveFingerprint(config, d.id)
+                d.id to ConfigValidator.computeEffectiveFingerprint(d, issues)
             }
             prefs[KEY_ENTITY_FINGERPRINTS] = json.encodeToString(
                 MapSerializer(String.serializer(), String.serializer()), newMap

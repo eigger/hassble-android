@@ -81,6 +81,8 @@ class BleRuntime(
     private val discoveredAdvInstances = java.util.concurrent.ConcurrentHashMap<String, DiscoveredAdvInstance>()
     private val lastSensorValues = java.util.concurrent.ConcurrentHashMap<String, SensorLastValue>()
     private var validationIssues: List<ValidationIssue> = emptyList()
+    // async HA cleanup 진행 중인 deviceId → 완료 전 apply()에서 재시작 방지
+    private val pendingHaCleanupIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     fun start() {
         ws.events.onEach(::onEvent).launchIn(scope)
@@ -194,6 +196,9 @@ class BleRuntime(
             val needsRestart = isNewDevice || configChanged || boundMacChanged || disabledChanged || autoConnectChanged || sensorsChanged
 
             if (needsRestart) {
+                // async HA cleanup이 진행 중인 device는 그 완료를 기다리지 않고 skip
+                // (이전 async 블록이 구 config로 startDevice를 호출하는 것을 방지)
+                if (deviceId in pendingHaCleanupIds) continue
                 stopDevice(deviceId)
                 if (deviceId !in disabledIds) {
                     val needsHaCleanup = configChanged && oldD != null &&
@@ -201,9 +206,14 @@ class BleRuntime(
                     if (needsHaCleanup) {
                         // 센서 platform/type이 바뀐 경우: HA 구 엔티티를 먼저 삭제 후 재선언
                         val capturedD = d
+                        pendingHaCleanupIds.add(capturedD.id)
                         scope.launch {
-                            runCatching { ws.removeEntitiesByDeviceIdPrefix(capturedD.id) }
-                            startDevice(capturedD)
+                            try {
+                                runCatching { ws.removeEntitiesByDeviceIdPrefix(capturedD.id) }
+                                startDevice(capturedD)
+                            } finally {
+                                pendingHaCleanupIds.remove(capturedD.id)
+                            }
                         }
                     } else {
                         startDevice(d)
@@ -570,6 +580,7 @@ class BleRuntime(
         lastSensorValues.clear()
         publishSensorValues()
 
+        pendingHaCleanupIds.clear()
         lastConfig = null
         lastEnabled = emptySet()
         lastBoundDevices = emptyMap()
