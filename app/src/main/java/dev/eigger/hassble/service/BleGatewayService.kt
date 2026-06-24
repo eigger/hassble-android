@@ -5,11 +5,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.os.BatteryManager
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import dev.eigger.hassble.R
@@ -51,28 +48,13 @@ class BleGatewayService : Service() {
     private var wsStateJob: Job? = null
     private var heartbeatJob: Job? = null
     private var settingsJob: Job? = null
-    private var currentBatteryLevel: Int = -1
     private var currentGitUrl: String = ""
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
 
-    private val batteryReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            intent?.let {
-                val level = it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-                val scale = it.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                if (level >= 0 && scale > 0) {
-                    currentBatteryLevel = (level * 100f / scale).toInt()
-                    publishGatewayStates(ws)
-                }
-            }
-        }
-    }
-
     override fun onCreate() {
         super.onCreate()
         _isServiceRunning.value = true
-        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         registerNetworkCallback()
         startForeground(NOTIF_ID, buildNotification())
     }
@@ -312,17 +294,14 @@ class BleGatewayService : Service() {
     private fun declareGatewayEntities(client: HaWsClient) {
         val phoneDevice = DeviceRef(gatewayId(), android.os.Build.MODEL)
         client.declareEntity(EntityMsg(
-            id = 0, uniqueId = "${gatewayId()}_connection", platform = "sensor",
+            id = 0, uniqueId = "${gatewayId()}_connection", platform = "binary_sensor",
             name = "Connection State", device = phoneDevice,
+            deviceClass = "connectivity", entityCategory = "diagnostic",
         ))
         client.declareEntity(EntityMsg(
-            id = 0, uniqueId = "${gatewayId()}_battery", platform = "sensor",
-            name = "Battery Level", device = phoneDevice,
-            deviceClass = "battery", unit = "%", stateClass = "measurement",
-        ))
-        client.declareEntity(EntityMsg(
-            id = 0, uniqueId = "${gatewayId()}_service_status", platform = "sensor",
+            id = 0, uniqueId = "${gatewayId()}_service_status", platform = "binary_sensor",
             name = "Service Status", device = phoneDevice,
+            deviceClass = "running", entityCategory = "diagnostic",
         ))
     }
 
@@ -330,20 +309,18 @@ class BleGatewayService : Service() {
         val c = client ?: return
         if (c.connectionState.value != ConnectionState.Connected) return
         c.sendStates(listOf(
-            "${gatewayId()}_connection" to "online",
-            "${gatewayId()}_battery" to if (currentBatteryLevel != -1) currentBatteryLevel else 100,
-            "${gatewayId()}_service_status" to "running",
+            "${gatewayId()}_connection" to "on",
+            "${gatewayId()}_service_status" to "on",
         ))
     }
 
     override fun onDestroy() {
         ws?.let { c ->
             c.sendStates(listOf(
-                "${gatewayId()}_connection" to "offline",
-                "${gatewayId()}_service_status" to "stopped",
+                "${gatewayId()}_connection" to "off",
+                "${gatewayId()}_service_status" to "off",
             ))
         }
-        unregisterReceiver(batteryReceiver)
         unregisterNetworkCallback()
         configJob?.cancel()
         settingsJob?.cancel()
