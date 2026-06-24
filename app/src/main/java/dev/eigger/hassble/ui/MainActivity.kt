@@ -121,10 +121,13 @@ import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.ConfigLoader
+import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.HassSettingsRepository
 import dev.eigger.hassble.config.ObdPresetStore
+import dev.eigger.hassble.config.ValidationIssue
+import dev.eigger.hassble.config.ValidationLevel
 import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
@@ -355,6 +358,10 @@ private fun HomeScreen() {
         repository.syncEnabledSensors(config)
     }
 
+    val validationIssues = remember(loadedConfig) {
+        loadedConfig?.let { ConfigValidator.validate(it) } ?: emptyList()
+    }
+
     val effectiveEnabledSensors = remember(loadedConfig, enabledSensors, enabledSensorsInitialized) {
         val configKeys = loadedConfig?.allSensorKeys().orEmpty()
         when {
@@ -501,6 +508,7 @@ private fun HomeScreen() {
                     isConfigLoading = isConfigLoading,
                     configError = configError,
                     loadedConfig = loadedConfig,
+                    validationIssues = validationIssues,
                     boundDevices = boundDevices,
                     enabledSensors = effectiveEnabledSensors,
                     disabledDeviceIds = disabledDeviceIds,
@@ -974,6 +982,7 @@ private fun SensorsTabContent(
     isConfigLoading: Boolean,
     configError: String?,
     loadedConfig: GatewayConfig?,
+    validationIssues: List<ValidationIssue> = emptyList(),
     boundDevices: Map<String, String>,
     enabledSensors: Set<String>,
     disabledDeviceIds: Set<String>,
@@ -1111,6 +1120,7 @@ private fun SensorsTabContent(
                     device = device,
                     boundMac = boundDevices[device.id],
                     enabledSensors = enabledSensors,
+                    validationIssues = validationIssues.filter { it.deviceId == device.id },
                     isRunning = isRunning,
                     isDisabled = device.id in disabledDeviceIds,
                     autoConnect = device.id !in autoConnectDisabledIds,
@@ -1164,6 +1174,7 @@ private fun DeviceConfigCard(
     device: DeviceConfig,
     boundMac: String?,
     enabledSensors: Set<String>,
+    validationIssues: List<ValidationIssue> = emptyList(),
     isRunning: Boolean,
     isDisabled: Boolean,
     autoConnect: Boolean,
@@ -1184,6 +1195,12 @@ private fun DeviceConfigCard(
         device.sensors.map { "${device.id}/${it.key}" }
     }
     val enabledCount = deviceSensorKeys.count { it in enabledSensors }
+    val errorSensorCount = remember(validationIssues) {
+        validationIssues.count { it.level == ValidationLevel.ERROR && it.sensorKey != null }
+    }
+    val warnSensorCount = remember(validationIssues) {
+        validationIssues.count { it.level == ValidationLevel.WARNING && it.sensorKey != null }
+    }
     var expanded by remember(device.id) { mutableStateOf(false) }
 
     Card(
@@ -1230,6 +1247,33 @@ private fun DeviceConfigCard(
                             color = if (enabledCount > 0) MaterialTheme.colorScheme.secondary else Color.Gray,
                             modifier = Modifier.padding(top = 4.dp),
                         )
+                        if (errorSensorCount > 0 || warnSensorCount > 0) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.padding(top = 4.dp),
+                            ) {
+                                if (errorSensorCount > 0) {
+                                    Text(
+                                        text = "$errorSensorCount error",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier
+                                            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                                if (warnSensorCount > 0) {
+                                    Text(
+                                        text = "$warnSensorCount warning",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFFFFB300),
+                                        modifier = Modifier
+                                            .background(Color(0xFFFFB300).copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                        }
                     }
                     if (device.source == Source.advertisement) {
                         Spacer(modifier = Modifier.height(6.dp))
@@ -1312,25 +1356,50 @@ private fun DeviceConfigCard(
                             val latest = sensorLastValues
                                 .filter { it.sensorKey == sensor.key }
                                 .maxByOrNull { it.updatedAtMs }
+                            val sensorIssues = validationIssues.filter { it.sensorKey == sensor.key }
+                            val hasError = sensorIssues.any { it.level == ValidationLevel.ERROR }
                             Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(
-                                        text = sensorDisplayLabel(sensor),
-                                        color = if (checked) Color.White else Color.Gray,
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.weight(1f),
-                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = sensorDisplayLabel(sensor),
+                                            color = when {
+                                                hasError -> MaterialTheme.colorScheme.error
+                                                checked -> Color.White
+                                                else -> Color.Gray
+                                            },
+                                            fontSize = 12.sp,
+                                        )
+                                        sensorIssues.forEach { issue ->
+                                            val isErr = issue.level == ValidationLevel.ERROR
+                                            Text(
+                                                text = "${if (isErr) "⚠ ERROR" else "⚠ WARN"}: ${issue.message}",
+                                                color = if (isErr) MaterialTheme.colorScheme.error
+                                                        else Color(0xFFFFB300),
+                                                fontSize = 10.sp,
+                                                modifier = Modifier
+                                                    .padding(top = 2.dp)
+                                                    .background(
+                                                        color = if (isErr) MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                                                                else Color(0xFFFFB300).copy(alpha = 0.12f),
+                                                        shape = RoundedCornerShape(4.dp),
+                                                    )
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                            )
+                                        }
+                                    }
                                     Switch(
                                         checked = checked,
                                         onCheckedChange = { onSensorToggle(sensorKey, it) },
                                         enabled = !isRunning,
                                         colors = SwitchDefaults.colors(
                                             checkedThumbColor = Color.Black,
-                                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                            checkedTrackColor = if (hasError) MaterialTheme.colorScheme.error
+                                                                else MaterialTheme.colorScheme.primary,
                                         ),
                                     )
                                 }
