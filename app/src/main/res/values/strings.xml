@@ -13,7 +13,6 @@
     <string name="gateway_model">Gateway Model</string>
     <string name="server_integration_settings">Server &amp; Integration Settings</string>
     <string name="long_lived_token">Long-lived Access Token</string>
-    <string name="git_config_url">Config Git URL (raw YAML)</string>
     <string name="git_token_optional">Git Access Token (Optional)</string>
     <string name="devices_adapters_list">Devices &amp; Adapters</string>
     <string name="config_load_error">Cannot load configuration:\n%1$s</string>
@@ -24,7 +23,6 @@
     <string name="source_advertisement">Passive Scan</string>
     <string name="source_gatt_notify">GATT Connection</string>
     <string name="source_obd">OBD Polling</string>
-    <string name="sensor_list">Sensor List:</string>
     <string name="auto_detecting">Auto-detecting</string>
     <string name="bound_in_config">Fixed in Config (MAC: %1$s)</string>
     <string name="connected_mac">Connected: %1$s</string>
@@ -62,8 +60,6 @@
     <string name="status_badge_connecting">Connecting</string>
     <string name="status_badge_error">Error</string>
     <string name="sensor_edit_locked_running">Stop gateway to edit enabled sensors.</string>
-    <string name="instance_mode_mac">Instance mode: per MAC</string>
-    <string name="instance_mode_shared">Instance mode: shared entity</string>
     <string name="adv_reg_mac_per_device">Per-MAC entity</string>
     <string name="adv_reg_fixed_mac">Fixed MAC (%1$s)</string>
     <string name="adv_reg_shared">Shared entity</string>
@@ -73,7 +69,6 @@
     <string name="adv_instance_entity_id">Entity: %1$s</string>
     <string name="adv_instance_mac_based">MAC-based</string>
     <string name="adv_instance_not_mac_based">Not MAC-based</string>
-    <string name="sensor_last_values">Last values</string>
     <string name="sensor_no_data">No data yet</string>
     <string name="sensor_value_updated">%1$s · %2$s</string>
     <string name="discovered_devices_waiting">Start gateway to discover BLE advertisers.</string>
@@ -148,10 +143,10 @@
     <string name="notif_auth_failed">Auth failed — check token</string>
     <string name="notif_bridge_timeout">ws_bridge not responding</string>
     <string name="notif_config_error">Config load failed</string>
-    <string name="settings_saved">Settings saved</string>
     <string name="tab_logs">Logs</string>
     <string name="live_logs_enable">Live Logs</string>
     <string name="logs_clear">Clear</string>
+    <string name="logs_share">Share</string>
     <string name="logs_filter_placeholder">Filter logs (e.g. MAC, mfr ID, OBD…)</string>
     <string name="oauth_login_btn">HA OAuth Login</string>
     <string name="ha_url_required_toast">Please enter HA URL first.</string>
@@ -180,8 +175,6 @@
     <string name="time_just_now">Just now</string>
     <string name="time_minutes_ago">%1$d mins ago</string>
     <string name="time_hours_ago">%1$d hours ago</string>
-    <string name="gateway_id_click_to_copy">Gateway ID (Click to copy)</string>
-    <string name="gateway_id_copied">Gateway ID copied to clipboard.</string>
     <string name="ble_scan_mode">BLE Scan Mode</string>
     <string name="scan_mode_low_power">Power Saving (Unstable advertisement reception)</string>
     <string name="scan_mode_balanced">Balanced</string>

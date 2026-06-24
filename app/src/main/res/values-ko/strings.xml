@@ -13,7 +13,6 @@
     <string name="gateway_model">게이트웨이 모델</string>
     <string name="server_integration_settings">서버 및 연동 설정</string>
     <string name="long_lived_token">장기 액세스 토큰</string>
-    <string name="git_config_url">설정 git URL (raw YAML)</string>
     <string name="git_token_optional">Git 액세스 토큰 (선택)</string>
     <string name="devices_adapters_list">기기 및 어댑터 리스트</string>
     <string name="config_load_error">설정을 로드할 수 없습니다:\n%1$s</string>
@@ -24,7 +23,6 @@
     <string name="source_advertisement">광고 수신</string>
     <string name="source_gatt_notify">GATT 연결</string>
     <string name="source_obd">OBD 폴링</string>
-    <string name="sensor_list">센서 목록:</string>
     <string name="auto_detecting">자동 탐색 수집 중</string>
     <string name="bound_in_config">설정에 고정됨 (MAC: %1$s)</string>
     <string name="connected_mac">연결됨: %1$s</string>
@@ -62,8 +60,6 @@
     <string name="status_badge_connecting">연결 중</string>
     <string name="status_badge_error">오류</string>
     <string name="sensor_edit_locked_running">활성 센서를 수정하려면 게이트웨이를 먼저 정지하세요.</string>
-    <string name="instance_mode_mac">인스턴스 모드: MAC별</string>
-    <string name="instance_mode_shared">인스턴스 모드: 공유 엔티티</string>
     <string name="adv_reg_mac_per_device">MAC별 엔티티</string>
     <string name="adv_reg_fixed_mac">고정 MAC (%1$s)</string>
     <string name="adv_reg_shared">공유 엔티티</string>
@@ -73,7 +69,6 @@
     <string name="adv_instance_entity_id">엔티티: %1$s</string>
     <string name="adv_instance_mac_based">MAC 기반</string>
     <string name="adv_instance_not_mac_based">MAC 기반 아님</string>
-    <string name="sensor_last_values">마지막 값</string>
     <string name="sensor_no_data">아직 데이터 없음</string>
     <string name="sensor_value_updated">%1$s · %2$s</string>
     <string name="discovered_devices_waiting">게이트웨이를 시작하면 BLE 광고 기기를 탐지합니다.</string>
@@ -141,10 +136,10 @@
     <string name="notif_auth_failed">인증 실패 — 토큰 확인</string>
     <string name="notif_bridge_timeout">ws_bridge 응답 없음</string>
     <string name="notif_config_error">설정 로드 실패</string>
-    <string name="settings_saved">설정이 저장되었습니다</string>
     <string name="tab_logs">로그</string>
     <string name="live_logs_enable">라이브 활성화</string>
     <string name="logs_clear">지우기</string>
+    <string name="logs_share">공유</string>
     <string name="logs_filter_placeholder">로그 필터 (예: 맥주소, 제조사 번호, OBD…)</string>
     <string name="oauth_login_btn">HA OAuth 로그인</string>
     <string name="ha_url_required_toast">HA URL을 먼저 입력해주세요.</string>
@@ -173,8 +168,6 @@
     <string name="time_just_now">방금 전</string>
     <string name="time_minutes_ago">%1$d분 전</string>
     <string name="time_hours_ago">%1$d시간 전</string>
-    <string name="gateway_id_click_to_copy">게이트웨이 ID (클릭하여 복사)</string>
-    <string name="gateway_id_copied">게이트웨이 ID가 복사되었습니다.</string>
     <string name="ble_scan_mode">BLE 스캔 모드</string>
     <string name="scan_mode_low_power">절전 (광고 수신 불안정)</string>
     <string name="scan_mode_balanced">균형</string>
