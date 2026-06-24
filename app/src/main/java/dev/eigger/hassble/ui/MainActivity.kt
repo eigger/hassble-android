@@ -64,6 +64,7 @@ import dev.eigger.hassble.service.LogEntry
 import dev.eigger.hassble.service.LogType
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.foundation.BorderStroke
