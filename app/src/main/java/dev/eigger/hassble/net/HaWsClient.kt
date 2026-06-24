@@ -125,7 +125,19 @@ class HaWsClient(
         if (isClosedManually) return
         if (_connectionState.value == ConnectionState.Disconnected) {
             reconnectDelayMs = 500L
-            connect()
+            scope.launch {
+                if (!refreshToken.isNullOrBlank()) {
+                    val result = withContext(Dispatchers.IO) {
+                        HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
+                    }
+                    if (result.isSuccess) {
+                        val newToken = result.getOrThrow()
+                        token = newToken
+                        onTokenRefreshed?.invoke(newToken)
+                    }
+                }
+                connect()
+            }
         }
     }
 
