@@ -79,11 +79,16 @@ object ConfigValidator {
             }
 
             // decode 범위 검증
-            if (s.decode != null && s.minLength != null) {
+            if (s.decode != null) {
                 val required = s.decode.offset + s.decode.length
-                if (required > s.minLength)
+                if (s.minLength != null && required > s.minLength) {
                     issues += ValidationIssue(ValidationLevel.ERROR, id, key,
                         "decode(offset=${s.decode.offset} + length=${s.decode.length}=$required) exceeds min_length=${s.minLength}")
+                }
+                if (s.length != null && required > s.length) {
+                    issues += ValidationIssue(ValidationLevel.ERROR, id, key,
+                        "decode(offset=${s.decode.offset} + length=${s.decode.length}=$required) exceeds length=${s.length}")
+                }
             }
 
             // OBD 센서는 pid가 있어야 폴링 가능

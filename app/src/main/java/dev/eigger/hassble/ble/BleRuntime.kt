@@ -456,8 +456,12 @@ class BleRuntime(
                 for (s in d.sensors) {
                     if (!isEnabled(d.id, s.key) || s.decode == null) continue
                     val bytes = advertisementPayloadBytes(r, s.sourceField) ?: continue
-                    val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
-                    if (bytes.size < minLen) continue
+                    if (s.length != null) {
+                        if (bytes.size != s.length) continue
+                    } else {
+                        val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
+                        if (bytes.size < minLen) continue
+                    }
                     emit(d, instanceId, s, Decoder.decodeStructured(bytes, s.decode), out)
                 }
             }
@@ -473,8 +477,12 @@ class BleRuntime(
                 onLinkDataReceived(d.id, System.currentTimeMillis())
                 for (s in d.sensors) {
                     if (!isEnabled(d.id, s.key) || s.decode == null) continue
-                    val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
-                    if (bytes.size < minLen) continue
+                    if (s.length != null) {
+                        if (bytes.size != s.length) continue
+                    } else {
+                        val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
+                        if (bytes.size < minLen) continue
+                    }
                     emit(d, d.id, s, Decoder.decodeStructured(bytes, s.decode), out)
                 }
             }

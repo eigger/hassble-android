@@ -29,4 +29,20 @@ class EntityMsgSerializationTest {
         )
         assertTrue(text.contains("\"type\":\"ws_bridge/entity\""))
     }
+
+    @Test
+    fun `entity message includes icon when present`() {
+        val text = json.encodeToString(
+            EntityMsg.serializer(),
+            EntityMsg(
+                id = 2,
+                uniqueId = "parking_floor",
+                platform = "sensor",
+                name = "Parking Floor",
+                icon = "mdi:layers-outline",
+            ),
+        )
+        assertTrue(text.contains("\"icon\":\"mdi:layers-outline\""))
+    }
 }
+

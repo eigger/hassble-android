@@ -83,6 +83,7 @@ data class SensorConfig(
     @SerialName("accuracy_decimals") val accuracyDecimals: Int? = null,
     // advertisement / gatt_notify
     @SerialName("source_field") val sourceField: SourceField = SourceField.raw,
+    val length: Int? = null,
     @SerialName("min_length") val minLength: Int? = null,
     val decode: DecodeConfig? = null,
     // obd
