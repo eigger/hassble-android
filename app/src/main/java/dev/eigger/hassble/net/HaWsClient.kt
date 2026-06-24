@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import dev.eigger.hassble.BuildConfig
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
@@ -289,6 +290,16 @@ class HaWsClient(
         scope.launch {
             delay(reconnectDelayMs)
             reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
+            if (!refreshToken.isNullOrBlank()) {
+                val result = withContext(Dispatchers.IO) {
+                    HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
+                }
+                if (result.isSuccess) {
+                    val newToken = result.getOrThrow()
+                    token = newToken
+                    onTokenRefreshed?.invoke(newToken)
+                }
+            }
             connect()
         }
     }
