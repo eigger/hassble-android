@@ -195,9 +195,19 @@ class BleRuntime(
 
             if (needsRestart) {
                 stopDevice(deviceId)
-                // 만약 disabledIds에 들어가 있다면 새로 시작하지 않고 disconnected 상태를 유지
                 if (deviceId !in disabledIds) {
-                    startDevice(d)
+                    val needsHaCleanup = configChanged && oldD != null &&
+                            ConfigValidator.hasSensorStructureChange(oldD, d)
+                    if (needsHaCleanup) {
+                        // 센서 platform/type이 바뀐 경우: HA 구 엔티티를 먼저 삭제 후 재선언
+                        val capturedD = d
+                        scope.launch {
+                            runCatching { ws.removeEntitiesByDeviceIdPrefix(capturedD.id) }
+                            startDevice(capturedD)
+                        }
+                    } else {
+                        startDevice(d)
+                    }
                 }
             }
         }

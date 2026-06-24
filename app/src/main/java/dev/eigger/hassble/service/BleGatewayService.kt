@@ -15,6 +15,7 @@ import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.ConfigLoader
+import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.HassSettingsRepository
 import dev.eigger.hassble.config.ObdPresetStore
@@ -51,6 +52,7 @@ class BleGatewayService : Service() {
     private var currentGitUrl: String = ""
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
+    @Volatile private var pendingEntityCleanupDeviceIds: Set<String> = emptySet()
 
     override fun onCreate() {
         super.onCreate()
@@ -159,6 +161,16 @@ class BleGatewayService : Service() {
                 client.bridgeConnected.collect {
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
+                    // 구조적으로 변경된 디바이스의 HA 엔티티를 먼저 제거 후 재선언
+                    val cleanupIds = pendingEntityCleanupDeviceIds
+                    if (cleanupIds.isNotEmpty()) {
+                        pendingEntityCleanupDeviceIds = emptySet()
+                        for (deviceId in cleanupIds) {
+                            runCatching { ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
+                        }
+                        LiveEventLogger.log(LogType.LINK,
+                            "Refreshed HA entities for: ${cleanupIds.joinToString()}")
+                    }
                     runtime?.redeclareEntities()
                 }
             }
@@ -196,12 +208,13 @@ class BleGatewayService : Service() {
                 assets.open("obd_presets.yaml").bufferedReader().readText(),
             )
             val loader = ConfigLoader(File(filesDir, "config_cache"), presets)
+            val cachedConfig = runCatching { loader.loadCache(currentGitUrl) }.getOrNull()
             val fetch = loader.load(currentGitUrl, currentGitToken)
             val config = if (fetch.isSuccess) {
                 fetch.getOrNull()
             } else {
                 _usingCachedConfig.value = true
-                loader.loadCache(currentGitUrl)
+                cachedConfig
             }
 
             if (config == null) {
@@ -209,6 +222,16 @@ class BleGatewayService : Service() {
                     ?: getString(R.string.service_config_load_failed)
                 updateNotification()
                 return@launch
+            }
+
+            // 새로 다운로드한 config가 캐시와 다른 경우, 구조적 변경 감지
+            if (fetch.isSuccess && cachedConfig != null && cachedConfig != config) {
+                val changed = ConfigValidator.structurallyChangedDeviceIds(cachedConfig, config)
+                if (changed.isNotEmpty()) {
+                    pendingEntityCleanupDeviceIds = changed
+                    LiveEventLogger.log(LogType.LINK,
+                        "Config structural change detected for: ${changed.joinToString()} — HA entities will be refreshed")
+                }
             }
 
             currentConfig = config

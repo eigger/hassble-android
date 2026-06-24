@@ -125,4 +125,29 @@ object ConfigValidator {
     fun errorKeys(issues: List<ValidationIssue>, deviceId: String): Set<String> =
         issues.filter { it.level == ValidationLevel.ERROR && it.deviceId == deviceId && it.sensorKey != null }
             .mapNotNull { it.sensorKey }.toSet()
+
+    /**
+     * 센서/컨트롤의 구조적 변경(platform/type 변경, 항목 삭제) 여부 반환.
+     * HA 엔티티 타입 불일치가 예상될 때 true → 기존 HA 엔티티를 삭제하고 재선언해야 함.
+     */
+    fun hasSensorStructureChange(oldD: DeviceConfig, newD: DeviceConfig): Boolean {
+        val oldSensors = oldD.sensors.associateBy { it.key }
+        val newSensors = newD.sensors.associateBy { it.key }
+        if ((oldSensors.keys - newSensors.keys).isNotEmpty()) return true
+        if (newSensors.any { (key, s) -> oldSensors[key]?.platform != s.platform }) return true
+        val oldControls = oldD.controls.associateBy { it.key }
+        val newControls = newD.controls.associateBy { it.key }
+        if ((oldControls.keys - newControls.keys).isNotEmpty()) return true
+        if (newControls.any { (key, c) -> oldControls[key]?.type != c.type }) return true
+        return false
+    }
+
+    /** oldConfig → newConfig 변환에서 HA 엔티티 구조가 바뀐 device ID 집합을 반환. */
+    fun structurallyChangedDeviceIds(oldConfig: GatewayConfig, newConfig: GatewayConfig): Set<String> {
+        val oldMap = oldConfig.devices.associateBy { it.id }
+        return newConfig.devices
+            .filter { newD -> oldMap[newD.id]?.let { hasSensorStructureChange(it, newD) } == true }
+            .map { it.id }
+            .toSet()
+    }
 }
