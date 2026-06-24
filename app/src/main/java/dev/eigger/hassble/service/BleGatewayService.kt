@@ -161,7 +161,7 @@ class BleGatewayService : Service() {
                 client.bridgeConnected.collect {
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
-                    // 구조적으로 변경된 디바이스의 HA 엔티티를 먼저 제거 후 재선언
+                    // 선언 내용이 바뀐 device의 HA 엔티티를 먼저 제거 후 재선언
                     val cleanupIds = pendingEntityCleanupDeviceIds
                     if (cleanupIds.isNotEmpty()) {
                         pendingEntityCleanupDeviceIds = emptySet()
@@ -172,6 +172,10 @@ class BleGatewayService : Service() {
                             "Refreshed HA entities for: ${cleanupIds.joinToString()}")
                     }
                     runtime?.redeclareEntities()
+                    // 성공적으로 선언 완료 → fingerprint 저장
+                    currentConfig?.let {
+                        runCatching { HassSettingsRepository(this@BleGatewayService).saveEntityFingerprints(it) }
+                    }
                 }
             }
             combine(client.connectionState, client.connectionIssue) { state, issue ->
@@ -224,29 +228,18 @@ class BleGatewayService : Service() {
                 return@launch
             }
 
-            // ─── 엔티티 선언 버전 migration ────────────────────────────────────────
-            // 앱의 선언 동작이 바뀌었을 때 기존 HA 엔티티를 한 번 삭제 후 재선언
-            val prefs = getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
-            val lastDeclVersion = prefs.getInt(PREF_DECL_VERSION, 0)
-            if (lastDeclVersion < ENTITY_DECLARATION_VERSION) {
-                val allDeviceIds = config.devices.map { it.id }.toSet()
-                pendingEntityCleanupDeviceIds = allDeviceIds
-                prefs.edit().putInt(PREF_DECL_VERSION, ENTITY_DECLARATION_VERSION).apply()
-                LiveEventLogger.log(LogType.LINK,
-                    "Entity declaration version migrated ($lastDeclVersion → $ENTITY_DECLARATION_VERSION) — HA entities will be refreshed for: ${allDeviceIds.joinToString()}")
-            } else if (fetch.isSuccess && cachedConfig != null && cachedConfig != config) {
-                // 새로 다운로드한 config가 캐시와 다른 경우, 구조적 변경 감지
-                val changed = ConfigValidator.structurallyChangedDeviceIds(cachedConfig, config)
-                if (changed.isNotEmpty()) {
-                    pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + changed
-                    LiveEventLogger.log(LogType.LINK,
-                        "Config structural change detected for: ${changed.joinToString()} — HA entities will be refreshed")
-                }
-            }
-
             currentConfig = config
             val defaultEnabled = defaultEnabled(config)
             val repository = HassSettingsRepository(applicationContext)
+
+            // ─── HA 엔티티 fingerprint 비교 ────────────────────────────────────────
+            // config 변경 또는 앱 선언 방식 변경 시 해당 device의 HA 엔티티 자동 cleanup
+            val changed = repository.getChangedDeviceIds(config)
+            if (changed.isNotEmpty()) {
+                pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + changed
+                LiveEventLogger.log(LogType.LINK,
+                    "Entity declaration changed for: ${changed.joinToString()} — HA entities will be refreshed")
+            }
 
             val newConfigIds = config.devices.map { it.id }.toSet()
             val removedIds = repository.getRemovedDeviceIds(newConfigIds)
@@ -495,10 +488,6 @@ class BleGatewayService : Service() {
         private const val EXTRA_AUTO_CONNECT = "auto_connect"
         private const val ACTION_CONNECT_DEVICE = "dev.eigger.hassble.CONNECT_DEVICE"
         private const val ACTION_DISCONNECT_DEVICE = "dev.eigger.hassble.DISCONNECT_DEVICE"
-        // 앱의 HA 엔티티 선언 방식이 바뀔 때 이 값을 올리면 기존 HA 엔티티를 한 번 삭제 후 재선언 (one-time migration)
-        private const val ENTITY_DECLARATION_VERSION = 2
-        private const val PREF_DECL_VERSION = "entity_decl_version"
-        private const val PREF_FILE = "hassble_decl"
 
         private val _serviceConnectionState = MutableStateFlow(ConnectionState.Disconnected)
         val serviceConnectionState: StateFlow<ConnectionState> = _serviceConnectionState.asStateFlow()

@@ -150,4 +150,25 @@ object ConfigValidator {
             .map { it.id }
             .toSet()
     }
+
+    /**
+     * 특정 device의 실제 HA 선언 내용(platform, unit, stateClass 등 앱이 보정 후 보내는 값)을
+     * 문자열 fingerprint로 반환. 이전 fingerprint와 다르면 HA 엔티티 cleanup이 필요.
+     */
+    fun computeEffectiveFingerprint(config: GatewayConfig, deviceId: String): String {
+        val d = config.devices.firstOrNull { it.id == deviceId } ?: return ""
+        val issues = validate(config)
+        val errKeys = errorKeys(issues, deviceId)
+        val sb = StringBuilder()
+        for (s in d.sensors) {
+            if (s.key in errKeys) continue
+            val isText = s.platform == "text_sensor"
+            sb.append("S|${s.key}|${s.platform}|${if (isText) null else s.unit}|${if (isText) null else s.stateClass}|${s.deviceClass}|${s.accuracyDecimals}\n")
+        }
+        for (c in d.controls) {
+            if (c.key in errKeys) continue
+            sb.append("C|${c.key}|${c.type}\n")
+        }
+        return sb.toString()
+    }
 }
