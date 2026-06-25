@@ -25,7 +25,7 @@ object ConfigValidator {
         return if (field != null) "$base.$field" else base
     }
 
-    private val validStatClasses = setOf("measurement", "total", "total_increasing")
+    private val validStatClasses = setOf("measurement", "measurement_angle", "total", "total_increasing")
     private val numericDeviceClasses = setOf(
         "battery", "carbon_dioxide", "carbon_monoxide", "current", "distance",
         "duration", "energy", "frequency", "gas", "humidity", "illuminance",

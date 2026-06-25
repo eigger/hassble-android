@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -81,6 +80,7 @@ import dev.eigger.hassble.config.DataType
 import dev.eigger.hassble.config.DecodeConfig
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.Endian
+import dev.eigger.hassble.config.HaSensorOptions
 import dev.eigger.hassble.config.SourceField
 import dev.eigger.hassble.decode.Decoder
 
@@ -439,6 +439,7 @@ private fun AdvEditStep(
     val sensors = remember { mutableStateListOf<AdvDeviceBuilder.SensorDraft>() }
 
     var sensorKey by remember { mutableStateOf("value") }
+    var platform by remember { mutableStateOf("sensor") }
     var sourceField by remember { mutableStateOf(AdvDeviceBuilder.defaultSourceField(capture)) }
     var offset by remember { mutableIntStateOf(0) }
     var length by remember { mutableIntStateOf(2) }
@@ -447,6 +448,40 @@ private fun AdvEditStep(
     var scaleText by remember { mutableStateOf("0.1") }
     var unit by remember { mutableStateOf("") }
     var deviceClass by remember { mutableStateOf("") }
+    var stateClass by remember { mutableStateOf("measurement") }
+    var minLengthManual by remember { mutableStateOf(false) }
+    var minLengthText by remember { mutableStateOf("") }
+    var exactLengthText by remember { mutableStateOf("") }
+
+    LaunchedEffect(dataType) {
+        length = defaultDecodeLength(dataType)
+        when (dataType) {
+            DataType.string -> {
+                platform = "text_sensor"
+                deviceClass = ""
+                stateClass = ""
+            }
+            DataType.timestamp -> {
+                platform = "sensor"
+                deviceClass = HaSensorOptions.defaultDeviceClass(dataType)
+                stateClass = ""
+            }
+            else -> {
+                if (platform == "text_sensor") platform = "sensor"
+                if (deviceClass in setOf("timestamp", "date", "uptime")) deviceClass = ""
+                if (stateClass.isBlank()) stateClass = "measurement"
+            }
+        }
+    }
+
+    LaunchedEffect(offset, length, dataType, minLengthManual) {
+        if (!minLengthManual) {
+            minLengthText = (offset + length).toString()
+        }
+    }
+
+    val isNumericDecode = dataType !in setOf(DataType.timestamp, DataType.string)
+    val decodeLengthEditable = dataType == DataType.string
 
     val match = remember(capture, useNamePrefix, fixMacInMatch) {
         val base = AdvDeviceBuilder.suggestMatch(capture, useNamePrefix)
@@ -509,8 +544,17 @@ private fun AdvEditStep(
         Text(stringResource(R.string.adv_wizard_sensors_added, sensors.size), fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Color.White)
         sensors.forEachIndexed { index, s ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                val minLabel = s.minLength?.toString()
+                    ?: (s.decode.offset + s.decode.length).toString()
                 Text(
-                    "${s.key}: off=${s.decode.offset} len=${s.decode.length} ${s.decode.type.name}",
+                    stringResource(
+                        R.string.adv_wizard_sensor_line,
+                        s.key,
+                        s.decode.type.name,
+                        s.decode.offset,
+                        s.decode.length,
+                        minLabel,
+                    ) + if (s.platform == "text_sensor") " · text" else "",
                     modifier = Modifier.weight(1f),
                     fontSize = 11.sp,
                     color = Color.LightGray,
@@ -533,6 +577,8 @@ private fun AdvEditStep(
 
         SourceFieldDropdown(sourceField) { sourceField = it }
 
+        PlatformDropdown(platform, enabled = dataType != DataType.timestamp) { platform = it }
+
         payloadHex?.let { hex ->
             Text(stringResource(R.string.adv_wizard_tap_offset), fontSize = 10.sp, color = Color.Gray)
             HexBytePicker(
@@ -551,37 +597,92 @@ private fun AdvEditStep(
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
-            LengthDropdown(length, onSelected = { length = it }, modifier = Modifier.weight(1f))
+            if (decodeLengthEditable) {
+                OutlinedTextField(
+                    value = length.toString(),
+                    onValueChange = { length = it.toIntOrNull()?.coerceIn(1, 64) ?: 1 },
+                    label = { Text(stringResource(R.string.adv_wizard_decode_length)) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                OutlinedTextField(
+                    value = length.toString(),
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = false,
+                    label = { Text(stringResource(R.string.adv_wizard_decode_length)) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             DataTypeDropdown(dataType, onSelected = { dataType = it }, modifier = Modifier.weight(1f))
-            EndianDropdown(endian, onSelected = { endian = it }, modifier = Modifier.weight(1f))
+            if (isNumericDecode) {
+                EndianDropdown(endian, onSelected = { endian = it }, modifier = Modifier.weight(1f))
+            }
         }
 
-        OutlinedTextField(
-            value = scaleText,
-            onValueChange = { scaleText = it },
-            label = { Text(stringResource(R.string.adv_wizard_scale)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = unit,
-            onValueChange = { unit = it },
-            label = { Text(stringResource(R.string.adv_wizard_unit)) },
-            placeholder = { Text("°C, %, …", color = Color.Gray) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = deviceClass,
-            onValueChange = { deviceClass = it },
-            label = { Text(stringResource(R.string.adv_wizard_device_class)) },
-            placeholder = { Text("temperature, humidity, …", color = Color.Gray) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = minLengthText,
+                onValueChange = {
+                    minLengthManual = true
+                    minLengthText = it.filter { ch -> ch.isDigit() }
+                },
+                label = { Text(stringResource(R.string.adv_wizard_min_length)) },
+                placeholder = { Text(stringResource(R.string.adv_wizard_auto_min_length), color = Color.Gray) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = exactLengthText,
+                onValueChange = { exactLengthText = it.filter { ch -> ch.isDigit() } },
+                label = { Text(stringResource(R.string.adv_wizard_exact_length)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Text(stringResource(R.string.adv_wizard_min_length_hint), fontSize = 10.sp, color = Color.Gray)
+        if (exactLengthText.isNotBlank()) {
+            Text(stringResource(R.string.adv_wizard_exact_length_hint), fontSize = 10.sp, color = Color.Gray)
+        }
+
+        if (isNumericDecode) {
+            OutlinedTextField(
+                value = scaleText,
+                onValueChange = { scaleText = it },
+                label = { Text(stringResource(R.string.adv_wizard_scale)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = unit,
+                onValueChange = { unit = it },
+                label = { Text(stringResource(R.string.adv_wizard_unit)) },
+                placeholder = { Text("°C, %, …", color = Color.Gray) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            HaDeviceClassDropdown(
+                selected = deviceClass,
+                dataType = dataType,
+                platform = platform,
+                onSelected = { deviceClass = it },
+                modifier = Modifier.weight(1f),
+            )
+            HaStateClassDropdown(
+                selected = stateClass,
+                dataType = dataType,
+                platform = platform,
+                onSelected = { stateClass = it },
+                modifier = Modifier.weight(1f),
+            )
+        }
 
         previewDecode?.let {
             Text(
@@ -597,21 +698,34 @@ private fun AdvEditStep(
             onClick = {
                 val scale = scaleText.toDoubleOrNull() ?: 1.0
                 val key = sensorKey.trim().ifBlank { "value_${sensors.size + 1}" }
+                val effectivePlatform = when {
+                    dataType == DataType.string -> "text_sensor"
+                    platform == "text_sensor" && dataType != DataType.string -> "sensor"
+                    else -> platform
+                }
+                val parsedMin = minLengthText.toIntOrNull()
+                    ?: (offset + length)
                 sensors += AdvDeviceBuilder.SensorDraft(
                     key = key,
+                    platform = effectivePlatform,
                     sourceField = sourceField,
                     decode = DecodeConfig(
                         offset = offset,
                         length = length,
                         type = dataType,
                         endian = endian,
-                        scale = scale,
+                        scale = if (isNumericDecode) scale else 1.0,
                     ),
                     deviceClass = deviceClass.takeIf { it.isNotBlank() },
-                    unit = unit.takeIf { it.isNotBlank() },
-                    accuracyDecimals = if (scale != 1.0) 1 else null,
+                    unit = if (effectivePlatform == "text_sensor") null else unit.takeIf { it.isNotBlank() },
+                    stateClass = if (effectivePlatform == "text_sensor") null else stateClass.takeIf { it.isNotBlank() },
+                    accuracyDecimals = if (isNumericDecode && scale != 1.0) 1 else null,
+                    minLength = parsedMin,
+                    exactLength = exactLengthText.toIntOrNull(),
                 )
                 sensorKey = "value_${sensors.size + 1}"
+                minLengthManual = false
+                exactLengthText = ""
             },
             modifier = Modifier.fillMaxWidth(),
         )
@@ -639,7 +753,7 @@ private fun AdvEditStep(
 }
 
 @Composable
-private fun MatchChip(text: String) {
+internal fun MatchChip(text: String) {
     Text(
         text = text,
         fontSize = 10.sp,
@@ -694,7 +808,7 @@ private fun HexBytePicker(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SourceFieldDropdown(selected: SourceField, onSelected: (SourceField) -> Unit) {
+internal fun SourceFieldDropdown(selected: SourceField, onSelected: (SourceField) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val labels = mapOf(
         SourceField.manufacturer_data to stringResource(R.string.adv_wizard_field_manufacturer),
@@ -723,13 +837,63 @@ private fun SourceFieldDropdown(selected: SourceField, onSelected: (SourceField)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DataTypeDropdown(
+internal fun PlatformDropdown(
+    selected: String,
+    enabled: Boolean = true,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = listOf("sensor" to R.string.adv_wizard_platform_sensor, "text_sensor" to R.string.adv_wizard_platform_text)
+    ExposedDropdownMenuBox(expanded = expanded && enabled, onExpandedChange = { if (enabled) expanded = it }) {
+        OutlinedTextField(
+            value = stringResource(
+                options.firstOrNull { it.first == selected }?.second ?: R.string.adv_wizard_platform_sensor,
+            ),
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            label = { Text(stringResource(R.string.adv_wizard_platform)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, labelRes) ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(labelRes)) },
+                    onClick = { onSelected(value); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+internal fun defaultDecodeLength(type: DataType): Int = when (type) {
+    DataType.timestamp -> 4
+    DataType.uint8, DataType.int8 -> 1
+    DataType.int16, DataType.uint16 -> 2
+    DataType.int32, DataType.uint32, DataType.float32 -> 4
+    DataType.string -> 2
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun DataTypeDropdown(
     selected: DataType,
     onSelected: (DataType) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val options = listOf(DataType.uint8, DataType.int16, DataType.uint16, DataType.int32, DataType.uint32, DataType.float32)
+    val options = listOf(
+        DataType.uint8,
+        DataType.int8,
+        DataType.int16,
+        DataType.uint16,
+        DataType.int32,
+        DataType.uint32,
+        DataType.float32,
+        DataType.timestamp,
+        DataType.string,
+    )
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
         OutlinedTextField(
             value = selected.name,
@@ -749,7 +913,7 @@ private fun DataTypeDropdown(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EndianDropdown(
+internal fun EndianDropdown(
     selected: Endian,
     onSelected: (Endian) -> Unit,
     modifier: Modifier = Modifier,
@@ -767,32 +931,6 @@ private fun EndianDropdown(
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             Endian.entries.forEach { e ->
                 DropdownMenuItem(text = { Text(e.name) }, onClick = { onSelected(e); expanded = false })
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RowScope.LengthDropdown(
-    selected: Int,
-    onSelected: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val options = listOf(1, 2, 4)
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
-        OutlinedTextField(
-            value = selected.toString(),
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("length") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { n ->
-                DropdownMenuItem(text = { Text(n.toString()) }, onClick = { onSelected(n); expanded = false })
             }
         }
     }

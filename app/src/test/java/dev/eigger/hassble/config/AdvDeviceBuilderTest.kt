@@ -44,6 +44,29 @@ class AdvDeviceBuilderTest {
         )
         assertEquals("test_dev", device.id)
         assertEquals(1, device.sensors.size)
-        assertEquals(2, device.sensors[0].minLength)
+    }
+
+    @Test
+    fun `build text_sensor omits unit and state_class`() {
+        val device = AdvDeviceBuilder.build(
+            id = "str_dev",
+            name = "String Dev",
+            match = MatchConfig(manufacturerId = 76),
+            sensors = listOf(
+                AdvDeviceBuilder.SensorDraft(
+                    key = "code",
+                    platform = "text_sensor",
+                    sourceField = SourceField.manufacturer_data,
+                    decode = DecodeConfig(offset = 0, length = 2, type = DataType.string),
+                    exactLength = 24,
+                ),
+            ),
+        )
+        val s = device.sensors.single()
+        assertEquals("text_sensor", s.platform)
+        assertEquals(null, s.unit)
+        assertEquals(null, s.stateClass)
+        assertEquals(24, s.length)
+        assertEquals(2, s.minLength)
     }
 }

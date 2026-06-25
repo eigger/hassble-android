@@ -37,11 +37,12 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_ALL_KNOWN_SENSORS = stringPreferencesKey("all_known_sensors")
         private val KEY_ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
         private val KEY_SCAN_MODE = stringPreferencesKey("ble_scan_mode")
-        private val KEY_DISABLED_DEVICES = stringPreferencesKey("disabled_devices")
         private val KEY_KNOWN_DEVICE_IDS = stringPreferencesKey("known_device_ids")
         private val KEY_AUTO_CONNECT_DISABLED = stringPreferencesKey("auto_connect_disabled")
         private val KEY_ENTITY_FINGERPRINTS = stringPreferencesKey("entity_fingerprints")
         private val KEY_DRAFT_DEVICES = stringPreferencesKey("draft_devices")
+        private val KEY_PENDING_HA_REMOVALS = stringPreferencesKey("pending_ha_removals")
+        private val KEY_EXCLUDED_DEVICES = stringPreferencesKey("excluded_devices")
         private val KEY_LOG_BUFFER_LIMIT = intPreferencesKey("log_buffer_limit")
     }
 
@@ -117,26 +118,6 @@ class HassSettingsRepository(private val context: Context) {
     private fun normalizeLogBufferLimit(limit: Int): Int =
         limit.takeIf { it in HassBleDefaults.LOG_BUFFER_LIMIT_OPTIONS } ?: HassBleDefaults.DEFAULT_LOG_BUFFER_LIMIT
 
-    val disabledDevices: Flow<Set<String>> = context.dataStore.data.map { prefs ->
-        runCatching {
-            json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_DISABLED_DEVICES] ?: "[]").toSet()
-        }.getOrDefault(emptySet())
-    }
-
-    suspend fun setDeviceDisabled(deviceId: String, disabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            val current = runCatching {
-                json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_DISABLED_DEVICES] ?: "[]").toMutableSet()
-            }.getOrDefault(mutableSetOf())
-            if (disabled) current.add(deviceId) else current.remove(deviceId)
-            prefs[KEY_DISABLED_DEVICES] = json.encodeToString(ListSerializer(String.serializer()), current.sorted())
-        }
-    }
-
-    suspend fun clearDisabledDevices() {
-        context.dataStore.edit { prefs -> prefs.remove(KEY_DISABLED_DEVICES) }
-    }
-
     val autoConnectDisabled: Flow<Set<String>> = context.dataStore.data.map { prefs ->
         runCatching {
             json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_AUTO_CONNECT_DISABLED] ?: "[]").toSet()
@@ -185,6 +166,32 @@ class HassSettingsRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[KEY_KNOWN_DEVICE_IDS] = json.encodeToString(ListSerializer(String.serializer()), ids.sorted())
         }
+    }
+
+    /** 게이트웨이 중단·WS 미연결 시에도 다음 연결 때 HA 엔티티를 제거할 수 있도록 대기열에 넣는다. */
+    suspend fun queueHaEntityRemoval(deviceIds: Collection<String>) {
+        if (deviceIds.isEmpty()) return
+        val stringList = ListSerializer(String.serializer())
+        context.dataStore.edit { prefs ->
+            val current = runCatching {
+                json.decodeFromString(stringList, prefs[KEY_PENDING_HA_REMOVALS] ?: "[]").toMutableSet()
+            }.getOrDefault(mutableSetOf())
+            current += deviceIds
+            prefs[KEY_PENDING_HA_REMOVALS] = json.encodeToString(stringList, current.sorted())
+        }
+    }
+
+    suspend fun consumePendingHaRemovals(): Set<String> {
+        var result = emptySet<String>()
+        val stringList = ListSerializer(String.serializer())
+        context.dataStore.edit { prefs ->
+            val raw = prefs[KEY_PENDING_HA_REMOVALS] ?: return@edit
+            result = runCatching {
+                json.decodeFromString(stringList, raw).toSet()
+            }.getOrDefault(emptySet())
+            prefs.remove(KEY_PENDING_HA_REMOVALS)
+        }
+        return result
     }
 
     suspend fun saveScanMode(mode: BleScanModeOption) {
@@ -328,22 +335,65 @@ class HassSettingsRepository(private val context: Context) {
         saveDraftDevices(current)
     }
 
-    suspend fun removeDraftDevice(deviceId: String) {
-        val remaining = loadDraftDevices().filter { it.id != deviceId }
+    /** 기존 draft 기기를 같은 위치에서 교체한다(목록 순서 유지). 없으면 끝에 추가. */
+    suspend fun updateDraftDevice(device: DeviceConfig) {
+        val current = loadDraftDevices().toMutableList()
+        val index = current.indexOfFirst { it.id == device.id }
+        if (index >= 0) {
+            current[index] = device
+        } else {
+            current += device
+        }
+        saveDraftDevices(current)
+    }
+
+    val excludedDevices: Flow<Set<String>> = context.dataStore.data.map { prefs ->
+        runCatching {
+            json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_EXCLUDED_DEVICES] ?: "[]").toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun pruneExcludedDeviceIds(remoteConfigDeviceIds: Set<String>) {
+        context.dataStore.edit { prefs ->
+            val current = runCatching {
+                json.decodeFromString(ListSerializer(String.serializer()), prefs[KEY_EXCLUDED_DEVICES] ?: "[]").toMutableSet()
+            }.getOrDefault(mutableSetOf())
+            val pruned = current.filter { it in remoteConfigDeviceIds }.toSet()
+            if (pruned.isEmpty()) {
+                prefs.remove(KEY_EXCLUDED_DEVICES)
+            } else {
+                prefs[KEY_EXCLUDED_DEVICES] = json.encodeToString(
+                    ListSerializer(String.serializer()),
+                    pruned.sorted(),
+                )
+            }
+        }
+    }
+
+    /** draft 또는 Git config 기기를 앱 로컬 설정과 함께 제거하고 HA 삭제를 대기열에 넣는다. */
+    suspend fun deleteDevice(deviceId: String, isDraft: Boolean) {
+        queueHaEntityRemoval(setOf(deviceId))
+        val remainingDraft = if (isDraft) loadDraftDevices().filter { it.id != deviceId } else null
         val stringList = ListSerializer(String.serializer())
         val stringMap = MapSerializer(String.serializer(), String.serializer())
         context.dataStore.edit { prefs ->
-            // draft 본체 제거
-            if (remaining.isEmpty()) {
-                prefs.remove(KEY_DRAFT_DEVICES)
+            if (isDraft) {
+                if (remainingDraft!!.isEmpty()) {
+                    prefs.remove(KEY_DRAFT_DEVICES)
+                } else {
+                    prefs[KEY_DRAFT_DEVICES] = json.encodeToString(
+                        ListSerializer(DeviceConfig.serializer()),
+                        remainingDraft,
+                    )
+                }
             } else {
-                prefs[KEY_DRAFT_DEVICES] = json.encodeToString(
-                    ListSerializer(DeviceConfig.serializer()),
-                    remaining,
-                )
+                val excluded = runCatching {
+                    json.decodeFromString(stringList, prefs[KEY_EXCLUDED_DEVICES] ?: "[]").toMutableSet()
+                }.getOrDefault(mutableSetOf())
+                excluded.add(deviceId)
+                prefs[KEY_EXCLUDED_DEVICES] = json.encodeToString(stringList, excluded.sorted())
             }
 
-            // 바인딩(MAC) 제거
             prefs[KEY_BOUND_DEVICES]?.let { raw ->
                 val map = runCatching { json.decodeFromString(stringMap, raw) }
                     .getOrDefault(emptyMap()).toMutableMap()
@@ -352,7 +402,6 @@ class HassSettingsRepository(private val context: Context) {
                 }
             }
 
-            // 센서 enable 설정 제거 (deviceId/ 접두사)
             val sensorPrefix = "$deviceId/"
             prefs[KEY_ENABLED_SENSORS]?.let { raw ->
                 val set = runCatching { json.decodeFromString(stringList, raw).toMutableList() }
@@ -369,25 +418,14 @@ class HassSettingsRepository(private val context: Context) {
                 }
             }
 
-            // disabled / auto-connect 목록에서 제거
-            for (key in listOf(KEY_DISABLED_DEVICES, KEY_AUTO_CONNECT_DISABLED)) {
-                prefs[key]?.let { raw ->
-                    val set = runCatching { json.decodeFromString(stringList, raw).toMutableList() }
-                        .getOrDefault(mutableListOf())
-                    if (set.remove(deviceId)) {
-                        prefs[key] = json.encodeToString(stringList, set.sorted())
-                    }
-                }
-            }
-
-            // known id / fingerprint 제거
-            prefs[KEY_KNOWN_DEVICE_IDS]?.let { raw ->
+            prefs[KEY_AUTO_CONNECT_DISABLED]?.let { raw ->
                 val set = runCatching { json.decodeFromString(stringList, raw).toMutableList() }
                     .getOrDefault(mutableListOf())
                 if (set.remove(deviceId)) {
-                    prefs[KEY_KNOWN_DEVICE_IDS] = json.encodeToString(stringList, set.sorted())
+                    prefs[KEY_AUTO_CONNECT_DISABLED] = json.encodeToString(stringList, set.sorted())
                 }
             }
+
             prefs[KEY_ENTITY_FINGERPRINTS]?.let { raw ->
                 val map = runCatching { json.decodeFromString(stringMap, raw) }
                     .getOrDefault(emptyMap()).toMutableMap()

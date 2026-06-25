@@ -37,8 +37,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
+
+private data class SettingsSnapshot(
+    val boundMap: Map<String, String>,
+    val enabledSensors: Set<String>,
+    val scanMode: dev.eigger.hassble.config.BleScanModeOption,
+    val autoConnectDisabled: Set<String>,
+)
 
 class BleGatewayService : Service() {
 
@@ -72,20 +80,16 @@ class BleGatewayService : Service() {
             return START_STICKY
         }
 
-        if (intent?.action == ACTION_DISABLE_DEVICE) {
+        if (intent?.action == ACTION_REMOVE_DEVICE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            // config 재로드를 기다리지 않고 BLE 연결/스캔을 즉시 정리한다.
+            runtime?.stopDeviceNow(deviceId)
             scope.launch {
                 val repository = HassSettingsRepository(this@BleGatewayService)
-                repository.setDeviceDisabled(deviceId, true)
-                val uniqueIds = runtime?.entityUniqueIdsForDevice(deviceId) ?: emptyList()
-                ws?.removeEntitiesByUniqueIds(uniqueIds)
+                repository.queueHaEntityRemoval(setOf(deviceId))
+                pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + deviceId
+                runCatching { ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
             }
-            return START_STICKY
-        }
-
-        if (intent?.action == ACTION_ENABLE_DEVICE) {
-            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
-            scope.launch { HassSettingsRepository(this@BleGatewayService).setDeviceDisabled(deviceId, false) }
             return START_STICKY
         }
 
@@ -162,15 +166,26 @@ class BleGatewayService : Service() {
                 client.bridgeConnected.collect {
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
+                    val repository = HassSettingsRepository(this@BleGatewayService)
+                    val pendingFromStore = repository.consumePendingHaRemovals()
                     // 선언 내용이 바뀐 device의 HA 엔티티를 먼저 제거 후 재선언
-                    val cleanupIds = pendingEntityCleanupDeviceIds
+                    val cleanupIds = pendingEntityCleanupDeviceIds + pendingFromStore
                     if (cleanupIds.isNotEmpty()) {
                         pendingEntityCleanupDeviceIds = emptySet()
+                        val failed = mutableSetOf<String>()
                         for (deviceId in cleanupIds) {
-                            runCatching { ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
+                            val client = ws
+                            val ok = client != null &&
+                                runCatching { client.removeEntitiesByDeviceIdPrefix(deviceId) }.isSuccess
+                            if (!ok) failed += deviceId
                         }
-                        LiveEventLogger.log(LogType.LINK,
-                            "Refreshed HA entities for: ${cleanupIds.joinToString()}")
+                        // 실패분은 다음 연결에서 다시 시도하도록 대기열에 되돌린다.
+                        if (failed.isNotEmpty()) repository.queueHaEntityRemoval(failed)
+                        val done = cleanupIds - failed
+                        if (done.isNotEmpty()) {
+                            LiveEventLogger.log(LogType.LINK,
+                                "Refreshed HA entities for: ${done.joinToString()}")
+                        }
                     }
                     runtime?.redeclareEntities()
                     // 성공적으로 선언 완료 → fingerprint 저장
@@ -212,7 +227,6 @@ class BleGatewayService : Service() {
         _usingCachedConfig.value = false
 
         configJob = scope.launch {
-            HassSettingsRepository(this@BleGatewayService).clearDisabledDevices()
             val presets = ObdPresetStore.fromYaml(
                 assets.open("obd_presets.yaml").bufferedReader().readText(),
             )
@@ -227,12 +241,21 @@ class BleGatewayService : Service() {
                 _usingCachedConfig.value = true
                 cachedConfig
             }
+            // remote config를 신뢰할 수 있을 때(fetch 성공)만 excluded 목록을 정리한다.
+            // 네트워크 실패로 baseConfig가 캐시/null이면 prune을 건너뛰어 삭제 기록 손실을 막는다.
+            if (fetch.isSuccess && baseConfig != null) {
+                val remoteIds = baseConfig.devices.map { it.id }.toSet()
+                repository.pruneExcludedDeviceIds(remoteIds)
+            }
+            val excludedIds = repository.excludedDevices.first()
             val config = when {
                 baseConfig != null && draftDevices.isNotEmpty() ->
                     ConfigMerger.merge(baseConfig, draftDevices)
                 baseConfig != null -> baseConfig
                 draftDevices.isNotEmpty() -> GatewayConfig(devices = draftDevices)
                 else -> null
+            }?.let { cfg ->
+                cfg.copy(devices = cfg.devices.filter { it.id !in excludedIds })
             }
 
             if (config == null) {
@@ -257,9 +280,11 @@ class BleGatewayService : Service() {
             val newConfigIds = config.devices.map { it.id }.toSet()
             val removedIds = repository.getRemovedDeviceIds(newConfigIds)
             if (removedIds.isNotEmpty()) {
+                repository.queueHaEntityRemoval(removedIds)
+                pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + removedIds
                 LiveEventLogger.log(LogType.LINK, "Config 변경: 삭제된 기기 HA 정리 중 (${removedIds.joinToString()})")
                 removedIds.forEach { deviceId ->
-                    ws?.removeEntitiesByDeviceIdPrefix(deviceId)
+                    runCatching { ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
                     repository.unbindDevice(deviceId)
                 }
             }
@@ -311,24 +336,28 @@ class BleGatewayService : Service() {
                     repository.enabledSensors,
                     repository.enabledSensorsInitialized,
                     repository.scanMode,
-                    repository.disabledDevices,
                     repository.autoConnectDisabled,
                 ) { args ->
                     val boundMap = args[0] as Map<*, *>
                     val enabledSensors = args[1] as Set<*>
                     val initialized = args[2] as Boolean
                     val scanMode = args[3] as dev.eigger.hassble.config.BleScanModeOption
-                    val disabledDevices = args[4] as Set<*>
-                    val autoConnectDisabled = args[5] as Set<*>
+                    val autoConnectDisabled = args[4] as Set<*>
                     val effectiveEnabled = if (!initialized) defaultEnabled else enabledSensors.filterIsInstance<String>().toSet()
-                    Triple(
-                        Triple(boundMap.entries.associate { it.key.toString() to it.value.toString() }, effectiveEnabled, scanMode),
-                        disabledDevices.filterIsInstance<String>().toSet(),
-                        autoConnectDisabled.filterIsInstance<String>().toSet(),
+                    SettingsSnapshot(
+                        boundMap = boundMap.entries.associate { it.key.toString() to it.value.toString() },
+                        enabledSensors = effectiveEnabled,
+                        scanMode = scanMode,
+                        autoConnectDisabled = autoConnectDisabled.filterIsInstance<String>().toSet(),
                     )
-                }.collect { (triple, disabledDevices, autoConnectDisabled) ->
-                    val (boundMap, effectiveEnabled, scanMode) = triple
-                    runtime?.apply(config, effectiveEnabled, boundMap, scanMode, disabledDevices, autoConnectDisabled)
+                }.collect { snapshot ->
+                    runtime?.apply(
+                        config,
+                        snapshot.enabledSensors,
+                        snapshot.boundMap,
+                        snapshot.scanMode,
+                        snapshot.autoConnectDisabled,
+                    )
                 }
             }
             updateNotification()
@@ -495,8 +524,7 @@ class BleGatewayService : Service() {
         const val EXTRA_GIT_TOKEN = "git_token"
         private const val EXTRA_DEVICE_ID = "device_id"
         private const val ACTION_RELOAD_CONFIG = "dev.eigger.hassble.RELOAD_CONFIG"
-        private const val ACTION_DISABLE_DEVICE = "dev.eigger.hassble.DISABLE_DEVICE"
-        private const val ACTION_ENABLE_DEVICE = "dev.eigger.hassble.ENABLE_DEVICE"
+        private const val ACTION_REMOVE_DEVICE = "dev.eigger.hassble.REMOVE_DEVICE"
         private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"
         private const val EXTRA_AUTO_CONNECT = "auto_connect"
         private const val ACTION_CONNECT_DEVICE = "dev.eigger.hassble.CONNECT_DEVICE"
@@ -550,14 +578,9 @@ class BleGatewayService : Service() {
             context.stopService(Intent(context, BleGatewayService::class.java))
         }
 
-        fun disableDevice(context: Context, deviceId: String) {
+        fun removeDevice(context: Context, deviceId: String) {
             context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_DISABLE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
-        }
-
-        fun enableDevice(context: Context, deviceId: String) {
-            context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_ENABLE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
+                .setAction(ACTION_REMOVE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
         }
 
         fun setAutoConnect(context: Context, deviceId: String, enabled: Boolean) {

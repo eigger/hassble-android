@@ -63,7 +63,6 @@ class BleRuntime(
     private lateinit var enabled: Set<String>                 // "deviceId/sensorKey"
     private var boundDevices: Map<String, String> = emptyMap() // Map of deviceId -> MAC
     private var scanMode: BleScanModeOption = BleScanModeOption.BALANCED
-    private var disabledIds: Set<String> = emptySet()
     private var autoConnectDisabledIds: Set<String> = emptySet()
 
     // Cached states for change tracking between apply() calls
@@ -71,7 +70,6 @@ class BleRuntime(
     private var lastEnabled: Set<String> = emptySet()
     private var lastBoundDevices: Map<String, String> = emptyMap()
     private var lastScanMode: BleScanModeOption? = null
-    private var lastDisabledIds: Set<String> = emptySet()
     private var lastAutoConnectDisabledIds: Set<String> = emptySet()
 
     private val devices = java.util.concurrent.ConcurrentHashMap<String, DeviceConfig>()
@@ -118,14 +116,12 @@ class BleRuntime(
         enabledKeys: Set<String>,
         boundDevices: Map<String, String>,
         scanMode: BleScanModeOption = BleScanModeOption.BALANCED,
-        disabledIds: Set<String> = emptySet(),
         autoConnectDisabledIds: Set<String> = emptySet()
     ) {
         val oldConfig = this.lastConfig
         val oldEnabled = this.lastEnabled
         val oldBoundDevices = this.lastBoundDevices
         val oldScanMode = this.lastScanMode
-        val oldDisabledIds = this.lastDisabledIds
         val oldAutoConnectDisabledIds = this.lastAutoConnectDisabledIds
 
         if (config != oldConfig) runConfigValidation(config)
@@ -134,7 +130,6 @@ class BleRuntime(
         this.enabled = enabledKeys
         this.boundDevices = boundDevices
         this.scanMode = scanMode
-        this.disabledIds = disabledIds
         this.autoConnectDisabledIds = autoConnectDisabledIds
 
         if (oldConfig == null) {
@@ -151,8 +146,8 @@ class BleRuntime(
         }
 
         // --- Active scan (Advertisement) job dynamic detection ---
-        val newAdvDevices = config.devices.filter { it.source == Source.advertisement && it.id !in disabledIds }
-        val oldAdvDevices = oldConfig.devices.filter { it.source == Source.advertisement && it.id !in oldDisabledIds }
+        val newAdvDevices = config.devices.filter { it.source == Source.advertisement }
+        val oldAdvDevices = oldConfig.devices.filter { it.source == Source.advertisement }
 
         val advChanged = scanMode != oldScanMode ||
                 newAdvDevices.size != oldAdvDevices.size ||
@@ -175,6 +170,9 @@ class BleRuntime(
         val deletedIds = oldDeviceIds - currentDeviceIds
         for (id in deletedIds) {
             stopDevice(id)
+            scope.launch {
+                runCatching { ws.removeEntitiesByDeviceIdPrefix(id) }
+            }
         }
 
         // 2. Add or Update existing devices
@@ -186,7 +184,6 @@ class BleRuntime(
             val oldD = oldConfig.devices.firstOrNull { it.id == deviceId }
             val configChanged = oldD != d
             val boundMacChanged = boundDevices[deviceId] != oldBoundDevices[deviceId]
-            val disabledChanged = (deviceId in disabledIds) != (deviceId in oldDisabledIds)
             val autoConnectChanged = (deviceId in autoConnectDisabledIds) != (deviceId in oldAutoConnectDisabledIds)
 
             // Check if active sensors key set for this device changed
@@ -194,31 +191,32 @@ class BleRuntime(
             val oldEnabledKeys = oldEnabled.filter { it.startsWith("$deviceId/") }.toSet()
             val sensorsChanged = newEnabledKeys != oldEnabledKeys
 
-            val needsRestart = isNewDevice || configChanged || boundMacChanged || disabledChanged || autoConnectChanged || sensorsChanged
+            val needsRestart = isNewDevice || configChanged || boundMacChanged || autoConnectChanged || sensorsChanged
 
             if (needsRestart) {
                 // async HA cleanup이 진행 중인 device는 그 완료를 기다리지 않고 skip
                 // (이전 async 블록이 구 config로 startDevice를 호출하는 것을 방지)
                 if (deviceId in pendingHaCleanupIds) continue
                 stopDevice(deviceId)
-                if (deviceId !in disabledIds) {
-                    val needsHaCleanup = configChanged && oldD != null &&
-                            ConfigValidator.hasSensorStructureChange(oldD, d)
-                    if (needsHaCleanup) {
-                        // 센서 platform/type이 바뀐 경우: HA 구 엔티티를 먼저 삭제 후 재선언
-                        val capturedD = d
-                        pendingHaCleanupIds.add(capturedD.id)
-                        scope.launch {
-                            try {
-                                runCatching { ws.removeEntitiesByDeviceIdPrefix(capturedD.id) }
+                val needsHaCleanup = configChanged && oldD != null &&
+                        ConfigValidator.hasSensorStructureChange(oldD, d)
+                if (needsHaCleanup) {
+                    // 센서 platform/type이 바뀐 경우: HA 구 엔티티를 먼저 삭제 후 재선언
+                    val capturedD = d
+                    pendingHaCleanupIds.add(capturedD.id)
+                    scope.launch {
+                        try {
+                            runCatching { ws.removeEntitiesByDeviceIdPrefix(capturedD.id) }
+                            // cleanup이 진행되는 동안 기기가 삭제/제외됐다면 재기동하지 않는다.
+                            if (lastConfig?.devices?.any { it.id == capturedD.id } == true) {
                                 startDevice(capturedD)
-                            } finally {
-                                pendingHaCleanupIds.remove(capturedD.id)
                             }
+                        } finally {
+                            pendingHaCleanupIds.remove(capturedD.id)
                         }
-                    } else {
-                        startDevice(d)
                     }
+                } else {
+                    startDevice(d)
                 }
             }
         }
@@ -228,12 +226,10 @@ class BleRuntime(
         this.lastEnabled = enabledKeys
         this.lastBoundDevices = boundDevices
         this.lastScanMode = scanMode
-        this.lastDisabledIds = disabledIds
         this.lastAutoConnectDisabledIds = autoConnectDisabledIds
     }
 
     private fun declareAndPrepare(d: DeviceConfig) {
-        if (d.id in disabledIds) return
         // match.mac 없는 광고 프로필은 첫 패킷 수신 시 MAC별로 동적 선언
         if (isDynamicAdvertisement(d)) return
         declareEntitiesForInstance(d, d.id, d.name)
@@ -398,7 +394,7 @@ class BleRuntime(
     }
 
     private fun startSources() {
-        val adv = config.devices.filter { it.source == Source.advertisement && it.id !in disabledIds }
+        val adv = config.devices.filter { it.source == Source.advertisement }
         if (adv.isNotEmpty()) {
             scanJob = scanner.scan(adv, scanMode).onEach(::onReading).launchIn(scope)
         }
@@ -423,7 +419,6 @@ class BleRuntime(
     // ── BLE raw → 디코딩 → 필터 → push ──────────────────────────────────────
     private fun onReading(r: RawReading) {
         val d = devices[r.deviceId] ?: return
-        if (d.id in disabledIds) return
         val logType = when (d.source) {
             Source.advertisement -> LogType.ADV
             Source.obd, Source.gatt_notify -> LogType.NOTIF
@@ -543,12 +538,20 @@ class BleRuntime(
         }
     }
 
+    /**
+     * 기기 삭제 시 config 재로드(네트워크)를 기다리지 않고 즉시 BLE 연결/스캔 상태를 정리한다.
+     * HA 엔티티 제거는 호출 측에서 별도로 처리한다.
+     */
+    fun stopDeviceNow(deviceId: String) {
+        if (!::config.isInitialized) return
+        stopDevice(deviceId)
+    }
+
     /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 시작. */
     fun connectDevice(deviceId: String) {
         if (!::config.isInitialized) return
         if (deviceConnectionJobs[deviceId]?.isActive == true) return
         val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return
-        if (d.id in disabledIds) return
         startDevice(d)
     }
 
@@ -594,7 +597,6 @@ class BleRuntime(
         lastEnabled = emptySet()
         lastBoundDevices = emptyMap()
         lastScanMode = null
-        lastDisabledIds = emptySet()
         lastAutoConnectDisabledIds = emptySet()
     }
 
@@ -682,18 +684,6 @@ class BleRuntime(
     }
 
     private fun normalizeMac(mac: String) = mac.replace(":", "").replace("-", "").uppercase()
-
-    fun entityUniqueIdsForDevice(deviceId: String): List<String> {
-        val d = devices[deviceId] ?: return emptyList()
-        val instanceIds = if (isDynamicAdvertisement(d)) {
-            discoveredAdvInstances.values.filter { it.profileId == deviceId }.map { it.instanceId } + listOf(deviceId)
-        } else {
-            listOf(d.id)
-        }
-        return instanceIds.flatMap { instanceId ->
-            d.sensors.map { uid(instanceId, it.key) } + d.controls.map { uid(instanceId, it.key) }
-        }.distinct()
-    }
 
     private fun isEnabled(deviceId: String, key: String) = "$deviceId/$key" in enabled
     private fun uid(deviceId: String, key: String) = "${deviceId}_$key"
