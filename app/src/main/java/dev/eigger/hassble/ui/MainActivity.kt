@@ -244,6 +244,18 @@ private fun HomeScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { HassSettingsRepository(context) }
+    val presets = remember {
+        ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
+    }
+    val bundledTemplates = remember { ConfigTemplates.fromAssets(context) }
+    val loader = remember { ConfigLoader(File(context.filesDir, "config_cache"), presets) }
+    val templatesLoader = remember {
+        ConfigTemplatesLoader(File(context.filesDir, "templates_cache"), bundledTemplates, loader)
+    }
+    var configTemplates by remember { mutableStateOf(bundledTemplates) }
+    var templatesSource by remember { mutableStateOf(ConfigTemplatesLoader.Source.BUNDLED) }
+    var isTemplatesLoading by remember { mutableStateOf(false) }
+    var templatesReloadTrigger by remember { mutableStateOf(0) }
 
     val savedHaUrl by repository.haUrl.collectAsState(initial = "")
     val savedHaToken by repository.haToken.collectAsState(initial = "")
@@ -289,12 +301,13 @@ private fun HomeScreen() {
         tokenInput = savedHaToken
     }
     LaunchedEffect(savedGitUrl, savedGitToken) {
-        GitHubHelper.parseRepoBranch(savedGitUrl)?.let { (repo, branch) ->
+        val normalized = loader.normalizeUrl(savedGitUrl)
+        GitHubHelper.parseRepoBranch(normalized)?.let { (repo, branch) ->
             gitRepoInput = repo
             gitBranchInput = branch
         } ?: run {
             val legacy = savedGitUrl.trim()
-            if (legacy.isNotBlank() && !legacy.startsWith("http")) {
+            if (legacy.isNotBlank()) {
                 gitRepoInput = legacy
                 gitBranchInput = HassBleDefaults.DEFAULT_BRANCH
             }
@@ -327,18 +340,7 @@ private fun HomeScreen() {
         }
     }
 
-    val presets = remember {
-        ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
-    }
-    val bundledTemplates = remember { ConfigTemplates.fromAssets(context) }
-    val loader = remember { ConfigLoader(File(context.filesDir, "config_cache"), presets) }
-    val templatesLoader = remember {
-        ConfigTemplatesLoader(File(context.filesDir, "templates_cache"), bundledTemplates, loader)
-    }
-    var configTemplates by remember { mutableStateOf(bundledTemplates) }
-    var templatesSource by remember { mutableStateOf(ConfigTemplatesLoader.Source.BUNDLED) }
-    var isTemplatesLoading by remember { mutableStateOf(false) }
-    var templatesReloadTrigger by remember { mutableStateOf(0) }
+
     val isRunning by BleGatewayService.isServiceRunning.collectAsState()
     val connState by BleGatewayService.serviceConnectionState.collectAsState()
     val connectionIssue by BleGatewayService.connectionIssue.collectAsState()
