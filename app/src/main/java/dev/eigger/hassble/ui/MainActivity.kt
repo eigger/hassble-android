@@ -291,6 +291,7 @@ private fun HomeScreen() {
     var gitRepoInput by remember { mutableStateOf("") }
     var gitBranchInput by remember { mutableStateOf(HassBleDefaults.DEFAULT_BRANCH) }
     var gitTokenInput by remember { mutableStateOf("") }
+    var settingsLoaded by remember { mutableStateOf(false) }
 
     val gitUrlInput = remember(gitRepoInput, gitBranchInput) {
         if (gitRepoInput.isBlank()) "" else GitHubHelper.buildConfigUrl(gitRepoInput.trim(), gitBranchInput)
@@ -299,6 +300,7 @@ private fun HomeScreen() {
     LaunchedEffect(savedHaUrl, savedHaToken) {
         urlInput = savedHaUrl
         tokenInput = savedHaToken
+        settingsLoaded = true
     }
     LaunchedEffect(savedGitUrl, savedGitToken) {
         val normalized = loader.normalizeUrl(savedGitUrl)
@@ -552,6 +554,7 @@ private fun HomeScreen() {
             when (selectedTab) {
                 0 -> GatewayTabContent(
                     isRunning = isRunning,
+                    settingsLoaded = settingsLoaded,
                     connState = connState,
                     connectionIssue = connectionIssue,
                     gitRepoConfigured = gitRepoInput.isNotBlank(),
@@ -976,6 +979,7 @@ private fun GatewayReadinessBanner(
 @Composable
 private fun GatewayTabContent(
     isRunning: Boolean,
+    settingsLoaded: Boolean = true,
     connState: ConnectionState,
     connectionIssue: ConnectionIssue,
     gitRepoConfigured: Boolean,
@@ -1245,7 +1249,7 @@ private fun GatewayTabContent(
             hasDraftDevices = hasDraftDevices,
             enabledSensorCount = enabledSensorCount,
         )
-        if (!isRunning && readiness.hasAnyMissing) {
+        if (settingsLoaded && !isRunning && readiness.hasAnyMissing) {
             GatewayReadinessBanner(
                 readiness = readiness,
                 onGoToSensorsTab = onGoToSensorsTab,
@@ -1254,7 +1258,7 @@ private fun GatewayTabContent(
 
         GatewayControlButton(
             isRunning = isRunning,
-            startEnabled = readiness.canStart,
+            startEnabled = !settingsLoaded || readiness.canStart,
             onStart = onStartGateway,
             onStop = onStopGateway,
         )
