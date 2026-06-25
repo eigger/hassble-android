@@ -506,7 +506,7 @@ private fun HomeScreen() {
     LaunchedEffect(selectedTab) {
         if (selectedTab != 2) {
             logIncludeAdv = false
-            LiveEventLogger.setIncludeAdvLogs(false, purgeExisting = true)
+            LiveEventLogger.setIncludeAdvLogs(false, purgeExisting = false)
         }
     }
 
@@ -670,9 +670,6 @@ private fun HomeScreen() {
                     },
                     onLogIncludeAdvChange = { enabled ->
                         logIncludeAdv = enabled
-                        if (!enabled) {
-                            LiveEventLogger.setIncludeAdvLogs(false, purgeExisting = true)
-                        }
                     },
                     onFindMacInSensors = { mac ->
                         sensorDeviceSearch = mac
@@ -2512,11 +2509,7 @@ private fun LogsTabContent(
         }
     }
 
-    LaunchedEffect(logIncludeAdv) {
-        if (!logIncludeAdv) {
-            logsList.removeAll { it.type == LogType.ADV }
-        }
-    }
+
 
     LaunchedEffect(Unit) {
         LiveEventLogger.logFlow.collect { logLine ->
