@@ -10,6 +10,8 @@ import kotlinx.serialization.Serializable
  */
 class ObdPresetStore(private val presets: Map<String, ObdPreset>) {
 
+    fun presetNames(): List<String> = presets.keys.sorted()
+
     fun expand(config: GatewayConfig): GatewayConfig {
         val devices = config.devices.map { device ->
             if (device.source != Source.obd) return@map device
@@ -17,6 +19,9 @@ class ObdPresetStore(private val presets: Map<String, ObdPreset>) {
         }
         return config.copy(devices = devices)
     }
+
+    fun expandDevice(device: DeviceConfig): DeviceConfig =
+        expand(GatewayConfig(devices = listOf(device))).devices.first()
 
     private fun expandSensor(s: SensorConfig): SensorConfig {
         val p = s.preset?.let { presets[it] ?: error("알 수 없는 preset: $it") } ?: return s

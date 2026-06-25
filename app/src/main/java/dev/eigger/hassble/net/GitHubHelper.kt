@@ -22,21 +22,25 @@ object GitHubHelper {
         return ParsedGitUrl(repoShort, branch, file)
     }
 
-    fun buildRawUrl(repoOrUrl: String, file: String): String {
+    fun buildRawUrl(repoOrUrl: String, file: String, branch: String = "main"): String {
         if (repoOrUrl.startsWith("http")) return repoOrUrl   // already a full URL
         if (repoOrUrl.isBlank() || file.isBlank()) return ""
         val parts = repoOrUrl.trim('/').split('/')
         val owner  = parts.getOrNull(0) ?: return ""
         val repo   = parts.getOrNull(1) ?: return ""
-        val branch = if (parts.size > 2) parts.subList(2, parts.size).joinToString("/") else "main"
-        return "https://raw.githubusercontent.com/$owner/$repo/$branch/$file"
+        val resolvedBranch = when {
+            parts.size > 2 -> parts.subList(2, parts.size).joinToString("/")
+            branch.isNotBlank() -> branch.trim()
+            else -> "main"
+        }
+        return "https://raw.githubusercontent.com/$owner/$repo/$resolvedBranch/$file"
     }
 
-    suspend fun fetchYamlFiles(repoOrUrl: String, token: String? = null): Result<List<String>> =
+    suspend fun fetchYamlFiles(repoOrUrl: String, branch: String = "main", token: String? = null): Result<List<String>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val (owner, repo, branch) = extractRepoInfo(repoOrUrl)
-                val url = "https://api.github.com/repos/$owner/$repo/git/trees/$branch?recursive=1"
+                val (owner, repo, resolvedBranch) = extractRepoInfo(repoOrUrl, branch)
+                val url = "https://api.github.com/repos/$owner/$repo/git/trees/$resolvedBranch?recursive=1"
                 val reqBuilder = Request.Builder()
                     .url(url)
                     .header("Accept", "application/vnd.github+json")
@@ -64,7 +68,7 @@ object GitHubHelper {
             }
         }
 
-    private fun extractRepoInfo(repoOrUrl: String): Triple<String, String, String> {
+    private fun extractRepoInfo(repoOrUrl: String, branch: String = "main"): Triple<String, String, String> {
         val parsed = parseGitUrl(repoOrUrl)
         if (parsed != null) {
             val parts = parsed.repoShort.split('/')
@@ -73,8 +77,12 @@ object GitHubHelper {
         val parts = repoOrUrl.trim('/').split('/')
         val owner  = parts.getOrNull(0) ?: error("Invalid repo format — use owner/repo")
         val repo   = parts.getOrNull(1) ?: error("Invalid repo format — use owner/repo")
-        val branch = if (parts.size > 2) parts.subList(2, parts.size).joinToString("/") else "main"
-        return Triple(owner, repo, branch)
+        val resolvedBranch = when {
+            parts.size > 2 -> parts.subList(2, parts.size).joinToString("/")
+            branch.isNotBlank() -> branch.trim()
+            else -> "main"
+        }
+        return Triple(owner, repo, resolvedBranch)
     }
 }
 

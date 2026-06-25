@@ -33,7 +33,7 @@ class ConfigLoader(
                     check(resp.isSuccessful) { "HTTP ${resp.code}" }
                     val text = resp.body!!.string()
                     val config = parse(text)
-                    cacheFile.writeText(text)
+                    writeCache(cacheFile, text)
                     config
                 }
             }.recoverCatching { e ->
@@ -45,6 +45,19 @@ class ConfigLoader(
         val cacheFile = cacheFileFor(normalizeUrl(url))
         return cacheFile.takeIf { it.exists() }?.let { parse(it.readText()) }
     }
+
+    fun cacheSavedAt(url: String): Long? {
+        val meta = cacheMetaFile(cacheFileFor(normalizeUrl(url)))
+        return meta.takeIf { it.exists() }?.readText()?.toLongOrNull()
+    }
+
+    private fun writeCache(cacheFile: File, text: String) {
+        cacheFile.writeText(text)
+        cacheMetaFile(cacheFile).writeText(System.currentTimeMillis().toString())
+    }
+
+    private fun cacheMetaFile(cacheFile: File): File =
+        File(cacheFile.parent, "${cacheFile.name}.meta")
 
     private fun parse(text: String): GatewayConfig =
         presets.expand(Yaml.default.decodeFromString(GatewayConfig.serializer(), text))
