@@ -147,6 +147,12 @@
     <string name="live_logs_enable">Live Logs</string>
     <string name="logs_clear">Clear</string>
     <string name="logs_share">Share</string>
+    <string name="logs_save">Save</string>
+    <string name="logs_empty">No logs to share</string>
+    <string name="logs_share_failed">Failed to share logs: %1$s</string>
+    <string name="logs_save_failed">Failed to save logs: %1$s</string>
+    <string name="logs_saved_to_downloads">Saved to Downloads: %1$s\nFor KakaoTalk: + → File → Downloads</string>
+    <string name="logs_save_unsupported">Saving to Downloads requires Android 10+. Use Share and pick a file app.</string>
     <string name="logs_filter_placeholder">Filter logs (e.g. MAC, mfr ID, OBD…)</string>
     <string name="oauth_login_btn">HA OAuth Login</string>
     <string name="ha_url_required_toast">Please enter HA URL first.</string>
