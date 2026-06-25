@@ -553,6 +553,7 @@ private fun HomeScreen() {
                     connState = connState,
                     connectionIssue = connectionIssue,
                     gitRepoConfigured = gitRepoInput.isNotBlank(),
+                    hasDraftDevices = draftDevices.isNotEmpty(),
                     enabledSensorCount = effectiveEnabledSensors.size,
                     onGoToSensorsTab = { selectedTab = 1 },
                     urlInput = urlInput,
@@ -888,15 +889,17 @@ private fun computeGatewayReadiness(
     tokenInput: String,
     haRefreshToken: String,
     gitRepoConfigured: Boolean,
+    hasDraftDevices: Boolean,
     enabledSensorCount: Int,
 ): GatewayReadiness {
     val blocking = buildList {
         if (!isHaUrlReady(urlInput)) add(GatewayReadinessItem.HaUrl)
         if (tokenInput.isBlank() && haRefreshToken.isBlank()) add(GatewayReadinessItem.HaAuth)
-        if (!gitRepoConfigured) add(GatewayReadinessItem.GitRepo)
+        if (!gitRepoConfigured && !hasDraftDevices) add(GatewayReadinessItem.GitRepo)
     }
     val advisory = buildList {
         if (enabledSensorCount == 0) add(GatewayReadinessItem.EnabledSensors)
+        if (!gitRepoConfigured && hasDraftDevices) add(GatewayReadinessItem.GitRepo)
     }
     return GatewayReadiness(blocking, advisory)
 }
@@ -974,6 +977,7 @@ private fun GatewayTabContent(
     connState: ConnectionState,
     connectionIssue: ConnectionIssue,
     gitRepoConfigured: Boolean,
+    hasDraftDevices: Boolean,
     enabledSensorCount: Int,
     onGoToSensorsTab: () -> Unit,
     urlInput: String,
@@ -1236,6 +1240,7 @@ private fun GatewayTabContent(
             tokenInput = tokenInput,
             haRefreshToken = haRefreshToken,
             gitRepoConfigured = gitRepoConfigured,
+            hasDraftDevices = hasDraftDevices,
             enabledSensorCount = enabledSensorCount,
         )
         if (!isRunning && readiness.hasAnyMissing) {
