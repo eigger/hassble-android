@@ -61,7 +61,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
 import dev.eigger.hassble.service.LiveEventLogger
@@ -344,7 +344,7 @@ private fun HomeScreen() {
     val serviceError by BleGatewayService.serviceError.collectAsState()
     val usingCachedConfigService by BleGatewayService.usingCachedConfig.collectAsState()
     val deviceLinkStatuses by BleGatewayService.deviceLinkStatuses.collectAsState()
-    val disabledDeviceIds by repository.disabledDevices.collectAsState(initial = emptySet())
+    val excludedDeviceIds by repository.excludedDevices.collectAsState(initial = emptySet())
     val autoConnectDisabledIds by repository.autoConnectDisabled.collectAsState(initial = emptySet())
     val logBufferLimit by repository.logBufferLimit.collectAsState(initial = LiveEventLogger.DEFAULT_MAX_LOGS)
     val discoveredAdv by BleGatewayService.discoveredAdvInstances.collectAsState()
@@ -364,6 +364,7 @@ private fun HomeScreen() {
     var showTemplateDialog by remember { mutableStateOf(false) }
     var showObdDialog by remember { mutableStateOf(false) }
     var showAdvWizard by remember { mutableStateOf(false) }
+    var editingDevice by remember { mutableStateOf<DeviceConfig?>(null) }
     var showExportDialog by remember { mutableStateOf(false) }
     var missingPermCount by remember { mutableStateOf(0) }
 
@@ -371,8 +372,8 @@ private fun HomeScreen() {
         draftDevices = repository.loadDraftDevices()
     }
 
-    val effectiveConfig = remember(loadedConfig, draftDevices) {
-        ConfigMerger.effectiveConfig(loadedConfig, draftDevices)
+    val effectiveConfig = remember(loadedConfig, draftDevices, excludedDeviceIds) {
+        ConfigMerger.effectiveConfig(loadedConfig, draftDevices, excludedDeviceIds)
     }
     val draftDeviceIds = remember(draftDevices, loadedConfig) {
         val remoteIds = loadedConfig?.devices?.map { it.id }?.toSet() ?: emptySet()
@@ -600,7 +601,6 @@ private fun HomeScreen() {
                     validationIssues = validationIssues,
                     boundDevices = boundDevices,
                     enabledSensors = effectiveEnabledSensors,
-                    disabledDeviceIds = disabledDeviceIds,
                     autoConnectDisabledIds = autoConnectDisabledIds,
                     discoveredAdv = discoveredAdv,
                     sensorLastValues = sensorLastValues,
@@ -630,20 +630,25 @@ private fun HomeScreen() {
                     onSensorsBulkToggle = { keys, enabled ->
                         scope.launch { repository.setSensorsEnabled(keys, enabled) }
                     },
-                    onDisableDevice = { deviceId -> BleGatewayService.disableDevice(context, deviceId) },
-                    onEnableDevice = { deviceId -> BleGatewayService.enableDevice(context, deviceId) },
-                    onSetAutoConnect = { deviceId, enabled -> BleGatewayService.setAutoConnect(context, deviceId, enabled) },
-                    onConnectDevice = { deviceId -> BleGatewayService.connectDevice(context, deviceId) },
-                    onDisconnectDevice = { deviceId -> BleGatewayService.disconnectDevice(context, deviceId) },
-                    onRemoveDraftDevice = { deviceId ->
+                    onDeleteDevice = { deviceId ->
                         scope.launch {
-                            repository.removeDraftDevice(deviceId)
+                            val isDraft = deviceId in draftDeviceIds
+                            repository.deleteDevice(deviceId, isDraft = isDraft)
                             draftDevices = repository.loadDraftDevices()
+                            // 게이트웨이가 실행 중일 때만 서비스에 알린다.
+                            // 중단 상태면 deleteDevice가 대기열에 넣은 HA 삭제가 다음 시작 시 처리된다.
                             if (isRunning) {
+                                BleGatewayService.removeDevice(context, deviceId)
                                 BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
                             }
                         }
                     },
+                    onEditDevice = { deviceId ->
+                        editingDevice = draftDevices.firstOrNull { it.id == deviceId }
+                    },
+                    onSetAutoConnect = { deviceId, enabled -> BleGatewayService.setAutoConnect(context, deviceId, enabled) },
+                    onConnectDevice = { deviceId -> BleGatewayService.connectDevice(context, deviceId) },
+                    onDisconnectDevice = { deviceId -> BleGatewayService.disconnectDevice(context, deviceId) },
                 )
                 2 -> LogsTabContent(
                     isRunning = isRunning,
@@ -694,7 +699,7 @@ private fun HomeScreen() {
             NavigationBarItem(
                 selected = selectedTab == 2,
                 onClick = { selectedTab = 2 },
-                icon = { Icon(Icons.Default.List, contentDescription = stringResource(R.string.tab_logs)) },
+                icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.tab_logs)) },
                 label = { Text(stringResource(R.string.tab_logs)) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = MaterialTheme.colorScheme.primary,
@@ -820,6 +825,28 @@ private fun HomeScreen() {
                     Toast.makeText(
                         context,
                         context.getString(R.string.config_imported_toast, unique.name),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                }
+            },
+        )
+    }
+
+    editingDevice?.let { dev ->
+        DeviceEditDialog(
+            device = dev,
+            presets = presets,
+            onDismiss = { editingDevice = null },
+            onSave = { updated ->
+                scope.launch {
+                    val expanded = if (updated.source == Source.obd) presets.expandDevice(updated) else updated
+                    repository.updateDraftDevice(expanded)
+                    draftDevices = repository.loadDraftDevices()
+                    editingDevice = null
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.config_imported_toast, expanded.name),
                         Toast.LENGTH_SHORT,
                     ).show()
                     if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
@@ -1342,7 +1369,6 @@ private fun SensorsTabContent(
     validationIssues: List<ValidationIssue> = emptyList(),
     boundDevices: Map<String, String>,
     enabledSensors: Set<String>,
-    disabledDeviceIds: Set<String>,
     autoConnectDisabledIds: Set<String>,
     discoveredAdv: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
@@ -1368,12 +1394,11 @@ private fun SensorsTabContent(
     onUnbindClick: (String) -> Unit,
     onSensorToggle: (String, Boolean) -> Unit,
     onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
-    onDisableDevice: (String) -> Unit,
-    onEnableDevice: (String) -> Unit,
+    onDeleteDevice: (String) -> Unit,
+    onEditDevice: (String) -> Unit = {},
     onSetAutoConnect: (String, Boolean) -> Unit,
     onConnectDevice: (String) -> Unit = {},
     onDisconnectDevice: (String) -> Unit = {},
-    onRemoveDraftDevice: (String) -> Unit = {},
 ) {
     val filteredDevices = remember(loadedConfig, boundDevices, discoveredAdv, deviceSearchText) {
         val devices = loadedConfig?.devices ?: emptyList()
@@ -1607,7 +1632,6 @@ private fun SensorsTabContent(
                     enabledSensors = enabledSensors,
                     validationIssues = validationIssues.filter { it.deviceId == device.id },
                     isRunning = isRunning,
-                    isDisabled = device.id in disabledDeviceIds,
                     isDraftDevice = device.id in draftDeviceIds,
                     autoConnect = device.id !in autoConnectDisabledIds,
                     discoveredInstances = discoveredAdv.filter { it.profileId == device.id },
@@ -1617,12 +1641,11 @@ private fun SensorsTabContent(
                     onSensorsBulkToggle = onSensorsBulkToggle,
                     onBindClick = { onBindClick(device) },
                     onUnbindClick = { onUnbindClick(device.id) },
-                    onDisable = { onDisableDevice(device.id) },
-                    onEnable = { onEnableDevice(device.id) },
+                    onDelete = { onDeleteDevice(device.id) },
+                    onEdit = { onEditDevice(device.id) },
                     onSetAutoConnect = { enabled -> onSetAutoConnect(device.id, enabled) },
                     onConnectDevice = { onConnectDevice(device.id) },
                     onDisconnectDevice = { onDisconnectDevice(device.id) },
-                    onRemoveDraft = { onRemoveDraftDevice(device.id) },
                 )
             }
         }
@@ -1676,7 +1699,6 @@ private fun DeviceConfigCard(
     enabledSensors: Set<String>,
     validationIssues: List<ValidationIssue> = emptyList(),
     isRunning: Boolean,
-    isDisabled: Boolean,
     isDraftDevice: Boolean = false,
     autoConnect: Boolean,
     discoveredInstances: List<DiscoveredAdvInstance>,
@@ -1686,12 +1708,11 @@ private fun DeviceConfigCard(
     onSensorsBulkToggle: (Set<String>, Boolean) -> Unit,
     onBindClick: () -> Unit,
     onUnbindClick: () -> Unit,
-    onDisable: () -> Unit,
-    onEnable: () -> Unit,
+    onDelete: () -> Unit,
+    onEdit: () -> Unit = {},
     onSetAutoConnect: (Boolean) -> Unit,
     onConnectDevice: () -> Unit = {},
     onDisconnectDevice: () -> Unit = {},
-    onRemoveDraft: () -> Unit = {},
 ) {
     val deviceSensorKeys = remember(device.id, device.sensors) {
         device.sensors.map { "${device.id}/${it.key}" }
@@ -1711,8 +1732,7 @@ private fun DeviceConfigCard(
             .animateContentSize(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isDisabled) MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-            else MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.surface,
         ),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -1728,18 +1748,8 @@ private fun DeviceConfigCard(
                             text = device.name,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
-                            color = if (isDisabled) Color.Gray else Color.White,
+                            color = Color.White,
                         )
-                        if (isDisabled) {
-                            Text(
-                                text = stringResource(R.string.device_disabled),
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier
-                                    .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
                         if (isDraftDevice) {
                             Text(
                                 text = stringResource(R.string.config_draft_device_badge),
@@ -2157,34 +2167,23 @@ private fun DeviceConfigCard(
                         }
                     }
 
-                    if (isDraftDevice) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            HassDangerTintButton(
-                                text = stringResource(R.string.config_remove_draft_device),
-                                onClick = onRemoveDraft,
-                                enabled = !isRunning,
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (isDraftDevice) {
+                            HassSecondaryButton(
+                                text = stringResource(R.string.device_edit_btn),
+                                onClick = onEdit,
                             )
                         }
-                    }
-
-                    if (isRunning) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            if (isDisabled) {
-                                HassAccentButton(
-                                    text = stringResource(R.string.device_enable_btn),
-                                    onClick = onEnable,
-                                    enabled = !isConnected,
-                                )
-                            } else {
-                                HassDangerTintButton(
-                                    text = stringResource(R.string.device_disable_ha_delete_btn),
-                                    onClick = onDisable,
-                                    enabled = !isConnected,
-                                )
-                            }
-                        }
+                        HassDangerTintButton(
+                            text = stringResource(R.string.device_delete_btn),
+                            onClick = onDelete,
+                            enabled = !isConnected,
+                        )
                     }
                 }
             }

@@ -6,12 +6,17 @@ object AdvDeviceBuilder {
 
     data class SensorDraft(
         val key: String,
+        val platform: String = "sensor",
         val sourceField: SourceField,
         val decode: DecodeConfig,
         val deviceClass: String? = null,
         val unit: String? = null,
         val stateClass: String? = "measurement",
         val accuracyDecimals: Int? = null,
+        /** payload 최소 바이트. null이면 decode offset+length로 자동 계산 */
+        val minLength: Int? = null,
+        /** payload 정확한 바이트 수. null이면 검사 안 함 */
+        val exactLength: Int? = null,
     )
 
     fun slugify(name: String): String =
@@ -53,14 +58,17 @@ object AdvDeviceBuilder {
         instanceMode = AdvertisementInstanceMode.mac,
         match = match,
         sensors = sensors.map { draft ->
+            val isText = draft.platform == "text_sensor"
             SensorConfig(
                 key = draft.key,
+                platform = draft.platform,
                 deviceClass = draft.deviceClass,
-                unit = draft.unit,
-                stateClass = draft.stateClass,
-                accuracyDecimals = draft.accuracyDecimals,
+                unit = if (isText) null else draft.unit,
+                stateClass = if (isText) null else draft.stateClass,
+                accuracyDecimals = if (isText) null else draft.accuracyDecimals,
                 sourceField = draft.sourceField,
-                minLength = draft.decode.offset + draft.decode.length,
+                length = draft.exactLength,
+                minLength = draft.minLength ?: (draft.decode.offset + draft.decode.length),
                 decode = draft.decode,
             )
         },

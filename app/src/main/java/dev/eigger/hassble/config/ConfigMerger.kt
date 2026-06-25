@@ -25,9 +25,14 @@ object ConfigMerger {
         return device.copy(id = candidate, name = "${device.name} ($suffix)")
     }
 
-    fun effectiveConfig(remote: GatewayConfig?, draftDevices: List<DeviceConfig>): GatewayConfig? {
+    fun effectiveConfig(
+        remote: GatewayConfig?,
+        draftDevices: List<DeviceConfig>,
+        excludedIds: Set<String> = emptySet(),
+    ): GatewayConfig? {
         if (remote == null && draftDevices.isEmpty()) return null
         val base = remote ?: GatewayConfig()
-        return merge(base, draftDevices.filter { d -> base.devices.none { it.id == d.id } })
+        val merged = merge(base, draftDevices.filter { d -> base.devices.none { it.id == d.id } })
+        return merged.copy(devices = merged.devices.filter { it.id !in excludedIds })
     }
 }
