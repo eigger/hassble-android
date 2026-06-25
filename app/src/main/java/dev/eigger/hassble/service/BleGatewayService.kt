@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.ble.BleRuntime
 import dev.eigger.hassble.ble.DeviceLinkStatus
+import dev.eigger.hassble.ble.haRemoveModeForDevice
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.ConfigLoader
@@ -25,6 +26,7 @@ import dev.eigger.hassble.net.ConnectionState
 import dev.eigger.hassble.net.DeviceRef
 import dev.eigger.hassble.net.EntityMsg
 import dev.eigger.hassble.net.HaAuthHelper
+import dev.eigger.hassble.net.HaRemoveMode
 import dev.eigger.hassble.net.HaWsClient
 import dev.eigger.hassble.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -82,13 +84,14 @@ class BleGatewayService : Service() {
 
         if (intent?.action == ACTION_REMOVE_DEVICE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            val mode = haRemoveModeFor(deviceId)
             // config 재로드를 기다리지 않고 BLE 연결/스캔을 즉시 정리한다.
             runtime?.stopDeviceNow(deviceId)
             scope.launch {
                 val repository = HassSettingsRepository(this@BleGatewayService)
-                repository.queueHaEntityRemoval(setOf(deviceId))
+                repository.queueHaEntityRemoval(setOf(deviceId), mapOf(deviceId to mode))
                 pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + deviceId
-                runCatching { ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
+                runCatching { ws?.removeDevice(deviceId, mode) }
             }
             return START_STICKY
         }
@@ -169,19 +172,22 @@ class BleGatewayService : Service() {
                     val repository = HassSettingsRepository(this@BleGatewayService)
                     val pendingFromStore = repository.consumePendingHaRemovals()
                     // 선언 내용이 바뀐 device의 HA 엔티티를 먼저 제거 후 재선언
-                    val cleanupIds = pendingEntityCleanupDeviceIds + pendingFromStore
+                    val cleanupIds = pendingEntityCleanupDeviceIds + pendingFromStore.keys
                     if (cleanupIds.isNotEmpty()) {
                         pendingEntityCleanupDeviceIds = emptySet()
-                        val failed = mutableSetOf<String>()
+                        val failed = mutableMapOf<String, HaRemoveMode>()
                         for (deviceId in cleanupIds) {
                             val client = ws
+                            val mode = pendingFromStore[deviceId]
+                                ?: runtime?.haRemoveModeForDeviceId(deviceId)
+                                ?: haRemoveModeFor(deviceId)
                             val ok = client != null &&
-                                runCatching { client.removeEntitiesByDeviceIdPrefix(deviceId) }.isSuccess
-                            if (!ok) failed += deviceId
+                                runCatching { client.removeDevice(deviceId, mode) }.isSuccess
+                            if (!ok) failed[deviceId] = mode
                         }
                         // 실패분은 다음 연결에서 다시 시도하도록 대기열에 되돌린다.
-                        if (failed.isNotEmpty()) repository.queueHaEntityRemoval(failed)
-                        val done = cleanupIds - failed
+                        if (failed.isNotEmpty()) repository.queueHaEntityRemoval(failed.keys, failed)
+                        val done = cleanupIds - failed.keys
                         if (done.isNotEmpty()) {
                             LiveEventLogger.log(LogType.LINK,
                                 "Refreshed HA entities for: ${done.joinToString()}")
@@ -280,11 +286,12 @@ class BleGatewayService : Service() {
             val newConfigIds = config.devices.map { it.id }.toSet()
             val removedIds = repository.getRemovedDeviceIds(newConfigIds)
             if (removedIds.isNotEmpty()) {
-                repository.queueHaEntityRemoval(removedIds)
+                val removalModes = removedIds.associateWith { haRemoveModeFor(it) }
+                repository.queueHaEntityRemoval(removedIds, removalModes)
                 pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + removedIds
                 LiveEventLogger.log(LogType.LINK, "Config 변경: 삭제된 기기 HA 정리 중 (${removedIds.joinToString()})")
                 removedIds.forEach { deviceId ->
-                    runCatching { ws?.removeEntitiesByDeviceIdPrefix(deviceId) }
+                    runCatching { ws?.removeDevice(deviceId, removalModes.getValue(deviceId)) }
                     repository.unbindDevice(deviceId)
                 }
             }
@@ -365,6 +372,11 @@ class BleGatewayService : Service() {
     }
 
     private fun defaultEnabled(config: GatewayConfig): Set<String> = config.allSensorKeys()
+
+    private fun haRemoveModeFor(deviceId: String): HaRemoveMode =
+        runtime?.haRemoveModeForDeviceId(deviceId)
+            ?: haRemoveModeForDevice(currentConfig?.devices?.firstOrNull { it.id == deviceId })
+            ?: HaRemoveMode.EXACT
 
     @android.annotation.SuppressLint("HardwareIds")
     private fun gatewayId(): String =
