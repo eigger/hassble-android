@@ -146,6 +146,7 @@ import dev.eigger.hassble.config.ValidationLevel
 import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
+import dev.eigger.hassble.ble.haRemoveModeForDevice
 import dev.eigger.hassble.net.ConnectionIssue
 import dev.eigger.hassble.net.ConnectionState
 import dev.eigger.hassble.net.GitHubHelper
@@ -633,7 +634,10 @@ private fun HomeScreen() {
                     onDeleteDevice = { deviceId ->
                         scope.launch {
                             val isDraft = deviceId in draftDeviceIds
-                            repository.deleteDevice(deviceId, isDraft = isDraft)
+                            val device = draftDevices.firstOrNull { it.id == deviceId }
+                                ?: effectiveConfig?.devices?.firstOrNull { it.id == deviceId }
+                            val mode = haRemoveModeForDevice(device)
+                            repository.deleteDevice(deviceId, isDraft = isDraft, haRemoveMode = mode)
                             draftDevices = repository.loadDraftDevices()
                             // 게이트웨이가 실행 중일 때만 서비스에 알린다.
                             // 중단 상태면 deleteDevice가 대기열에 넣은 HA 삭제가 다음 시작 시 처리된다.

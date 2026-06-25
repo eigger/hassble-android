@@ -169,9 +169,10 @@ class BleRuntime(
         // 1. Remove deleted devices
         val deletedIds = oldDeviceIds - currentDeviceIds
         for (id in deletedIds) {
+            val mode = haRemoveModeForDevice(oldConfig.devices.firstOrNull { it.id == id })
             stopDevice(id)
             scope.launch {
-                runCatching { ws.removeEntitiesByDeviceIdPrefix(id) }
+                runCatching { ws.removeDevice(id, mode) }
             }
         }
 
@@ -203,10 +204,11 @@ class BleRuntime(
                 if (needsHaCleanup) {
                     // 센서 platform/type이 바뀐 경우: HA 구 엔티티를 먼저 삭제 후 재선언
                     val capturedD = d
+                    val cleanupMode = haRemoveModeForDevice(capturedD)
                     pendingHaCleanupIds.add(capturedD.id)
                     scope.launch {
                         try {
-                            runCatching { ws.removeEntitiesByDeviceIdPrefix(capturedD.id) }
+                            runCatching { ws.removeDevice(capturedD.id, cleanupMode) }
                             // cleanup이 진행되는 동안 기기가 삭제/제외됐다면 재기동하지 않는다.
                             if (lastConfig?.devices?.any { it.id == capturedD.id } == true) {
                                 startDevice(capturedD)
@@ -540,12 +542,19 @@ class BleRuntime(
 
     /**
      * 기기 삭제 시 config 재로드(네트워크)를 기다리지 않고 즉시 BLE 연결/스캔 상태를 정리한다.
-     * HA 엔티티 제거는 호출 측에서 별도로 처리한다.
+     * HA 엔티티 제거는 호출 측에서 [haRemoveModeForDeviceId]와 [dev.eigger.hassble.net.HaWsClient.removeDevice]로 처리한다.
      */
     fun stopDeviceNow(deviceId: String) {
         if (!::config.isInitialized) return
         stopDevice(deviceId)
     }
+
+    /** 삭제·HA 정리 요청 전에 호출 — [devices]가 비워지기 전에 remove mode를 결정한다. */
+    fun haRemoveModeForDeviceId(deviceId: String) = haRemoveModeForDevice(
+        devices[deviceId]
+            ?: if (::config.isInitialized) config.devices.firstOrNull { it.id == deviceId } else null
+            ?: lastConfig?.devices?.firstOrNull { it.id == deviceId },
+    )
 
     /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 시작. */
     fun connectDevice(deviceId: String) {

@@ -104,6 +104,32 @@ HA는 받은 것을 그대로 반영만 한다.
 옵션→hex, number template `A1{value:02X}`, button press→hex). hex 매핑은 **앱**이,
 HA는 의도만 전달. unique_id는 컴포넌트가 원래 값(클라이언트 네임스페이스 제거)으로 보냄.
 
+### ⬆️ `remove` — 엔티티/디바이스 삭제
+```jsonc
+{ "id": <n>, "type": "ws_bridge/remove", "device_id": "jaalee_jht" }
+```
+`unique_id`만 지정해 단일 엔티티를 지울 수도 있다. `device_id`는 해당 클라이언트
+디바이스와 그 하위 엔티티를 제거한다.
+
+**삭제 범위 (`mode`, 선택)**
+
+| mode | 동작 |
+|------|------|
+| `exact` (기본) | `device_id` / `unique_id`와 **완전 일치**하는 대상만 |
+| `prefix` | 대상 id와 일치하거나 `대상id_`로 시작하는 **하위 id 전부** |
+
+MAC별 `device.id`를 쓰는 advertisement 프로필(`instance_mode: mac`, 고정 MAC 없음)을
+앱에서 삭제할 때는 `mode: "prefix"`를 보낸다. 예: 프로필 `jaalee_jht` 삭제 시
+`jaalee_jht_AABBCCDDEEFF` 인스턴스 디바이스·엔티티까지 함께 제거.
+
+```jsonc
+{ "id": <n>, "type": "ws_bridge/remove",
+  "device_id": "jaalee_jht",
+  "mode": "prefix" }
+```
+
+> 상세 스키마·응답은 [hass-ws-bridge PROTOCOL.md §3.4](https://github.com/eigger/hass-ws-bridge/blob/main/docs/PROTOCOL.md) 참고.
+
 ## 비고
 
 - 모든 바이트열 표기는 hex 문자열(공백 없음).

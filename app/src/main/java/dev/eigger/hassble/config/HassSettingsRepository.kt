@@ -16,6 +16,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
+import dev.eigger.hassble.net.HaRemoveMode
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "hassble_settings")
 
@@ -42,6 +43,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_ENTITY_FINGERPRINTS = stringPreferencesKey("entity_fingerprints")
         private val KEY_DRAFT_DEVICES = stringPreferencesKey("draft_devices")
         private val KEY_PENDING_HA_REMOVALS = stringPreferencesKey("pending_ha_removals")
+        private val KEY_PENDING_HA_REMOVAL_MODES = stringPreferencesKey("pending_ha_removal_modes")
         private val KEY_EXCLUDED_DEVICES = stringPreferencesKey("excluded_devices")
         private val KEY_LOG_BUFFER_LIMIT = intPreferencesKey("log_buffer_limit")
     }
@@ -169,29 +171,54 @@ class HassSettingsRepository(private val context: Context) {
     }
 
     /** 게이트웨이 중단·WS 미연결 시에도 다음 연결 때 HA 엔티티를 제거할 수 있도록 대기열에 넣는다. */
-    suspend fun queueHaEntityRemoval(deviceIds: Collection<String>) {
+    suspend fun queueHaEntityRemoval(
+        deviceIds: Collection<String>,
+        modes: Map<String, HaRemoveMode> = emptyMap(),
+    ) {
         if (deviceIds.isEmpty()) return
         val stringList = ListSerializer(String.serializer())
+        val stringMap = MapSerializer(String.serializer(), String.serializer())
         context.dataStore.edit { prefs ->
             val current = runCatching {
                 json.decodeFromString(stringList, prefs[KEY_PENDING_HA_REMOVALS] ?: "[]").toMutableSet()
             }.getOrDefault(mutableSetOf())
             current += deviceIds
             prefs[KEY_PENDING_HA_REMOVALS] = json.encodeToString(stringList, current.sorted())
+            if (modes.isNotEmpty()) {
+                val modeMap = runCatching {
+                    json.decodeFromString(stringMap, prefs[KEY_PENDING_HA_REMOVAL_MODES] ?: "{}").toMutableMap()
+                }.getOrDefault(mutableMapOf())
+                modes.forEach { (id, mode) -> modeMap[id] = mode.wireName }
+                prefs[KEY_PENDING_HA_REMOVAL_MODES] = json.encodeToString(stringMap, modeMap)
+            }
         }
     }
 
-    suspend fun consumePendingHaRemovals(): Set<String> {
-        var result = emptySet<String>()
+    /** device id → ws_bridge/remove mode (미저장 시 [HaRemoveMode.EXACT]). */
+    suspend fun consumePendingHaRemovals(): Map<String, HaRemoveMode> {
+        var ids = emptySet<String>()
+        var modeWire = emptyMap<String, String>()
         val stringList = ListSerializer(String.serializer())
+        val stringMap = MapSerializer(String.serializer(), String.serializer())
         context.dataStore.edit { prefs ->
-            val raw = prefs[KEY_PENDING_HA_REMOVALS] ?: return@edit
-            result = runCatching {
-                json.decodeFromString(stringList, raw).toSet()
-            }.getOrDefault(emptySet())
-            prefs.remove(KEY_PENDING_HA_REMOVALS)
+            prefs[KEY_PENDING_HA_REMOVALS]?.let { raw ->
+                ids = runCatching {
+                    json.decodeFromString(stringList, raw).toSet()
+                }.getOrDefault(emptySet())
+                prefs.remove(KEY_PENDING_HA_REMOVALS)
+            }
+            prefs[KEY_PENDING_HA_REMOVAL_MODES]?.let { raw ->
+                modeWire = runCatching {
+                    json.decodeFromString(stringMap, raw)
+                }.getOrDefault(emptyMap())
+                prefs.remove(KEY_PENDING_HA_REMOVAL_MODES)
+            }
         }
-        return result
+        return ids.associateWith { id ->
+            modeWire[id]?.let { wire ->
+                HaRemoveMode.entries.firstOrNull { it.wireName == wire }
+            } ?: HaRemoveMode.EXACT
+        }
     }
 
     suspend fun saveScanMode(mode: BleScanModeOption) {
@@ -371,8 +398,12 @@ class HassSettingsRepository(private val context: Context) {
     }
 
     /** draft 또는 Git config 기기를 앱 로컬 설정과 함께 제거하고 HA 삭제를 대기열에 넣는다. */
-    suspend fun deleteDevice(deviceId: String, isDraft: Boolean) {
-        queueHaEntityRemoval(setOf(deviceId))
+    suspend fun deleteDevice(
+        deviceId: String,
+        isDraft: Boolean,
+        haRemoveMode: HaRemoveMode = HaRemoveMode.EXACT,
+    ) {
+        queueHaEntityRemoval(setOf(deviceId), mapOf(deviceId to haRemoveMode))
         val remainingDraft = if (isDraft) loadDraftDevices().filter { it.id != deviceId } else null
         val stringList = ListSerializer(String.serializer())
         val stringMap = MapSerializer(String.serializer(), String.serializer())
