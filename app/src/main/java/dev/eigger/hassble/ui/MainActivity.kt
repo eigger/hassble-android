@@ -244,6 +244,18 @@ private fun HomeScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { HassSettingsRepository(context) }
+    val presets = remember {
+        ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
+    }
+    val bundledTemplates = remember { ConfigTemplates.fromAssets(context) }
+    val loader = remember { ConfigLoader(File(context.filesDir, "config_cache"), presets) }
+    val templatesLoader = remember {
+        ConfigTemplatesLoader(File(context.filesDir, "templates_cache"), bundledTemplates, loader)
+    }
+    var configTemplates by remember { mutableStateOf(bundledTemplates) }
+    var templatesSource by remember { mutableStateOf(ConfigTemplatesLoader.Source.BUNDLED) }
+    var isTemplatesLoading by remember { mutableStateOf(false) }
+    var templatesReloadTrigger by remember { mutableStateOf(0) }
 
     val savedHaUrl by repository.haUrl.collectAsState(initial = "")
     val savedHaToken by repository.haToken.collectAsState(initial = "")
@@ -279,6 +291,7 @@ private fun HomeScreen() {
     var gitRepoInput by remember { mutableStateOf("") }
     var gitBranchInput by remember { mutableStateOf(HassBleDefaults.DEFAULT_BRANCH) }
     var gitTokenInput by remember { mutableStateOf("") }
+    var settingsLoaded by remember { mutableStateOf(false) }
 
     val gitUrlInput = remember(gitRepoInput, gitBranchInput) {
         if (gitRepoInput.isBlank()) "" else GitHubHelper.buildConfigUrl(gitRepoInput.trim(), gitBranchInput)
@@ -287,14 +300,16 @@ private fun HomeScreen() {
     LaunchedEffect(savedHaUrl, savedHaToken) {
         urlInput = savedHaUrl
         tokenInput = savedHaToken
+        settingsLoaded = true
     }
     LaunchedEffect(savedGitUrl, savedGitToken) {
-        GitHubHelper.parseRepoBranch(savedGitUrl)?.let { (repo, branch) ->
+        val normalized = loader.normalizeUrl(savedGitUrl)
+        GitHubHelper.parseRepoBranch(normalized)?.let { (repo, branch) ->
             gitRepoInput = repo
             gitBranchInput = branch
         } ?: run {
             val legacy = savedGitUrl.trim()
-            if (legacy.isNotBlank() && !legacy.startsWith("http")) {
+            if (legacy.isNotBlank()) {
                 gitRepoInput = legacy
                 gitBranchInput = HassBleDefaults.DEFAULT_BRANCH
             }
@@ -327,18 +342,7 @@ private fun HomeScreen() {
         }
     }
 
-    val presets = remember {
-        ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
-    }
-    val bundledTemplates = remember { ConfigTemplates.fromAssets(context) }
-    val loader = remember { ConfigLoader(File(context.filesDir, "config_cache"), presets) }
-    val templatesLoader = remember {
-        ConfigTemplatesLoader(File(context.filesDir, "templates_cache"), bundledTemplates, loader)
-    }
-    var configTemplates by remember { mutableStateOf(bundledTemplates) }
-    var templatesSource by remember { mutableStateOf(ConfigTemplatesLoader.Source.BUNDLED) }
-    var isTemplatesLoading by remember { mutableStateOf(false) }
-    var templatesReloadTrigger by remember { mutableStateOf(0) }
+
     val isRunning by BleGatewayService.isServiceRunning.collectAsState()
     val connState by BleGatewayService.serviceConnectionState.collectAsState()
     val connectionIssue by BleGatewayService.connectionIssue.collectAsState()
@@ -550,6 +554,7 @@ private fun HomeScreen() {
             when (selectedTab) {
                 0 -> GatewayTabContent(
                     isRunning = isRunning,
+                    settingsLoaded = settingsLoaded,
                     connState = connState,
                     connectionIssue = connectionIssue,
                     gitRepoConfigured = gitRepoInput.isNotBlank(),
@@ -974,6 +979,7 @@ private fun GatewayReadinessBanner(
 @Composable
 private fun GatewayTabContent(
     isRunning: Boolean,
+    settingsLoaded: Boolean = true,
     connState: ConnectionState,
     connectionIssue: ConnectionIssue,
     gitRepoConfigured: Boolean,
@@ -1243,7 +1249,7 @@ private fun GatewayTabContent(
             hasDraftDevices = hasDraftDevices,
             enabledSensorCount = enabledSensorCount,
         )
-        if (!isRunning && readiness.hasAnyMissing) {
+        if (settingsLoaded && !isRunning && readiness.hasAnyMissing) {
             GatewayReadinessBanner(
                 readiness = readiness,
                 onGoToSensorsTab = onGoToSensorsTab,
@@ -1252,7 +1258,7 @@ private fun GatewayTabContent(
 
         GatewayControlButton(
             isRunning = isRunning,
-            startEnabled = readiness.canStart,
+            startEnabled = !settingsLoaded || readiness.canStart,
             onStart = onStartGateway,
             onStop = onStopGateway,
         )
