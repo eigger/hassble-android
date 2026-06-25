@@ -1,5 +1,6 @@
 package dev.eigger.hassble.net
 
+import dev.eigger.hassble.config.HassBleDefaults
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -22,7 +23,7 @@ object GitHubHelper {
         return ParsedGitUrl(repoShort, branch, file)
     }
 
-    fun buildRawUrl(repoOrUrl: String, file: String, branch: String = "main"): String {
+    fun buildRawUrl(repoOrUrl: String, file: String, branch: String = HassBleDefaults.DEFAULT_BRANCH): String {
         if (repoOrUrl.startsWith("http")) return repoOrUrl   // already a full URL
         if (repoOrUrl.isBlank() || file.isBlank()) return ""
         val parts = repoOrUrl.trim('/').split('/')
@@ -31,9 +32,23 @@ object GitHubHelper {
         val resolvedBranch = when {
             parts.size > 2 -> parts.subList(2, parts.size).joinToString("/")
             branch.isNotBlank() -> branch.trim()
-            else -> "main"
+            else -> HassBleDefaults.DEFAULT_BRANCH
         }
         return "https://raw.githubusercontent.com/$owner/$repo/$resolvedBranch/$file"
+    }
+
+    fun buildConfigUrl(repo: String, branch: String = HassBleDefaults.DEFAULT_BRANCH): String =
+        buildRawUrl(repo, HassBleDefaults.CONFIG_FILE, branch)
+
+    fun buildTemplatesUrl(repo: String, branch: String = HassBleDefaults.DEFAULT_BRANCH): String =
+        buildRawUrl(repo, HassBleDefaults.TEMPLATES_FILE, branch)
+
+    /** Saved raw URL → owner/repo and branch (config file path is ignored). */
+    fun parseRepoBranch(url: String): Pair<String, String>? {
+        val parsed = parseGitUrl(url.trim()) ?: return null
+        val parts = parsed.repoShort.split('/')
+        if (parts.size < 2) return null
+        return "${parts[0]}/${parts[1]}" to parsed.branch
     }
 
     suspend fun fetchYamlFiles(repoOrUrl: String, branch: String = "main", token: String? = null): Result<List<String>> =

@@ -13,8 +13,8 @@ android {
         applicationId = "dev.eigger.hassble"
         minSdk = 26
         targetSdk = 35
-        versionCode = 40
-        versionName = "0.3.11"
+        versionCode = 41
+        versionName = "0.3.12"
     }
 
     signingConfigs {
@@ -75,6 +75,7 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.androidx.browser)
 
     implementation(libs.kotlinx.serialization.json)

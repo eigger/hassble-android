@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +42,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_AUTO_CONNECT_DISABLED = stringPreferencesKey("auto_connect_disabled")
         private val KEY_ENTITY_FINGERPRINTS = stringPreferencesKey("entity_fingerprints")
         private val KEY_DRAFT_DEVICES = stringPreferencesKey("draft_devices")
+        private val KEY_LOG_BUFFER_LIMIT = intPreferencesKey("log_buffer_limit")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -101,6 +103,19 @@ class HassSettingsRepository(private val context: Context) {
         runCatching { BleScanModeOption.valueOf(prefs[KEY_SCAN_MODE] ?: "") }
             .getOrDefault(BleScanModeOption.BALANCED)
     }
+
+    val logBufferLimit: Flow<Int> = context.dataStore.data.map { prefs ->
+        normalizeLogBufferLimit(prefs[KEY_LOG_BUFFER_LIMIT] ?: HassBleDefaults.DEFAULT_LOG_BUFFER_LIMIT)
+    }
+
+    suspend fun saveLogBufferLimit(limit: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LOG_BUFFER_LIMIT] = normalizeLogBufferLimit(limit)
+        }
+    }
+
+    private fun normalizeLogBufferLimit(limit: Int): Int =
+        limit.takeIf { it in HassBleDefaults.LOG_BUFFER_LIMIT_OPTIONS } ?: HassBleDefaults.DEFAULT_LOG_BUFFER_LIMIT
 
     val disabledDevices: Flow<Set<String>> = context.dataStore.data.map { prefs ->
         runCatching {
@@ -311,6 +326,76 @@ class HassSettingsRepository(private val context: Context) {
         current.removeAll { it.id == device.id }
         current += device
         saveDraftDevices(current)
+    }
+
+    suspend fun removeDraftDevice(deviceId: String) {
+        val remaining = loadDraftDevices().filter { it.id != deviceId }
+        val stringList = ListSerializer(String.serializer())
+        val stringMap = MapSerializer(String.serializer(), String.serializer())
+        context.dataStore.edit { prefs ->
+            // draft 본체 제거
+            if (remaining.isEmpty()) {
+                prefs.remove(KEY_DRAFT_DEVICES)
+            } else {
+                prefs[KEY_DRAFT_DEVICES] = json.encodeToString(
+                    ListSerializer(DeviceConfig.serializer()),
+                    remaining,
+                )
+            }
+
+            // 바인딩(MAC) 제거
+            prefs[KEY_BOUND_DEVICES]?.let { raw ->
+                val map = runCatching { json.decodeFromString(stringMap, raw) }
+                    .getOrDefault(emptyMap()).toMutableMap()
+                if (map.remove(deviceId) != null) {
+                    prefs[KEY_BOUND_DEVICES] = json.encodeToString(stringMap, map)
+                }
+            }
+
+            // 센서 enable 설정 제거 (deviceId/ 접두사)
+            val sensorPrefix = "$deviceId/"
+            prefs[KEY_ENABLED_SENSORS]?.let { raw ->
+                val set = runCatching { json.decodeFromString(stringList, raw).toMutableList() }
+                    .getOrDefault(mutableListOf())
+                if (set.removeAll { it.startsWith(sensorPrefix) }) {
+                    prefs[KEY_ENABLED_SENSORS] = json.encodeToString(stringList, set.sorted())
+                }
+            }
+            prefs[KEY_ALL_KNOWN_SENSORS]?.let { raw ->
+                val set = runCatching { json.decodeFromString(stringList, raw).toMutableList() }
+                    .getOrDefault(mutableListOf())
+                if (set.removeAll { it.startsWith(sensorPrefix) }) {
+                    prefs[KEY_ALL_KNOWN_SENSORS] = json.encodeToString(stringList, set.sorted())
+                }
+            }
+
+            // disabled / auto-connect 목록에서 제거
+            for (key in listOf(KEY_DISABLED_DEVICES, KEY_AUTO_CONNECT_DISABLED)) {
+                prefs[key]?.let { raw ->
+                    val set = runCatching { json.decodeFromString(stringList, raw).toMutableList() }
+                        .getOrDefault(mutableListOf())
+                    if (set.remove(deviceId)) {
+                        prefs[key] = json.encodeToString(stringList, set.sorted())
+                    }
+                }
+            }
+
+            // known id / fingerprint 제거
+            prefs[KEY_KNOWN_DEVICE_IDS]?.let { raw ->
+                val set = runCatching { json.decodeFromString(stringList, raw).toMutableList() }
+                    .getOrDefault(mutableListOf())
+                if (set.remove(deviceId)) {
+                    prefs[KEY_KNOWN_DEVICE_IDS] = json.encodeToString(stringList, set.sorted())
+                }
+            }
+            prefs[KEY_ENTITY_FINGERPRINTS]?.let { raw ->
+                val map = runCatching { json.decodeFromString(stringMap, raw) }
+                    .getOrDefault(emptyMap()).toMutableMap()
+                if (map.remove(deviceId) != null) {
+                    prefs[KEY_ENTITY_FINGERPRINTS] = json.encodeToString(stringMap, map)
+                }
+            }
+        }
     }
 
     suspend fun clearDraftDevices() {
