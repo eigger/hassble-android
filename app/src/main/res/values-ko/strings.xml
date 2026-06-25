@@ -140,6 +140,12 @@
     <string name="live_logs_enable">라이브 활성화</string>
     <string name="logs_clear">지우기</string>
     <string name="logs_share">공유</string>
+    <string name="logs_save">저장</string>
+    <string name="logs_empty">공유할 로그가 없습니다</string>
+    <string name="logs_share_failed">로그 공유 실패: %1$s</string>
+    <string name="logs_save_failed">로그 저장 실패: %1$s</string>
+    <string name="logs_saved_to_downloads">다운로드에 저장됨: %1$s\n카카오톡: + → 파일 → 다운로드</string>
+    <string name="logs_save_unsupported">다운로드 저장은 Android 10 이상에서 지원됩니다. 공유에서 파일 앱을 선택하세요.</string>
     <string name="logs_filter_placeholder">로그 필터 (예: 맥주소, 제조사 번호, OBD…)</string>
     <string name="oauth_login_btn">HA OAuth 로그인</string>
     <string name="ha_url_required_toast">HA URL을 먼저 입력해주세요.</string>

@@ -4,10 +4,12 @@ import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -112,6 +114,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import android.os.PowerManager
 import android.provider.Settings
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -2022,6 +2025,19 @@ private fun LogsTabContent() {
                 ) {
                     Button(
                         onClick = {
+                            saveLogsToDownloads(context, logsList)
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.08f),
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(stringResource(R.string.logs_save), fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = {
                             shareLogs(context, logsList)
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -2199,28 +2215,77 @@ private fun LogsTabContent() {
     }
 }
 
+private fun formatLogs(logs: List<LogEntry>): String =
+    logs.joinToString("\n") { "[${it.timestamp}] [${it.type.name}] ${it.message}" }
+
+private fun logFileName(): String = "hassble_logs_${System.currentTimeMillis()}.txt"
+
+private fun writeLogCacheFile(context: Context, logString: String, fileName: String = logFileName()): java.io.File {
+    val file = java.io.File(context.cacheDir, fileName)
+    file.writeText(logString)
+    return file
+}
+
 private fun shareLogs(context: Context, logs: List<LogEntry>) {
     if (logs.isEmpty()) {
-        Toast.makeText(context, "No logs to share", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.logs_empty), Toast.LENGTH_SHORT).show()
         return
     }
-    val logString = logs.joinToString("\n") { "[${it.timestamp}] [${it.type.name}] ${it.message}" }
+    val logString = formatLogs(logs)
     try {
-        val file = java.io.File(context.cacheDir, "hassble_logs.txt")
-        file.writeText(logString)
+        val fileName = logFileName()
+        val file = writeLogCacheFile(context, logString, fileName)
         val uri = androidx.core.content.FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
-            file
+            file,
         )
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
+        val mimeType = context.contentResolver.getType(uri) ?: "text/plain"
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
             putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, fileName)
+            clipData = ClipData.newUri(context.contentResolver, fileName, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, context.getString(R.string.logs_share)))
+        val chooser = Intent.createChooser(sendIntent, context.getString(R.string.logs_share)).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(chooser)
     } catch (e: Exception) {
-        Toast.makeText(context, "Failed to share logs: ${e.message}", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, context.getString(R.string.logs_share_failed, e.message), Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun saveLogsToDownloads(context: Context, logs: List<LogEntry>) {
+    if (logs.isEmpty()) {
+        Toast.makeText(context, context.getString(R.string.logs_empty), Toast.LENGTH_SHORT).show()
+        return
+    }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        Toast.makeText(context, context.getString(R.string.logs_save_unsupported), Toast.LENGTH_LONG).show()
+        return
+    }
+    val logString = formatLogs(logs)
+    val fileName = logFileName()
+    try {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("insert failed")
+        resolver.openOutputStream(uri)?.use { stream ->
+            stream.write(logString.toByteArray(Charsets.UTF_8))
+        } ?: throw IllegalStateException("openOutputStream failed")
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        Toast.makeText(context, context.getString(R.string.logs_saved_to_downloads, fileName), Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, context.getString(R.string.logs_save_failed, e.message), Toast.LENGTH_LONG).show()
     }
 }
 
