@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -2633,26 +2634,7 @@ private fun LogsTabContent(
                             }
                         }
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.logs_follow_latest),
-                            fontSize = 11.sp,
-                            color = Color.White,
-                        )
-                        Switch(
-                            checked = followLatest,
-                            onCheckedChange = { followLatest = it },
-                            modifier = Modifier.height(28.dp),
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.Black,
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            ),
-                        )
-                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2763,6 +2745,7 @@ private fun LogsTabContent(
                 HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
 
                 val listState = rememberLazyListState()
+                val isDragged by listState.interactionSource.collectIsDraggedAsState()
                 val atBottom by remember {
                     derivedStateOf {
                         val info = listState.layoutInfo
@@ -2774,9 +2757,13 @@ private fun LogsTabContent(
                     }
                 }
 
-                LaunchedEffect(atBottom) {
-                    if (!atBottom && followLatest) {
-                        followLatest = false
+                LaunchedEffect(atBottom, isDragged) {
+                    if (isDragged) {
+                        if (!atBottom && followLatest) {
+                            followLatest = false
+                        }
+                    } else if (atBottom && !followLatest) {
+                        followLatest = true
                     }
                 }
 
