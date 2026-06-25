@@ -1,14 +1,26 @@
 # 설정 스키마 v1
 
-**앱**이 git URL에서 불러오는 설정 파일(YAML)의 스펙. 앱이 이 파일을 읽고
+**앱**이 Git 저장소에서 불러오는 설정 파일(`config.yaml`)의 스펙. 앱이 이 파일을 읽고
 디코딩/필터링하며, 사용자가 켠 센서만 HA에 엔티티로 선언한다(아키텍처:
 [DESIGN.md](DESIGN.md)). 하나의 파일에서 **광고/GATT notify/OBD** 세 경로를 모두
 표현하며, OBD 부분은 ESPHome `ble_elm327`의 preset/formula 모델과 호환된다.
 
 전체 예시는 [../config.example.yaml](../config.example.yaml) 참고.
 
-## 최상위
+## 설정 저장소 (Git)
 
+| 항목 | 값 |
+|------|-----|
+| 앱 입력 (센서 탭) | `owner/repo` + 브랜치 (기본 `main`) |
+| 운영 설정 파일 | repo 루트 **`config.yaml`** (고정, 앱에서 경로 변경 불가) |
+| 템플릿 파일 | repo 루트 **`templates.yaml`** (고정) |
+| raw URL 예 | `https://raw.githubusercontent.com/owner/repo/main/config.yaml` |
+| 비공개 repo | config와 동일한 GitHub Token (센서 탭) |
+| HA URL/토큰 | **게이트웨이 탭** — git에 올리지 않음 |
+
+fetch 실패 시 **캐시된 config** 사용. 템플릿은 캐시 → 앱 내장 `templates.yaml` 순으로 폴백.
+
+## 최상위
 ```yaml
 version: 1
 defaults:                           # 기기/센서가 생략 시 상속
@@ -18,8 +30,8 @@ defaults:                           # 기기/센서가 생략 시 상속
 devices: [ ... ]                    # 아래 참조
 ```
 
-> HA 접속(URL/토큰)과 이 설정의 git URL은 모두 **앱 UI**에서 입력한다. 자격증명을
-> git에 올리지 않기 위함. HA 컴포넌트는 설치만 하면 되고 별도 설정이 없다.
+> HA 접속(URL/토큰)은 **게이트웨이 탭**, Git 저장소는 **센서 탭**에서 입력한다.
+> 자격증명을 git에 올리지 않기 위함. HA 컴포넌트는 설치만 하면 되고 별도 설정이 없다.
 
 ## device 공통
 
@@ -29,11 +41,10 @@ devices: [ ... ]                    # 아래 참조
 | `name` | ✅ | HA 표시 이름 |
 | `source` | ✅ | `advertisement` \| `gatt_notify` \| `obd` |
 | `instance_mode` | | advertisement 전용. `mac`(기본)=MAC별 엔티티, `shared`=프로필 ID 하나로 덮어쓰기 |
-
-예시 파일: 리포 루트 [`config.example.yaml`](../config.example.yaml)
 | `sensors` | △ | 센서 목록 (읽기) |
 | `controls` | | 제어 목록 (HA→BLE, gatt_notify/obd) |
 
+예시: [config.example.yaml](../config.example.yaml)
 ## source: advertisement
 
 ```yaml
@@ -178,8 +189,44 @@ publish:
 
 > 광고처럼 고빈도 broadcast에서 "값이 의미있게 바뀐 센서만" 전송해 전송량을 크게 줄인다.
 
-## 내장 OBD preset
+## 템플릿 (`templates.yaml`)
 
+센서 탭 **템플릿 가져오기** 목록은 설정 Git 저장소 **루트**의 `templates.yaml`에서 불러온다.
+운영 설정은 같은 위치의 `config.yaml` (파일명 고정, 앱에서 선택 불가).
+
+- 예: `https://raw.githubusercontent.com/owner/repo/main/config.yaml`
+- 템플릿: `…/main/templates.yaml`
+- 앱 입력: `owner/repo` + 브랜치만 (기본 `main`)
+- 비공개 저장소는 config와 동일한 GitHub Token 사용
+- 네트워크 실패 시 캐시 → 앱 내장 `templates.yaml` 순으로 폴백
+
+스키마:
+
+```yaml
+templates:
+  - id: unique_id
+    name: "표시 이름"
+    description: "선택 설명"
+    device: { ... }   # devices[] 항목과 동일
+```
+
+예시: 리포 루트 [`templates.example.yaml`](../templates.example.yaml)
+
+## 앱 로컬 draft & YAML 내보내기
+
+앱에서 **템플릿 가져오기**, **OBD 추가**, **BLE 추가**(마법사)로 만든 기기는 Git에
+자동 커밋되지 않고 **앱 로컬 draft**로 저장된다. 센서 탭에서 **Local** 배지로 표시.
+
+| 동작 | 설명 |
+|------|------|
+| draft 추가 | Git `config.yaml`과 **병합**되어 게이트웨이에 즉시 반영 (실행 중 reload) |
+| Export YAML | 미리보기 + 클립보드(우상단 아이콘) + Downloads 저장 + 공유 |
+| 내보내기 모드 | **전체(병합)** — Git config + draft / **로컬만** — draft만 |
+| Git 반영 | Export한 YAML을 repo의 `config.yaml`에 붙여넣고 **수동 커밋** |
+
+draft 기기는 앱에서 **Remove from app**으로 삭제 가능. Git에 없는 id만 draft로 취급.
+
+## 내장 OBD preset
 `assets/obd_presets.yaml`에 동봉. ESPHome `presets.py`에서 이식.
 표준(rpm, speed, coolant_temp, engine_load, throttle, fuel_level,
 intake_air_temp, ambient_temp, battery_voltage, run_time, odometer …) +

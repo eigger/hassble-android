@@ -10,15 +10,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,7 +32,7 @@ fun OnboardingDialog(onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
+            shape = HassBleShapes.CardLarge,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(
@@ -51,23 +47,22 @@ fun OnboardingDialog(onDismiss: () -> Unit) {
                 )
                 OnboardingStep(number = 1, text = stringResource(R.string.onboarding_step_ws_bridge))
                 val wsBridgeUrl = stringResource(R.string.ws_bridge_url)
-                TextButton(onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(wsBridgeUrl)))
-                }) {
-                    Text(stringResource(R.string.open_ws_bridge_repo), color = MaterialTheme.colorScheme.primary)
-                }
+                HassLinkButton(
+                    text = stringResource(R.string.open_ws_bridge_repo),
+                    onClick = {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(wsBridgeUrl)))
+                    },
+                )
                 OnboardingStep(number = 2, text = stringResource(R.string.onboarding_step_token))
                 OnboardingStep(number = 3, text = stringResource(R.string.onboarding_step_git))
                 OnboardingStep(number = 4, text = stringResource(R.string.onboarding_step_sensors))
                 Spacer(modifier = Modifier.height(8.dp))
-                Button(
+                HassPrimaryButton(
+                    text = stringResource(R.string.onboarding_done),
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(stringResource(R.string.onboarding_done), color = Color.Black, fontWeight = FontWeight.Bold)
-                }
+                    large = true,
+                )
             }
         }
     }

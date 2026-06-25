@@ -1,22 +1,27 @@
 package dev.eigger.hassble.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,6 +39,34 @@ import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.config.ControlType
 import dev.eigger.hassble.config.SensorConfig
 import dev.eigger.hassble.net.ConnectionIssue
+
+fun copyTextToClipboard(context: Context, text: String, label: String = "text") {
+    if (text.isBlank()) return
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+    Toast.makeText(context, context.getString(R.string.logs_copied), Toast.LENGTH_SHORT).show()
+}
+
+@Composable
+fun HassCopyIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    contentDescription: String = stringResource(R.string.action_copy),
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier.size(32.dp),
+        enabled = enabled,
+    ) {
+        Icon(
+            imageVector = Icons.Default.ContentCopy,
+            contentDescription = contentDescription,
+            tint = if (enabled) MaterialTheme.colorScheme.primary else Color.Gray,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
 
 @Composable
 fun WarningBanner(text: String, modifier: Modifier = Modifier) {
@@ -87,7 +120,8 @@ fun PermissionBanner(missingCount: Int) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.permissions_missing_title), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Text(stringResource(R.string.permissions_missing_desc), color = Color.Gray, fontSize = 12.sp)
-            Button(
+            HassPrimaryButton(
+                text = stringResource(R.string.permissions_open_settings),
                 onClick = {
                     context.startActivity(
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -95,11 +129,7 @@ fun PermissionBanner(missingCount: Int) {
                         },
                     )
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                shape = RoundedCornerShape(8.dp),
-            ) {
-                Text(stringResource(R.string.permissions_open_settings), color = Color.Black, fontSize = 12.sp)
-            }
+            )
         }
     }
 }

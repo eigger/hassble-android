@@ -29,6 +29,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +40,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -72,12 +75,14 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -89,6 +94,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -102,6 +108,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.res.stringResource
 import dev.eigger.hassble.BuildConfig
 import dev.eigger.hassble.R
@@ -111,6 +118,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import android.os.PowerManager
 import android.provider.Settings
@@ -124,11 +132,13 @@ import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.ConfigLoader
-import dev.eigger.hassble.config.ConfigCatalog
+import dev.eigger.hassble.config.ConfigTemplates
+import dev.eigger.hassble.config.ConfigTemplatesLoader
 import dev.eigger.hassble.config.ConfigMerger
 import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
+import dev.eigger.hassble.config.HassBleDefaults
 import dev.eigger.hassble.config.HassSettingsRepository
 import dev.eigger.hassble.config.ObdPresetStore
 import dev.eigger.hassble.config.ValidationIssue
@@ -166,7 +176,12 @@ class MainActivity : ComponentActivity() {
                     background = Color(0xFF121214),
                     surface = Color(0xFF1E1E22),
                     error = Color(0xFFFF5252)
-                )
+                ),
+                shapes = Shapes(
+                    small = HassBleShapes.Button,
+                    medium = HassBleShapes.ButtonLarge,
+                    large = HassBleShapes.CardLarge,
+                ),
             ) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     HomeScreen()
@@ -261,27 +276,27 @@ private fun HomeScreen() {
     var urlInput by remember { mutableStateOf("") }
     var tokenInput by remember { mutableStateOf("") }
     var gitRepoInput by remember { mutableStateOf("") }
-    var gitFileInput by remember { mutableStateOf("") }
-    var gitBranchInput by remember { mutableStateOf("main") }
+    var gitBranchInput by remember { mutableStateOf(HassBleDefaults.DEFAULT_BRANCH) }
     var gitTokenInput by remember { mutableStateOf("") }
 
-    val gitUrlInput = GitHubHelper.buildRawUrl(gitRepoInput, gitFileInput, gitBranchInput)
+    val gitUrlInput = remember(gitRepoInput, gitBranchInput) {
+        if (gitRepoInput.isBlank()) "" else GitHubHelper.buildConfigUrl(gitRepoInput.trim(), gitBranchInput)
+    }
 
     LaunchedEffect(savedHaUrl, savedHaToken) {
         urlInput = savedHaUrl
         tokenInput = savedHaToken
     }
     LaunchedEffect(savedGitUrl, savedGitToken) {
-        val parsed = GitHubHelper.parseGitUrl(savedGitUrl)
-        if (parsed != null) {
-            val parts = parsed.repoShort.split('/')
-            gitRepoInput = if (parts.size >= 2) "${parts[0]}/${parts[1]}" else parsed.repoShort
-            gitBranchInput = parsed.branch
-            gitFileInput = parsed.file
-        } else {
-            gitRepoInput = savedGitUrl
-            gitBranchInput = "main"
-            gitFileInput = ""
+        GitHubHelper.parseRepoBranch(savedGitUrl)?.let { (repo, branch) ->
+            gitRepoInput = repo
+            gitBranchInput = branch
+        } ?: run {
+            val legacy = savedGitUrl.trim()
+            if (legacy.isNotBlank() && !legacy.startsWith("http")) {
+                gitRepoInput = legacy
+                gitBranchInput = HassBleDefaults.DEFAULT_BRANCH
+            }
         }
         gitTokenInput = savedGitToken ?: ""
     }
@@ -306,7 +321,7 @@ private fun HomeScreen() {
     }
     LaunchedEffect(gitUrlInput, gitTokenInput) {
         delay(1000)
-        if (gitUrlInput.isNotBlank()) {
+        if (gitRepoInput.isNotBlank()) {
             repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
         }
     }
@@ -314,8 +329,15 @@ private fun HomeScreen() {
     val presets = remember {
         ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
     }
-    val configCatalog = remember { ConfigCatalog.fromAssets(context) }
+    val bundledTemplates = remember { ConfigTemplates.fromAssets(context) }
     val loader = remember { ConfigLoader(File(context.filesDir, "config_cache"), presets) }
+    val templatesLoader = remember {
+        ConfigTemplatesLoader(File(context.filesDir, "templates_cache"), bundledTemplates, loader)
+    }
+    var configTemplates by remember { mutableStateOf(bundledTemplates) }
+    var templatesSource by remember { mutableStateOf(ConfigTemplatesLoader.Source.BUNDLED) }
+    var isTemplatesLoading by remember { mutableStateOf(false) }
+    var templatesReloadTrigger by remember { mutableStateOf(0) }
     val isRunning by BleGatewayService.isServiceRunning.collectAsState()
     val connState by BleGatewayService.serviceConnectionState.collectAsState()
     val connectionIssue by BleGatewayService.connectionIssue.collectAsState()
@@ -324,8 +346,13 @@ private fun HomeScreen() {
     val deviceLinkStatuses by BleGatewayService.deviceLinkStatuses.collectAsState()
     val disabledDeviceIds by repository.disabledDevices.collectAsState(initial = emptySet())
     val autoConnectDisabledIds by repository.autoConnectDisabled.collectAsState(initial = emptySet())
+    val logBufferLimit by repository.logBufferLimit.collectAsState(initial = LiveEventLogger.DEFAULT_MAX_LOGS)
     val discoveredAdv by BleGatewayService.discoveredAdvInstances.collectAsState()
     val sensorLastValues by BleGatewayService.sensorLastValues.collectAsState()
+
+    LaunchedEffect(logBufferLimit) {
+        LiveEventLogger.setMaxLogs(logBufferLimit)
+    }
 
     var loadedConfig by remember { mutableStateOf<GatewayConfig?>(null) }
     var draftDevices by remember { mutableStateOf<List<DeviceConfig>>(emptyList()) }
@@ -334,9 +361,10 @@ private fun HomeScreen() {
     var reloadTrigger by remember { mutableStateOf(0) }
     var usingCachedConfig by remember { mutableStateOf(false) }
     var showOnboarding by remember { mutableStateOf(false) }
-    var showCatalogDialog by remember { mutableStateOf(false) }
+    var showTemplateDialog by remember { mutableStateOf(false) }
     var showObdDialog by remember { mutableStateOf(false) }
     var showAdvWizard by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
     var missingPermCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -346,6 +374,10 @@ private fun HomeScreen() {
     val effectiveConfig = remember(loadedConfig, draftDevices) {
         ConfigMerger.effectiveConfig(loadedConfig, draftDevices)
     }
+    val draftDeviceIds = remember(draftDevices, loadedConfig) {
+        val remoteIds = loadedConfig?.devices?.map { it.id }?.toSet() ?: emptySet()
+        draftDevices.map { it.id }.filterNot { it in remoteIds }.toSet()
+    }
 
     val cacheSavedAtMs = remember(gitUrlInput, usingCachedConfig) {
         if (usingCachedConfig) loader.cacheSavedAt(gitUrlInput) else null
@@ -353,6 +385,14 @@ private fun HomeScreen() {
 
     LaunchedEffect(onboardingComplete) {
         if (!onboardingComplete) showOnboarding = true
+    }
+
+    LaunchedEffect(gitUrlInput, gitTokenInput, templatesReloadTrigger) {
+        isTemplatesLoading = true
+        val loaded = templatesLoader.load(gitUrlInput, gitTokenInput.ifBlank { null })
+        configTemplates = loaded.templates
+        templatesSource = loaded.source
+        isTemplatesLoading = false
     }
 
     LaunchedEffect(gitUrlInput, gitTokenInput, reloadTrigger) {
@@ -453,11 +493,18 @@ private fun HomeScreen() {
 
     var scanningDevice by remember { mutableStateOf<DeviceConfig?>(null) }
     var selectedTab by remember { mutableStateOf(0) }
+    var logIncludeAdv by remember { mutableStateOf(false) }
+    var sensorDeviceSearch by remember { mutableStateOf("") }
 
     LaunchedEffect(selectedTab) {
         if (selectedTab != 2) {
-            LiveEventLogger.isLiveActive = false
+            logIncludeAdv = false
+            LiveEventLogger.setIncludeAdvLogs(false, purgeExisting = true)
         }
+    }
+
+    LaunchedEffect(selectedTab, logIncludeAdv) {
+        LiveEventLogger.setIncludeAdvLogs(selectedTab == 2 && logIncludeAdv)
     }
 
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
@@ -503,6 +550,9 @@ private fun HomeScreen() {
                     isRunning = isRunning,
                     connState = connState,
                     connectionIssue = connectionIssue,
+                    gitRepoConfigured = gitRepoInput.isNotBlank(),
+                    enabledSensorCount = effectiveEnabledSensors.size,
+                    onGoToSensorsTab = { selectedTab = 1 },
                     urlInput = urlInput,
                     onUrlChange = { urlInput = it },
                     tokenInput = tokenInput,
@@ -526,17 +576,18 @@ private fun HomeScreen() {
                     isBatteryIgnored = isBatteryIgnored,
                     onShowOnboarding = { showOnboarding = true },
                     onStartGateway = {
-                        when {
-                            urlInput.isBlank() || (tokenInput.isBlank() && savedHaRefreshToken.isBlank()) ->
-                                Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
-                            gitUrlInput.isBlank() ->
-                                Toast.makeText(context, context.getString(R.string.config_not_set_toast), Toast.LENGTH_SHORT).show()
-                            else -> scope.launch {
-                                repository.saveHaSettings(urlInput, tokenInput)
-                                repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
-                                val refreshToken = repository.haRefreshToken.first()
-                                BleGatewayService.start(context, urlInput, tokenInput, refreshToken, gitUrlInput, gitTokenInput.ifBlank { null })
-                            }
+                        scope.launch {
+                            repository.saveHaSettings(urlInput, tokenInput)
+                            repository.saveGitSettings(gitUrlInput, gitTokenInput.ifBlank { null })
+                            val refreshToken = repository.haRefreshToken.first()
+                            BleGatewayService.start(
+                                context,
+                                urlInput,
+                                tokenInput,
+                                refreshToken,
+                                gitUrlInput,
+                                gitTokenInput.ifBlank { null },
+                            )
                         }
                     },
                     onStopGateway = { BleGatewayService.stop(context) },
@@ -555,23 +606,22 @@ private fun HomeScreen() {
                     sensorLastValues = sensorLastValues,
                     deviceLinkStatuses = deviceLinkStatuses,
                     gitRepoInput = gitRepoInput,
-                    gitFileInput = gitFileInput,
                     gitBranchInput = gitBranchInput,
                     gitTokenInput = gitTokenInput,
+                    deviceSearchText = sensorDeviceSearch,
+                    onDeviceSearchChange = { sensorDeviceSearch = it },
                     draftDeviceCount = draftDevices.size,
+                    draftDeviceIds = draftDeviceIds,
                     cacheSavedAtMs = cacheSavedAtMs,
                     usingCachedConfig = usingCachedConfig,
                     onGitRepoChange = { gitRepoInput = it },
-                    onGitFileChange = { gitFileInput = it },
                     onGitBranchChange = { gitBranchInput = it },
                     onGitTokenChange = { gitTokenInput = it },
                     onReloadConfig = { reloadTrigger++ },
-                    onImportCatalog = { showCatalogDialog = true },
+                    onImportTemplate = { showTemplateDialog = true },
                     onAddObd = { showObdDialog = true },
                     onAddAdv = { showAdvWizard = true },
-                    onExportYaml = {
-                        effectiveConfig?.let { exportConfigYaml(context, it) }
-                    },
+                    onExportYaml = { showExportDialog = true },
                     onBindClick = { scanningDevice = it },
                     onUnbindClick = { deviceId -> scope.launch { repository.unbindDevice(deviceId) } },
                     onSensorToggle = { key, enabled ->
@@ -585,8 +635,34 @@ private fun HomeScreen() {
                     onSetAutoConnect = { deviceId, enabled -> BleGatewayService.setAutoConnect(context, deviceId, enabled) },
                     onConnectDevice = { deviceId -> BleGatewayService.connectDevice(context, deviceId) },
                     onDisconnectDevice = { deviceId -> BleGatewayService.disconnectDevice(context, deviceId) },
+                    onRemoveDraftDevice = { deviceId ->
+                        scope.launch {
+                            repository.removeDraftDevice(deviceId)
+                            draftDevices = repository.loadDraftDevices()
+                            if (isRunning) {
+                                BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                            }
+                        }
+                    },
                 )
-                2 -> LogsTabContent()
+                2 -> LogsTabContent(
+                    isRunning = isRunning,
+                    logBufferLimit = logBufferLimit,
+                    logIncludeAdv = logIncludeAdv,
+                    onLogBufferLimitChange = { limit ->
+                        scope.launch { repository.saveLogBufferLimit(limit) }
+                    },
+                    onLogIncludeAdvChange = { enabled ->
+                        logIncludeAdv = enabled
+                        if (!enabled) {
+                            LiveEventLogger.setIncludeAdvLogs(false, purgeExisting = true)
+                        }
+                    },
+                    onFindMacInSensors = { mac ->
+                        sensorDeviceSearch = mac
+                        selectedTab = 1
+                    },
+                )
             }
         }
 
@@ -649,24 +725,40 @@ private fun HomeScreen() {
         })
     }
 
-    if (showCatalogDialog) {
-        CatalogImportDialog(
-            catalog = configCatalog,
-            onDismiss = { showCatalogDialog = false },
+    if (showTemplateDialog) {
+        TemplateImportDialog(
+            templates = configTemplates,
+            isLoading = isTemplatesLoading,
+            source = templatesSource,
+            templatesUrl = gitRepoInput.takeIf { it.isNotBlank() }
+                ?.let { GitHubHelper.buildTemplatesUrl(it.trim(), gitBranchInput) },
+            onRefresh = { templatesReloadTrigger++ },
+            onDismiss = { showTemplateDialog = false },
             onImport = { template ->
                 scope.launch {
-                    val existingIds = (effectiveConfig?.devices?.map { it.id } ?: emptyList()).toSet()
-                    val device = presets.expandDevice(template.device)
-                    val unique = ConfigMerger.ensureUniqueId(device, existingIds)
-                    repository.addDraftDevice(unique)
-                    draftDevices = repository.loadDraftDevices()
-                    showCatalogDialog = false
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.config_imported_toast, unique.name),
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                    if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                    val result = runCatching {
+                        val existingIds = (effectiveConfig?.devices?.map { it.id } ?: emptyList()).toSet()
+                        val device = presets.expandDevice(template.device)
+                        val unique = ConfigMerger.ensureUniqueId(device, existingIds)
+                        repository.addDraftDevice(unique)
+                        draftDevices = repository.loadDraftDevices()
+                        unique
+                    }
+                    showTemplateDialog = false
+                    result.onSuccess { unique ->
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.config_imported_toast, unique.name),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                    }.onFailure { e ->
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.config_import_failed, e.message ?: template.name),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
                 }
             },
         )
@@ -678,20 +770,40 @@ private fun HomeScreen() {
             onDismiss = { showObdDialog = false },
             onCreate = { device ->
                 scope.launch {
-                    val existingIds = (effectiveConfig?.devices?.map { it.id } ?: emptyList()).toSet()
-                    val expanded = presets.expandDevice(device)
-                    val unique = ConfigMerger.ensureUniqueId(expanded, existingIds)
-                    repository.addDraftDevice(unique)
-                    draftDevices = repository.loadDraftDevices()
+                    val result = runCatching {
+                        val existingIds = (effectiveConfig?.devices?.map { it.id } ?: emptyList()).toSet()
+                        val expanded = presets.expandDevice(device)
+                        val unique = ConfigMerger.ensureUniqueId(expanded, existingIds)
+                        repository.addDraftDevice(unique)
+                        draftDevices = repository.loadDraftDevices()
+                        unique
+                    }
                     showObdDialog = false
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.config_imported_toast, unique.name),
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                    if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                    result.onSuccess { unique ->
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.config_imported_toast, unique.name),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                    }.onFailure { e ->
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.config_import_failed, e.message ?: device.name),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
                 }
             },
+        )
+    }
+
+    if (showExportDialog) {
+        ExportYamlDialog(
+            mergedConfig = effectiveConfig,
+            draftDevices = draftDevices,
+            gitRepoInput = gitRepoInput,
+            onDismiss = { showExportDialog = false },
         )
     }
 
@@ -719,11 +831,120 @@ private fun HomeScreen() {
 
 
 
+private enum class GatewayReadinessItem {
+    HaUrl,
+    HaAuth,
+    GitRepo,
+    EnabledSensors,
+}
+
+private data class GatewayReadiness(
+    val missingBlocking: List<GatewayReadinessItem>,
+    val missingAdvisory: List<GatewayReadinessItem>,
+) {
+    val hasAnyMissing: Boolean
+        get() = missingBlocking.isNotEmpty() || missingAdvisory.isNotEmpty()
+
+    val canStart: Boolean
+        get() = missingBlocking.isEmpty()
+}
+
+private fun isHaUrlReady(url: String): Boolean =
+    url.isNotBlank() && url != "https://" && url != "http://"
+
+private fun computeGatewayReadiness(
+    urlInput: String,
+    tokenInput: String,
+    haRefreshToken: String,
+    gitRepoConfigured: Boolean,
+    enabledSensorCount: Int,
+): GatewayReadiness {
+    val blocking = buildList {
+        if (!isHaUrlReady(urlInput)) add(GatewayReadinessItem.HaUrl)
+        if (tokenInput.isBlank() && haRefreshToken.isBlank()) add(GatewayReadinessItem.HaAuth)
+        if (!gitRepoConfigured) add(GatewayReadinessItem.GitRepo)
+    }
+    val advisory = buildList {
+        if (enabledSensorCount == 0) add(GatewayReadinessItem.EnabledSensors)
+    }
+    return GatewayReadiness(blocking, advisory)
+}
+
+@Composable
+private fun GatewayReadinessBanner(
+    readiness: GatewayReadiness,
+    onGoToSensorsTab: () -> Unit,
+) {
+    val missingItems = readiness.missingBlocking + readiness.missingAdvisory
+    val itemLabels = missingItems.map { item ->
+        when (item) {
+            GatewayReadinessItem.HaUrl -> stringResource(R.string.gateway_readiness_item_ha_url)
+            GatewayReadinessItem.HaAuth -> stringResource(R.string.gateway_readiness_item_ha_auth)
+            GatewayReadinessItem.GitRepo -> stringResource(R.string.gateway_readiness_item_git)
+            GatewayReadinessItem.EnabledSensors -> stringResource(R.string.gateway_readiness_item_sensors)
+        }
+    }
+    val showSensorsAction = GatewayReadinessItem.GitRepo in missingItems ||
+        GatewayReadinessItem.EnabledSensors in missingItems
+    val isBlocking = readiness.missingBlocking.isNotEmpty()
+    val accentColor = if (isBlocking) {
+        MaterialTheme.colorScheme.error
+    } else {
+        Color(0xFFFF9100)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = accentColor.copy(alpha = 0.1f),
+        ),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.3f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = accentColor,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.gateway_readiness_prefix),
+                color = accentColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = itemLabels.joinToString(" · "),
+                color = if (isBlocking) accentColor else Color.White,
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (showSensorsAction) {
+                HassLinkButton(
+                    text = stringResource(R.string.gateway_go_to_sensors),
+                    onClick = onGoToSensorsTab,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun GatewayTabContent(
     isRunning: Boolean,
     connState: ConnectionState,
     connectionIssue: ConnectionIssue,
+    gitRepoConfigured: Boolean,
+    enabledSensorCount: Int,
+    onGoToSensorsTab: () -> Unit,
     urlInput: String,
     onUrlChange: (String) -> Unit,
     tokenInput: String,
@@ -749,22 +970,21 @@ private fun GatewayTabContent(
 
     if (showClearOAuthDialog) {
         Dialog(onDismissRequest = { showClearOAuthDialog = false }) {
-            Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Card(shape = HassBleShapes.Dialog, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(stringResource(R.string.oauth_clear_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(stringResource(R.string.oauth_clear_body), color = Color.Gray, fontSize = 13.sp)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { showClearOAuthDialog = false }) {
-                            Text(stringResource(R.string.cancel))
-                        }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        HassCancelButton(onClick = { showClearOAuthDialog = false })
                         Spacer(Modifier.width(8.dp))
-                        Button(
+                        HassDangerButton(
+                            text = stringResource(R.string.oauth_clear_confirm),
                             onClick = { showClearOAuthDialog = false; onClearOAuth() },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            shape = RoundedCornerShape(8.dp),
-                        ) {
-                            Text(stringResource(R.string.oauth_clear_confirm))
-                        }
+                        )
                     }
                 }
             }
@@ -809,9 +1029,10 @@ private fun GatewayTabContent(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(text = stringResource(R.string.server_integration_settings), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     }
-                    TextButton(onClick = onShowOnboarding) {
-                        Text(stringResource(R.string.show_onboarding_again), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-                    }
+                    HassLinkButton(
+                        text = stringResource(R.string.show_onboarding_again),
+                        onClick = onShowOnboarding,
+                    )
                 }
                 val repository = remember { HassSettingsRepository(context) }
                 var urlError by remember { mutableStateOf<String?>(null) }
@@ -826,22 +1047,47 @@ private fun GatewayTabContent(
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
                             .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
                             imageVector = Icons.Default.Info,
-                            contentDescription = "OAuth Active",
+                            contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(16.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(text = stringResource(R.string.oauth_active_chip), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(text = stringResource(R.string.oauth_active_chip), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             Text(text = stringResource(R.string.oauth_last_refreshed, formatLastRefreshed(context, haTokenLastRefreshed)), color = Color.Gray, fontSize = 10.sp)
                         }
-                        TextButton(onClick = { showClearOAuthDialog = true }, enabled = inputsEnabled) {
-                            Text(stringResource(R.string.oauth_logout_btn), color = Color.Gray, fontSize = 11.sp)
-                        }
+                        HassLinkButton(
+                            text = stringResource(R.string.oauth_logout_btn),
+                            onClick = { showClearOAuthDialog = true },
+                            enabled = inputsEnabled,
+                        )
+                    }
+                } else if (tokenInput.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = Color.Gray,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.oauth_manual_active_chip),
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
  
@@ -867,34 +1113,47 @@ private fun GatewayTabContent(
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Button(
+                HassPrimaryButton(
+                    text = stringResource(R.string.oauth_login_btn),
                     onClick = {
                         if (urlInput.isBlank() || urlInput == "https://" || urlInput == "http://") {
                             Toast.makeText(context, context.getString(R.string.ha_url_required_toast), Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        val state = java.util.UUID.randomUUID().toString()
-                        scope.launch {
-                            repository.saveHaAuthState(state)
-                        }
-                        val authUrl = dev.eigger.hassble.net.HaAuthHelper.getAuthorizeUrl(urlInput, state)
-                        try {
-                            val customTabsIntent = androidx.browser.customtabs.CustomTabsIntent.Builder().build()
-                            customTabsIntent.launchUrl(context, Uri.parse(authUrl))
-                        } catch (e: Exception) {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
+                        } else {
+                            val state = java.util.UUID.randomUUID().toString()
+                            scope.launch {
+                                repository.saveHaAuthState(state)
+                            }
+                            val authUrl = dev.eigger.hassble.net.HaAuthHelper.getAuthorizeUrl(urlInput, state)
+                            try {
+                                val customTabsIntent = androidx.browser.customtabs.CustomTabsIntent.Builder().build()
+                                customTabsIntent.launchUrl(context, Uri.parse(authUrl))
+                            } catch (e: Exception) {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
+                            }
                         }
                     },
                     enabled = inputsEnabled && urlInput.isNotBlank() && urlInput != "https://" && urlInput != "http://",
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.oauth_login_btn), color = Color.Black, fontWeight = FontWeight.Bold)
-                }
+                    large = true,
+                )
                 if (haRefreshToken.isBlank()) {
                     Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(value = tokenInput, onValueChange = onTokenChange, label = { Text(stringResource(R.string.long_lived_token)) }, enabled = inputsEnabled, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                    Text(
+                        text = stringResource(R.string.auth_manual_token_hint),
+                        color = Color.Gray,
+                        fontSize = 11.sp,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = onTokenChange,
+                        label = { Text(stringResource(R.string.long_lived_token)) },
+                        enabled = inputsEnabled,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -906,51 +1165,58 @@ private fun GatewayTabContent(
                             modifier = Modifier.weight(1f),
                         )
                     } else {
-                        Button(
+                        HassAccentButton(
+                            text = stringResource(R.string.test_connection_btn),
                             onClick = {
                                 if (urlInput.isBlank() || tokenInput.isBlank()) {
                                     Toast.makeText(context, context.getString(R.string.fill_all_fields_toast), Toast.LENGTH_SHORT).show()
-                                    return@Button
-                                }
-                                scope.launch {
-                                    isTestingConnection = true
-                                    when (val result = HaConnectionTester.test(urlInput, tokenInput)) {
-                                        is HaConnectionTester.Result.Ok ->
-                                            Toast.makeText(context, context.getString(R.string.test_connection_ok), Toast.LENGTH_SHORT).show()
-                                        is HaConnectionTester.Result.AuthFailed ->
-                                            Toast.makeText(context, context.getString(R.string.test_connection_auth_failed, result.code), Toast.LENGTH_LONG).show()
-                                        is HaConnectionTester.Result.NetworkError ->
-                                            Toast.makeText(context, context.getString(R.string.test_connection_failed, result.message), Toast.LENGTH_LONG).show()
+                                } else {
+                                    scope.launch {
+                                        isTestingConnection = true
+                                        when (val result = HaConnectionTester.test(urlInput, tokenInput)) {
+                                            is HaConnectionTester.Result.Ok ->
+                                                Toast.makeText(context, context.getString(R.string.test_connection_ok), Toast.LENGTH_SHORT).show()
+                                            is HaConnectionTester.Result.AuthFailed ->
+                                                Toast.makeText(context, context.getString(R.string.test_connection_auth_failed, result.code), Toast.LENGTH_LONG).show()
+                                            is HaConnectionTester.Result.NetworkError ->
+                                                Toast.makeText(context, context.getString(R.string.test_connection_failed, result.message), Toast.LENGTH_LONG).show()
+                                        }
+                                        isTestingConnection = false
                                     }
-                                    isTestingConnection = false
                                 }
                             },
                             enabled = !isTestingConnection,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), contentColor = MaterialTheme.colorScheme.primary),
-                            shape = RoundedCornerShape(8.dp),
-                        ) {
-                            if (isTestingConnection) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            } else {
-                                Text(stringResource(R.string.test_connection_btn), fontSize = 12.sp)
-                            }
-                        }
+                            loading = isTestingConnection,
+                        )
                     }
-                    Button(
+                    HassSecondaryButton(
+                        text = stringResource(R.string.open_ws_bridge_repo),
                         onClick = {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(context.getString(R.string.ws_bridge_url))))
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.08f), contentColor = Color.White),
-                        shape = RoundedCornerShape(8.dp),
-                    ) {
-                        Text(stringResource(R.string.open_ws_bridge_repo), fontSize = 11.sp)
-                    }
+                        compact = true,
+                    )
                 }
             }
         }
 
+        val readiness = computeGatewayReadiness(
+            urlInput = urlInput,
+            tokenInput = tokenInput,
+            haRefreshToken = haRefreshToken,
+            gitRepoConfigured = gitRepoConfigured,
+            enabledSensorCount = enabledSensorCount,
+        )
+        if (!isRunning && readiness.hasAnyMissing) {
+            GatewayReadinessBanner(
+                readiness = readiness,
+                onGoToSensorsTab = onGoToSensorsTab,
+            )
+        }
+
         GatewayControlButton(
             isRunning = isRunning,
+            startEnabled = readiness.canStart,
             onStart = onStartGateway,
             onStop = onStopGateway,
         )
@@ -996,17 +1262,11 @@ private fun GatewayTabContent(
                                 dev.eigger.hassble.config.BleScanModeOption.BALANCED -> R.string.scan_mode_balanced_btn
                                 dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY -> R.string.scan_mode_low_latency_btn
                             }
-                            Button(
+                            HassToggleChip(
+                                label = stringResource(btnTextId),
+                                selected = selected,
                                 onClick = { onScanModeChange(mode) },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (selected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.08f),
-                                    contentColor = if (selected) Color.Black else Color.White,
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            ) {
-                                Text(stringResource(btnTextId), fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
-                            }
+                            )
                         }
                     }
                 }
@@ -1023,7 +1283,8 @@ private fun GatewayTabContent(
                         )
                     }
                     if (!isBatteryIgnored) {
-                        Button(
+                        HassPrimaryButton(
+                            text = stringResource(R.string.request_battery_ignore_btn),
                             onClick = {
                                 try {
                                     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -1034,11 +1295,7 @@ private fun GatewayTabContent(
                                     context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                            shape = RoundedCornerShape(8.dp),
-                        ) {
-                            Text(text = stringResource(R.string.request_battery_ignore_btn), color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
+                        )
                     }
                 }
 
@@ -1049,7 +1306,8 @@ private fun GatewayTabContent(
                         Text(text = stringResource(R.string.hide_notif_icon_btn), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
                         Text(text = stringResource(R.string.hide_notif_icon_desc), fontSize = 11.sp, color = Color.Gray)
                     }
-                    Button(
+                    HassSecondaryButton(
+                        text = stringResource(R.string.go_to_settings_btn),
                         onClick = {
                             val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
@@ -1063,12 +1321,9 @@ private fun GatewayTabContent(
                             }
                             context.startActivity(intent)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
-                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.padding(start = 8.dp),
-                    ) {
-                        Text(text = stringResource(R.string.go_to_settings_btn), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
+                        compact = true,
+                    )
                 }
             }
         }
@@ -1093,18 +1348,19 @@ private fun SensorsTabContent(
     sensorLastValues: List<SensorLastValue>,
     deviceLinkStatuses: List<DeviceLinkStatus>,
     gitRepoInput: String,
-    gitFileInput: String,
     gitBranchInput: String,
     gitTokenInput: String,
+    deviceSearchText: String = "",
+    onDeviceSearchChange: (String) -> Unit = {},
     draftDeviceCount: Int = 0,
+    draftDeviceIds: Set<String> = emptySet(),
     cacheSavedAtMs: Long? = null,
     usingCachedConfig: Boolean = false,
     onGitRepoChange: (String) -> Unit,
-    onGitFileChange: (String) -> Unit,
     onGitBranchChange: (String) -> Unit,
     onGitTokenChange: (String) -> Unit,
     onReloadConfig: () -> Unit,
-    onImportCatalog: () -> Unit,
+    onImportTemplate: () -> Unit,
     onAddObd: () -> Unit,
     onAddAdv: () -> Unit,
     onExportYaml: () -> Unit,
@@ -1117,7 +1373,26 @@ private fun SensorsTabContent(
     onSetAutoConnect: (String, Boolean) -> Unit,
     onConnectDevice: (String) -> Unit = {},
     onDisconnectDevice: (String) -> Unit = {},
+    onRemoveDraftDevice: (String) -> Unit = {},
 ) {
+    val filteredDevices = remember(loadedConfig, boundDevices, discoveredAdv, deviceSearchText) {
+        val devices = loadedConfig?.devices ?: emptyList()
+        val query = deviceSearchText.trim()
+        if (query.isBlank()) {
+            devices
+        } else {
+            val macsByProfile = discoveredAdv.groupBy({ it.profileId }, { it.mac })
+            devices.filter { device ->
+                deviceMatchesSearch(
+                    device = device,
+                    boundMac = boundDevices[device.id],
+                    discoveredMacs = macsByProfile[device.id].orEmpty(),
+                    query = query,
+                )
+            }
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 24.dp),
@@ -1126,18 +1401,16 @@ private fun SensorsTabContent(
         item {
             GitConfigSection(
                 repoInput = gitRepoInput,
-                fileInput = gitFileInput,
                 branchInput = gitBranchInput,
                 tokenInput = gitTokenInput,
                 onRepoChange = onGitRepoChange,
-                onFileChange = onGitFileChange,
                 onBranchChange = onGitBranchChange,
                 onTokenChange = onGitTokenChange,
             )
         }
         item {
             ConfigToolsRow(
-                onImportCatalog = onImportCatalog,
+                onImportTemplate = onImportTemplate,
                 onAddObd = onAddObd,
                 onAddAdv = onAddAdv,
                 onExportYaml = onExportYaml,
@@ -1156,34 +1429,108 @@ private fun SensorsTabContent(
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
                 )
-                Button(
+                HassAccentButton(
+                    text = stringResource(R.string.reload_config_btn),
                     onClick = onReloadConfig,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), contentColor = MaterialTheme.colorScheme.primary),
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
-                ) {
-                    Text(text = stringResource(R.string.reload_config_btn), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                )
+            }
+        }
+        if (loadedConfig != null && loadedConfig.devices.isNotEmpty()) {
+            item {
+                OutlinedTextField(
+                    value = deviceSearchText,
+                    onValueChange = onDeviceSearchChange,
+                    placeholder = {
+                        Text(
+                            stringResource(R.string.sensors_device_search_placeholder),
+                            color = Color.Gray,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            tint = Color.Gray,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                    trailingIcon = {
+                        if (deviceSearchText.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = null,
+                                tint = Color.Gray,
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clickable { onDeviceSearchChange("") },
+                            )
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Color.White),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                        unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
+                    ),
+                )
             }
         }
         if (isRunning) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = stringResource(R.string.reload_config_running_hint),
-                        color = Color.Gray,
-                        fontSize = 11.sp,
-                    )
-                    Text(
-                        text = stringResource(R.string.sensor_edit_locked_running),
-                        color = Color.Gray,
-                        fontSize = 11.sp,
-                    )
-                    Text(
-                        text = stringResource(R.string.bind_locked_running),
-                        color = Color.Gray,
-                        fontSize = 11.sp,
-                    )
+                var runningHintsExpanded by remember { mutableStateOf(false) }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.04f))
+                        .clickable { runningHintsExpanded = !runningHintsExpanded }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.sensors_running_hints_title),
+                            color = Color.Gray,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Icon(
+                            imageVector = if (runningHintsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = Color.Gray,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = runningHintsExpanded,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut(),
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = stringResource(R.string.reload_config_running_hint),
+                                color = Color.Gray,
+                                fontSize = 11.sp,
+                            )
+                            Text(
+                                text = stringResource(R.string.sensor_edit_locked_running),
+                                color = Color.Gray,
+                                fontSize = 11.sp,
+                            )
+                            Text(
+                                text = stringResource(R.string.bind_locked_running),
+                                color = Color.Gray,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1226,14 +1573,11 @@ private fun SensorsTabContent(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        Button(
+                        HassDangerButton(
+                            text = stringResource(R.string.retry_btn),
                             onClick = onReloadConfig,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.align(Alignment.End),
-                        ) {
-                            Text(text = stringResource(R.string.retry_btn), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
+                        )
                     }
                 }
             }
@@ -1246,8 +1590,17 @@ private fun SensorsTabContent(
                     modifier = Modifier.padding(vertical = 12.dp),
                 )
             }
+        } else if (filteredDevices.isEmpty()) {
+            item {
+                Text(
+                    text = stringResource(R.string.sensors_device_filter_empty),
+                    color = Color.Gray,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(vertical = 12.dp),
+                )
+            }
         } else {
-            items(loadedConfig.devices, key = { it.id }) { device ->
+            items(filteredDevices, key = { it.id }) { device ->
                 DeviceConfigCard(
                     device = device,
                     boundMac = boundDevices[device.id],
@@ -1255,6 +1608,7 @@ private fun SensorsTabContent(
                     validationIssues = validationIssues.filter { it.deviceId == device.id },
                     isRunning = isRunning,
                     isDisabled = device.id in disabledDeviceIds,
+                    isDraftDevice = device.id in draftDeviceIds,
                     autoConnect = device.id !in autoConnectDisabledIds,
                     discoveredInstances = discoveredAdv.filter { it.profileId == device.id },
                     sensorLastValues = sensorLastValues.filter { it.profileId == device.id },
@@ -1268,6 +1622,7 @@ private fun SensorsTabContent(
                     onSetAutoConnect = { enabled -> onSetAutoConnect(device.id, enabled) },
                     onConnectDevice = { onConnectDevice(device.id) },
                     onDisconnectDevice = { onDisconnectDevice(device.id) },
+                    onRemoveDraft = { onRemoveDraftDevice(device.id) },
                 )
             }
         }
@@ -1277,18 +1632,31 @@ private fun SensorsTabContent(
 }
 
 @Composable
-private fun GatewayControlButton(isRunning: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
+private fun GatewayControlButton(
+    isRunning: Boolean,
+    startEnabled: Boolean = true,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
     val buttonBrush = if (isRunning) {
         Brush.horizontalGradient(listOf(Color(0xFFFF5252), Color(0xFFFF1744)))
     } else {
         Brush.horizontalGradient(listOf(Color(0xFF9E86FF), Color(0xFF651FFF)))
     }
-    Box(modifier = Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(28.dp)).background(buttonBrush)) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(HassBleShapes.Pill)
+            .background(buttonBrush)
+            .alpha(if (!isRunning && !startEnabled) 0.45f else 1f),
+    ) {
         Button(
             onClick = { if (isRunning) onStop() else onStart() },
             modifier = Modifier.fillMaxSize(),
+            enabled = isRunning || startEnabled,
             colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-            shape = RoundedCornerShape(28.dp),
+            shape = HassBleShapes.Pill,
         ) {
             Text(
                 text = if (isRunning) stringResource(R.string.stop_gateway) else stringResource(R.string.start_gateway),
@@ -1309,6 +1677,7 @@ private fun DeviceConfigCard(
     validationIssues: List<ValidationIssue> = emptyList(),
     isRunning: Boolean,
     isDisabled: Boolean,
+    isDraftDevice: Boolean = false,
     autoConnect: Boolean,
     discoveredInstances: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
@@ -1322,6 +1691,7 @@ private fun DeviceConfigCard(
     onSetAutoConnect: (Boolean) -> Unit,
     onConnectDevice: () -> Unit = {},
     onDisconnectDevice: () -> Unit = {},
+    onRemoveDraft: () -> Unit = {},
 ) {
     val deviceSensorKeys = remember(device.id, device.sensors) {
         device.sensors.map { "${device.id}/${it.key}" }
@@ -1367,6 +1737,16 @@ private fun DeviceConfigCard(
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier
                                     .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                        if (isDraftDevice) {
+                            Text(
+                                text = stringResource(R.string.config_draft_device_badge),
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                         }
@@ -1458,26 +1838,14 @@ private fun DeviceConfigCard(
                             )
                             if (!isRunning) {
                                 Row {
-                                    TextButton(
+                                    HassLinkButton(
+                                        text = stringResource(R.string.sensors_enable_all),
                                         onClick = { onSensorsBulkToggle(deviceSensorKeys.toSet(), true) },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                    ) {
-                                        Text(
-                                            text = stringResource(R.string.sensors_enable_all),
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.primary,
-                                        )
-                                    }
-                                    TextButton(
+                                    )
+                                    HassLinkButton(
+                                        text = stringResource(R.string.sensors_disable_all),
                                         onClick = { onSensorsBulkToggle(deviceSensorKeys.toSet(), false) },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                    ) {
-                                        Text(
-                                            text = stringResource(R.string.sensors_disable_all),
-                                            fontSize = 11.sp,
-                                            color = Color.Gray,
-                                        )
-                                    }
+                                    )
                                 }
                             }
                         }
@@ -1763,27 +2131,15 @@ private fun DeviceConfigCard(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 if (isActive) {
-                                    OutlinedButton(
+                                    HassDangerOutlinedButton(
+                                        text = stringResource(R.string.device_disconnect_btn),
                                         onClick = onDisconnectDevice,
-                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-                                        shape = RoundedCornerShape(8.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                    ) {
-                                        Text(stringResource(R.string.device_disconnect_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    }
+                                    )
                                 } else {
-                                    Button(
+                                    HassAccentButton(
+                                        text = stringResource(R.string.device_connect_btn),
                                         onClick = onConnectDevice,
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                                            contentColor = MaterialTheme.colorScheme.primary,
-                                        ),
-                                        shape = RoundedCornerShape(8.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                    ) {
-                                        Text(stringResource(R.string.device_connect_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    }
+                                    )
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(stringResource(R.string.auto_connect_label), fontSize = 12.sp, color = Color.Gray)
@@ -1801,35 +2157,32 @@ private fun DeviceConfigCard(
                         }
                     }
 
+                    if (isDraftDevice) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            HassDangerTintButton(
+                                text = stringResource(R.string.config_remove_draft_device),
+                                onClick = onRemoveDraft,
+                                enabled = !isRunning,
+                            )
+                        }
+                    }
+
                     if (isRunning) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             if (isDisabled) {
-                                Button(
+                                HassAccentButton(
+                                    text = stringResource(R.string.device_enable_btn),
                                     onClick = onEnable,
                                     enabled = !isConnected,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                                        contentColor = MaterialTheme.colorScheme.primary,
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                ) {
-                                    Text(stringResource(R.string.device_enable_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
+                                )
                             } else {
-                                Button(
+                                HassDangerTintButton(
+                                    text = stringResource(R.string.device_disable_ha_delete_btn),
                                     onClick = onDisable,
                                     enabled = !isConnected,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-                                        contentColor = MaterialTheme.colorScheme.error,
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                ) {
-                                    Text(stringResource(R.string.device_disable_ha_delete_btn), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
+                                )
                             }
                         }
                     }
@@ -2027,11 +2380,23 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
         }
     }
     DisposableEffect(Unit) { onDispose { if (scanner != null && ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) scanner.stopScan(scanCallback) } }
-    Dialog(onDismissRequest = onDismiss) {
-        Card(modifier = Modifier.fillMaxWidth().height(450.dp), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    val sortedDevices = remember(devicesList.toList()) {
+        devicesList.sortedByDescending { it.rssi }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.92f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(text = stringResource(R.string.search_bluetooth_device), fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
                         Text(text = stringResource(R.string.find_target_for, deviceConfig.name), fontSize = 12.sp, color = Color.Gray)
                     }
@@ -2039,7 +2404,7 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
                 }
                 if (targetServiceUuid != null) {
                     Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.15f)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(text = stringResource(R.string.service_match_filter), fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
                             Text(text = "UUID: ${targetServiceUuid.take(8)}...", fontSize = 11.sp, color = Color.Gray)
                         }
@@ -2047,13 +2412,13 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
                     }
                 }
                 Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.2f)).padding(8.dp)) {
-                    if (devicesList.isEmpty()) {
+                    if (sortedDevices.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(text = stringResource(R.string.no_devices_found), color = Color.Gray, fontSize = 14.sp) }
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(devicesList) { scanned ->
+                            items(sortedDevices, key = { it.address }) { scanned ->
                                 Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { onDeviceSelected(scanned.address) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(text = scanned.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
                                         Text(text = scanned.address, fontSize = 12.sp, color = Color.Gray)
                                     }
@@ -2064,7 +2429,7 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White), shape = RoundedCornerShape(16.dp)) { Text(text = stringResource(R.string.cancel), fontWeight = FontWeight.Bold) }
+                    HassCancelButton(onClick = onDismiss)
                 }
             }
         }
@@ -2104,260 +2469,580 @@ private fun StatusBadge(isRunning: Boolean, connState: ConnectionState, connecti
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun LogsTabContent() {
+private fun LogsTabContent(
+    isRunning: Boolean,
+    logBufferLimit: Int,
+    logIncludeAdv: Boolean,
+    onLogBufferLimitChange: (Int) -> Unit,
+    onLogIncludeAdvChange: (Boolean) -> Unit,
+    onFindMacInSensors: (String) -> Unit = {},
+) {
     val context = LocalContext.current
-    var isLiveActive by remember { mutableStateOf(LiveEventLogger.isLiveActive) }
     val logsList = remember {
         mutableStateListOf<LogEntry>().apply {
             addAll(LiveEventLogger.logs)
         }
     }
     var filterText by remember { mutableStateOf("") }
+    var settingsExpanded by remember { mutableStateOf(false) }
+    var followLatest by remember { mutableStateOf(true) }
+    var disabledTypes by remember { mutableStateOf(setOf<LogType>()) }
 
-    LaunchedEffect(isLiveActive) {
-        LiveEventLogger.isLiveActive = isLiveActive
-    }
-
-    LaunchedEffect(isLiveActive) {
-        if (isLiveActive) {
-            LiveEventLogger.logFlow.collect { logLine ->
-                if (logsList.size >= 500) {
-                    logsList.removeAt(0)
-                }
-                logsList.add(logLine)
-            }
+    LaunchedEffect(logBufferLimit) {
+        LiveEventLogger.setMaxLogs(logBufferLimit)
+        while (logsList.size > logBufferLimit) {
+            logsList.removeAt(0)
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            LiveEventLogger.isLiveActive = false
+    LaunchedEffect(logIncludeAdv) {
+        if (!logIncludeAdv) {
+            logsList.removeAll { it.type == LogType.ADV }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        LiveEventLogger.logFlow.collect { logLine ->
+            while (logsList.size >= LiveEventLogger.maxLogs) {
+                logsList.removeAt(0)
+            }
+            logsList.add(logLine)
+        }
+    }
+
+    val filteredLogs by remember {
+        derivedStateOf {
+            val query = filterText.trim()
+            logsList.filter { entry ->
+                entry.type !in disabledTypes &&
+                    (query.isBlank() ||
+                        entry.message.contains(query, ignoreCase = true) ||
+                        entry.timestamp.contains(query, ignoreCase = true) ||
+                        entry.type.name.contains(query, ignoreCase = true))
+            }
         }
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Card(
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
+            Text(
+                text = stringResource(R.string.logs_summary, logsList.size, logBufferLimit),
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                color = Color.White,
+                modifier = Modifier.weight(1f),
+            )
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.live_logs_enable),
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp,
-                        color = Color.White
-                    )
-                    Text(
-                        text = if (isLiveActive) "Streaming logs..." else "Logs paused",
-                        fontSize = 12.sp,
-                        color = Color.Gray
-                    )
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Text(
+                    text = stringResource(R.string.logs_include_adv),
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+                Switch(
+                    checked = logIncludeAdv,
+                    onCheckedChange = onLogIncludeAdvChange,
+                    modifier = Modifier.height(28.dp),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.Black,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+                IconButton(
+                    onClick = { settingsExpanded = !settingsExpanded },
+                    modifier = Modifier.size(36.dp),
                 ) {
-                    Button(
-                        onClick = {
-                            saveLogsToDownloads(context, logsList)
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White.copy(alpha = 0.08f),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(stringResource(R.string.logs_save), fontSize = 12.sp)
-                    }
-                    Button(
-                        onClick = {
-                            shareLogs(context, logsList)
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White.copy(alpha = 0.08f),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(stringResource(R.string.logs_share), fontSize = 12.sp)
-                    }
-                    Button(
-                        onClick = {
-                            logsList.clear()
-                            LiveEventLogger.clearLogs()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White.copy(alpha = 0.08f),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(stringResource(R.string.logs_clear), fontSize = 12.sp)
-                    }
-                    Switch(
-                        checked = isLiveActive,
-                        onCheckedChange = { isLiveActive = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.Black,
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                        ),
+                    Icon(
+                        imageVector = if (settingsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.Settings,
+                        contentDescription = stringResource(R.string.logs_settings),
+                        tint = if (settingsExpanded) MaterialTheme.colorScheme.primary else Color.Gray,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
         }
-
-        OutlinedTextField(
-            value = filterText,
-            onValueChange = { filterText = it },
-            placeholder = { Text(stringResource(R.string.logs_filter_placeholder), color = Color.Gray, fontSize = 13.sp) },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Search",
-                    tint = Color.Gray,
-                    modifier = Modifier.size(18.dp)
-                )
-            },
-            trailingIcon = {
-                if (filterText.isNotEmpty()) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Clear",
-                        tint = Color.Gray,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .clickable { filterText = "" }
-                    )
-                }
-            },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Color.White),
-            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
-                cursorColor = MaterialTheme.colorScheme.primary
-            )
+        Text(
+            text = stringResource(R.string.logs_include_adv_hint),
+            fontSize = 10.sp,
+            color = Color.Gray,
+            modifier = Modifier.padding(start = 2.dp),
         )
+
+        AnimatedVisibility(
+            visible = settingsExpanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.logs_buffer_limit),
+                            fontSize = 11.sp,
+                            color = Color.Gray,
+                        )
+                        LiveEventLogger.BUFFER_LIMIT_OPTIONS.forEach { limit ->
+                            val selected = logBufferLimit == limit
+                            TextButton(
+                                onClick = { onLogBufferLimitChange(limit) },
+                                contentPadding = HassBleButtonDefaults.compactPadding,
+                                colors = HassBleButtonDefaults.linkTextColors(),
+                            ) {
+                                Text(
+                                    limit.toString(),
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else Color.Gray,
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.logs_follow_latest),
+                            fontSize = 11.sp,
+                            color = Color.White,
+                        )
+                        Switch(
+                            checked = followLatest,
+                            onCheckedChange = { followLatest = it },
+                            modifier = Modifier.height(28.dp),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.Black,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        HassLinkButton(
+                            text = stringResource(R.string.logs_save),
+                            onClick = { saveLogsToDownloads(context, filteredLogs) },
+                            enabled = filteredLogs.isNotEmpty(),
+                        )
+                        HassLinkButton(
+                            text = stringResource(R.string.logs_share),
+                            onClick = { shareLogs(context, filteredLogs) },
+                            enabled = filteredLogs.isNotEmpty(),
+                        )
+                        HassLinkButton(
+                            text = stringResource(R.string.logs_clear),
+                            onClick = {
+                                logsList.clear()
+                                LiveEventLogger.clearLogs()
+                            },
+                        )
+                    }
+                }
+            }
+        }
 
         Card(
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.4f)),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
         ) {
-            val filteredLogs = remember {
-                androidx.compose.runtime.derivedStateOf {
-                    val query = filterText
-                    if (query.isBlank()) {
-                        logsList.toList()
-                    } else {
-                        logsList.filter { entry ->
-                            entry.message.contains(query, ignoreCase = true) ||
-                                entry.timestamp.contains(query, ignoreCase = true) ||
-                                entry.type.name.contains(query, ignoreCase = true)
+            Column(modifier = Modifier.fillMaxSize()) {
+                OutlinedTextField(
+                    value = filterText,
+                    onValueChange = { filterText = it },
+                    placeholder = {
+                        Text(
+                            stringResource(R.string.logs_filter_placeholder),
+                            color = Color.Gray,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = Color.Gray,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                    trailingIcon = {
+                        if (filterText.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear",
+                                tint = Color.Gray,
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable { filterText = "" },
+                            )
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = Color.White),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FlowRow(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        LogType.entries.forEach { type ->
+                            LogTypeFilterChip(
+                                type = type,
+                                selected = type !in disabledTypes,
+                                onClick = {
+                                    disabledTypes = if (type in disabledTypes) {
+                                        disabledTypes - type
+                                    } else {
+                                        disabledTypes + type
+                                    }
+                                },
+                            )
+                        }
+                    }
+                    HassCopyIconButton(
+                        onClick = { copyTextToClipboard(context, formatLogs(filteredLogs), "logs") },
+                        enabled = filteredLogs.isNotEmpty(),
+                        contentDescription = stringResource(R.string.logs_copy_all),
+                    )
+                }
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                val listState = rememberLazyListState()
+                val atBottom by remember {
+                    derivedStateOf {
+                        val info = listState.layoutInfo
+                        if (info.totalItemsCount == 0) true
+                        else {
+                            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                            lastVisible >= info.totalItemsCount - 2
                         }
                     }
                 }
-            }.value
 
-            val listState = rememberLazyListState()
-
-            LaunchedEffect(filteredLogs.size) {
-                if (filteredLogs.isNotEmpty() && !listState.isScrollInProgress) {
-                    listState.animateScrollToItem(filteredLogs.size - 1)
+                LaunchedEffect(atBottom) {
+                    if (!atBottom && followLatest) {
+                        followLatest = false
+                    }
                 }
-            }
 
-            if (filteredLogs.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = if (logsList.isEmpty()) {
-                            "No logs yet. Enable Live Logs to see traffic."
-                        } else {
-                            "No logs match the filter."
-                        },
-                        color = Color.Gray,
-                        fontSize = 14.sp
-                    )
+                LaunchedEffect(filteredLogs.size, followLatest) {
+                    if (followLatest && filteredLogs.isNotEmpty()) {
+                        listState.animateScrollToItem(filteredLogs.lastIndex)
+                    }
                 }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(filteredLogs) { logEntry ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
+
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (filteredLogs.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
-                                text = logEntry.timestamp,
+                                text = when {
+                                    logsList.isEmpty() && !isRunning ->
+                                        stringResource(R.string.logs_empty_gateway_stopped)
+                                    logsList.isEmpty() ->
+                                        stringResource(R.string.logs_empty_hint)
+                                    else ->
+                                        stringResource(R.string.logs_filter_empty)
+                                },
                                 color = Color.Gray,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                modifier = Modifier.padding(end = 6.dp, top = 2.dp)
-                            )
-                            val badgeColor = when (logEntry.type) {
-                                LogType.ADV -> Color(0xFFFFCC80)
-                                LogType.TX -> Color(0xFFC5E1A5)
-                                LogType.RX -> Color(0xFF90CAF9)
-                                LogType.NOTIF -> Color(0xFFB39DDB)
-                                LogType.LINK -> Color(0xFFEEEEEE)
-                            }
-                            val badgeText = when (logEntry.type) {
-                                LogType.ADV -> "ADV"
-                                LogType.TX -> "TX"
-                                LogType.RX -> "RX"
-                                LogType.NOTIF -> "NOTIF"
-                                LogType.LINK -> "LINK"
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .padding(end = 6.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(badgeColor.copy(alpha = 0.15f))
-                                    .border(0.5.dp, badgeColor.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = badgeText,
-                                    color = badgeColor,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 9.sp,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                )
-                            }
-                            Text(
-                                text = logEntry.message,
-                                color = Color.LightGray,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                lineHeight = 14.sp,
-                                modifier = Modifier.weight(1f)
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(horizontal = 16.dp),
                             )
                         }
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            items(filteredLogs, key = { it.id }) { logEntry ->
+                                LogEntryRow(
+                                    logEntry = logEntry,
+                                    onCopyLine = {
+                                        copyTextToClipboard(context, formatLogLine(logEntry), "log")
+                                    },
+                                    onFilterByMac = { mac ->
+                                        filterText = mac
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.logs_filter_mac_applied, mac),
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    },
+                                    onFindMacInSensors = { mac ->
+                                        onFindMacInSensors(mac)
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.logs_find_mac_in_sensors),
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    if (!followLatest && filteredLogs.isNotEmpty()) {
+                        HassPrimaryButton(
+                            text = stringResource(R.string.logs_scroll_to_latest),
+                            onClick = { followLatest = true },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 8.dp),
+                        )
                     }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun LogTypeFilterChip(
+    type: LogType,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val label = when (type) {
+        LogType.ADV -> "ADV"
+        LogType.TX -> "TX"
+        LogType.RX -> "RX"
+        LogType.NOTIF -> "NOTIF"
+        LogType.LINK -> "LINK"
+    }
+    val color = when (type) {
+        LogType.ADV -> Color(0xFFFFCC80)
+        LogType.TX -> Color(0xFFC5E1A5)
+        LogType.RX -> Color(0xFF90CAF9)
+        LogType.NOTIF -> Color(0xFFB39DDB)
+        LogType.LINK -> Color(0xFFEEEEEE)
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (selected) color.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.06f))
+            .border(
+                0.5.dp,
+                if (selected) color.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.1f),
+                RoundedCornerShape(6.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = label,
+            color = if (selected) color else Color.Gray,
+            fontSize = 10.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+        )
+    }
+}
+
+@Composable
+private fun LogEntryRow(
+    logEntry: LogEntry,
+    onCopyLine: () -> Unit,
+    onFilterByMac: (String) -> Unit,
+    onFindMacInSensors: (String) -> Unit,
+) {
+    val badgeColor = when (logEntry.type) {
+        LogType.ADV -> Color(0xFFFFCC80)
+        LogType.TX -> Color(0xFFC5E1A5)
+        LogType.RX -> Color(0xFF90CAF9)
+        LogType.NOTIF -> Color(0xFFB39DDB)
+        LogType.LINK -> Color(0xFFEEEEEE)
+    }
+    val badgeText = when (logEntry.type) {
+        LogType.ADV -> "ADV"
+        LogType.TX -> "TX"
+        LogType.RX -> "RX"
+        LogType.NOTIF -> "NOTIF"
+        LogType.LINK -> "LINK"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = logEntry.timestamp,
+            color = Color.Gray,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(end = 6.dp, top = 2.dp),
+        )
+        Box(
+            modifier = Modifier
+                .padding(end = 6.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(badgeColor.copy(alpha = 0.15f))
+                .border(0.5.dp, badgeColor.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+        ) {
+            Text(
+                text = badgeText,
+                color = badgeColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
+        }
+        LogEntryMessage(
+            message = logEntry.message,
+            modifier = Modifier.weight(1f),
+            onCopyLine = onCopyLine,
+            onMacClick = onFilterByMac,
+            onMacLongClick = onFindMacInSensors,
+        )
+    }
+}
+
+private sealed interface LogMessageSegment {
+    data class Plain(val text: String) : LogMessageSegment
+    data class Mac(val value: String) : LogMessageSegment
+}
+
+private val LOG_MAC_PATTERN = Regex("""(?i)([0-9A-F]{2}(:[0-9A-F]{2}){5})""")
+
+private fun splitLogMessageSegments(message: String): List<LogMessageSegment> {
+    val segments = mutableListOf<LogMessageSegment>()
+    var lastIndex = 0
+    LOG_MAC_PATTERN.findAll(message).forEach { match ->
+        if (match.range.first > lastIndex) {
+            segments.add(LogMessageSegment.Plain(message.substring(lastIndex, match.range.first)))
+        }
+        segments.add(LogMessageSegment.Mac(match.value))
+        lastIndex = match.range.last + 1
+    }
+    if (lastIndex < message.length) {
+        segments.add(LogMessageSegment.Plain(message.substring(lastIndex)))
+    }
+    return segments
+}
+
+private fun deviceMatchesSearch(
+    device: DeviceConfig,
+    boundMac: String?,
+    discoveredMacs: List<String>,
+    query: String,
+): Boolean {
+    val q = query.trim()
+    if (q.isBlank()) return true
+    if (device.name.contains(q, ignoreCase = true)) return true
+    if (device.id.contains(q, ignoreCase = true)) return true
+    boundMac?.let { if (it.contains(q, ignoreCase = true)) return true }
+    if (discoveredMacs.any { it.contains(q, ignoreCase = true) }) return true
+    // 소스 토큰은 2자 이상 검색어가 토큰의 접두사일 때만 매칭(짧은/무관 검색어 과민 매칭 방지).
+    if (q.length >= 2) {
+        val sourceTokens = when (device.source) {
+            Source.advertisement -> listOf("advertisement", "adv", "passive", "scan")
+            Source.gatt_notify -> listOf("gatt", "notify", "gatt_notify", "connection")
+            Source.obd -> listOf("obd", "polling")
+        }
+        if (sourceTokens.any { it.startsWith(q, ignoreCase = true) }) return true
+    }
+    return false
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
+@Composable
+private fun LogEntryMessage(
+    message: String,
+    modifier: Modifier = Modifier,
+    onCopyLine: () -> Unit,
+    onMacClick: (String) -> Unit,
+    onMacLongClick: (String) -> Unit,
+) {
+    val segments = remember(message) { splitLogMessageSegments(message) }
+    if (segments.none { it is LogMessageSegment.Mac }) {
+        Text(
+            text = message,
+            color = Color.LightGray,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+            modifier = modifier.clickable(onClick = onCopyLine),
+        )
+        return
+    }
+    FlowRow(modifier = modifier) {
+        segments.forEach { segment ->
+            when (segment) {
+                is LogMessageSegment.Plain -> {
+                    if (segment.text.isNotEmpty()) {
+                        Text(
+                            text = segment.text,
+                            color = Color.LightGray,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp,
+                            modifier = Modifier.clickable(onClick = onCopyLine),
+                        )
+                    }
+                }
+                is LogMessageSegment.Mac -> {
+                    Text(
+                        text = segment.value,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.combinedClickable(
+                            onClick = { onMacClick(segment.value) },
+                            onLongClick = { onMacLongClick(segment.value) },
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatLogLine(entry: LogEntry): String =
+    "[${entry.timestamp}] [${entry.type.name}] ${entry.message}"
 
 private fun formatLogs(logs: List<LogEntry>): String =
     logs.joinToString("\n") { "[${it.timestamp}] [${it.type.name}] ${it.message}" }
@@ -2456,28 +3141,26 @@ private fun formatLastRefreshed(context: Context, timestamp: Long): String {
     return sdf.format(java.util.Date(timestamp))
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GitConfigSection(
     repoInput: String,
-    fileInput: String,
     branchInput: String,
     tokenInput: String,
     onRepoChange: (String) -> Unit,
-    onFileChange: (String) -> Unit,
     onBranchChange: (String) -> Unit,
     onTokenChange: (String) -> Unit,
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var yamlFiles by remember { mutableStateOf<List<String>>(emptyList()) }
-    var isBrowsing by remember { mutableStateOf(false) }
-    var browseError by remember { mutableStateOf<String?>(null) }
-    var dropdownExpanded by remember { mutableStateOf(false) }
-    var showTokenField by remember { mutableStateOf(tokenInput.isNotBlank()) }
-    var lastBrowsedRepo by remember { mutableStateOf("") }
+    var showAdvanced by remember {
+        mutableStateOf(
+            branchInput != HassBleDefaults.DEFAULT_BRANCH || tokenInput.isNotBlank(),
+        )
+    }
 
-    LaunchedEffect(tokenInput) { if (tokenInput.isNotBlank()) showTokenField = true }
+    LaunchedEffect(branchInput, tokenInput) {
+        if (branchInput != HassBleDefaults.DEFAULT_BRANCH || tokenInput.isNotBlank()) {
+            showAdvanced = true
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -2491,114 +3174,37 @@ private fun GitConfigSection(
                 Text(stringResource(R.string.git_config_section_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
 
-            // Repo input row + Browse button
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = repoInput,
-                    onValueChange = {
-                        onRepoChange(it)
-                        if (it != lastBrowsedRepo) { yamlFiles = emptyList(); browseError = null }
-                    },
-                    label = { Text(stringResource(R.string.git_repo_label)) },
-                    placeholder = { Text("username/config-repo", color = Color.Gray, fontSize = 13.sp) },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
-                Button(
-                    onClick = {
-                        val repo = repoInput.trim()
-                        scope.launch {
-                            isBrowsing = true
-                            browseError = null
-                            val result = GitHubHelper.fetchYamlFiles(repo, branchInput, tokenInput.ifBlank { null })
-                            isBrowsing = false
-                            lastBrowsedRepo = repo
-                            result.onSuccess { files ->
-                                yamlFiles = files
-                                browseError = null
-                                if (files.size == 1 && fileInput.isBlank()) onFileChange(files[0])
-                                if (files.isNotEmpty()) dropdownExpanded = true
-                            }.onFailure { e ->
-                                val errMsg = when (e) {
-                                    is dev.eigger.hassble.net.GitHubUnauthorizedException -> context.getString(R.string.github_error_401)
-                                    is dev.eigger.hassble.net.GitHubNotFoundException -> context.getString(R.string.github_error_404)
-                                    is dev.eigger.hassble.net.GitHubApiException -> context.getString(R.string.github_error_generic, e.code)
-                                    else -> e.localizedMessage ?: context.getString(R.string.github_error_network)
-                                }
-                                browseError = errMsg
-                                Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    },
-                    enabled = repoInput.isNotBlank() && !isBrowsing,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                        contentColor = MaterialTheme.colorScheme.primary,
-                    ),
-                ) {
-                    if (isBrowsing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
-                    else Icon(Icons.Default.Search, contentDescription = stringResource(R.string.browse_files_btn))
-                }
-            }
-
-            browseError?.let { err ->
-                Text(err, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-            }
-
             OutlinedTextField(
-                value = branchInput,
-                onValueChange = onBranchChange,
-                label = { Text(stringResource(R.string.git_branch_label)) },
-                placeholder = { Text("main", color = Color.Gray, fontSize = 13.sp) },
+                value = repoInput,
+                onValueChange = onRepoChange,
+                label = { Text(stringResource(R.string.git_repo_label)) },
+                placeholder = { Text("eigger/hassble-config", color = Color.Gray, fontSize = 13.sp) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
             )
 
-            // File dropdown — shown when files were browsed OR when there's already a selection
-            if (yamlFiles.isNotEmpty() || fileInput.isNotBlank()) {
-                ExposedDropdownMenuBox(
-                    expanded = dropdownExpanded && yamlFiles.isNotEmpty(),
-                    onExpandedChange = { if (yamlFiles.isNotEmpty()) dropdownExpanded = it },
-                ) {
-                    OutlinedTextField(
-                        value = fileInput,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text(stringResource(R.string.git_file_label)) },
-                        trailingIcon = {
-                            if (yamlFiles.isNotEmpty()) ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
-                        },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        shape = RoundedCornerShape(12.dp),
-                    )
-                    if (yamlFiles.isNotEmpty()) {
-                        ExposedDropdownMenu(expanded = dropdownExpanded, onDismissRequest = { dropdownExpanded = false }) {
-                            yamlFiles.forEach { file ->
-                                DropdownMenuItem(
-                                    text = { Text(file, fontSize = 13.sp) },
-                                    onClick = { onFileChange(file); dropdownExpanded = false },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            Text(
+                text = stringResource(
+                    R.string.git_fixed_files_hint,
+                    HassBleDefaults.CONFIG_FILE,
+                    HassBleDefaults.TEMPLATES_FILE,
+                ),
+                fontSize = 11.sp,
+                color = Color.Gray,
+            )
 
-            // Private repo toggle + token field
             Row(
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable { showTokenField = !showTokenField; if (!showTokenField) onTokenChange("") }
+                    .clickable { showAdvanced = !showAdvanced }
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 androidx.compose.material3.Checkbox(
-                    checked = showTokenField,
-                    onCheckedChange = { showTokenField = it; if (!it) onTokenChange("") },
+                    checked = showAdvanced,
+                    onCheckedChange = { showAdvanced = it },
                     colors = androidx.compose.material3.CheckboxDefaults.colors(
                         checkedColor = MaterialTheme.colorScheme.primary,
                         uncheckedColor = Color.Gray,
@@ -2606,22 +3212,37 @@ private fun GitConfigSection(
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    stringResource(R.string.git_private_repo_checkbox),
-                    color = if (showTokenField) Color.White else Color.Gray,
+                    stringResource(R.string.git_advanced_options),
+                    color = if (showAdvanced) Color.White else Color.Gray,
                     fontSize = 13.sp,
-                    fontWeight = if (showTokenField) FontWeight.SemiBold else FontWeight.Normal,
+                    fontWeight = if (showAdvanced) FontWeight.SemiBold else FontWeight.Normal,
                 )
             }
-            AnimatedVisibility(visible = showTokenField, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-                OutlinedTextField(
-                    value = tokenInput,
-                    onValueChange = onTokenChange,
-                    label = { Text(stringResource(R.string.git_token_optional)) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                )
+            AnimatedVisibility(
+                visible = showAdvanced,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = branchInput,
+                        onValueChange = onBranchChange,
+                        label = { Text(stringResource(R.string.git_branch_label)) },
+                        placeholder = { Text(HassBleDefaults.DEFAULT_BRANCH, color = Color.Gray, fontSize = 13.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = onTokenChange,
+                        label = { Text(stringResource(R.string.git_token_optional)) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
             }
         }
     }

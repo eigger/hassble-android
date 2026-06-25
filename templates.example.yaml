@@ -1,0 +1,68 @@
+# Device templates for Sensors tab → Import template
+# Place at repo root as templates.yaml (same branch as config.yaml).
+# Schema: templates[].id, name, description, device (same as config devices[] entry)
+
+templates:
+  - id: jaalee_jht
+    name: "Jaalee JHT"
+    description: "Temperature / humidity / battery (iBeacon, Apple 0x004C)"
+    device:
+      id: jaalee_jht
+      name: "Jaalee JHT"
+      source: advertisement
+      instance_mode: mac
+      match:
+        service_data_uuid: "F51C"
+        manufacturer_id: 76
+        manufacturer_min_length: 24
+      sensors:
+        - key: temperature
+          device_class: temperature
+          unit: "°C"
+          state_class: measurement
+          accuracy_decimals: 1
+          source_field: manufacturer_data
+          decode:
+            offset: 18
+            length: 2
+            type: int16
+            endian: big
+            scale: 0.1
+        - key: humidity
+          device_class: humidity
+          unit: "%"
+          state_class: measurement
+          accuracy_decimals: 1
+          source_field: manufacturer_data
+          decode:
+            offset: 20
+            length: 2
+            type: uint16
+            endian: big
+            scale: 0.1
+        - key: battery
+          device_class: battery
+          unit: "%"
+          state_class: measurement
+          source_field: manufacturer_data
+          decode:
+            offset: 23
+            length: 1
+            type: uint8
+
+  - id: obd_standard
+    name: "OBD-II (standard PIDs)"
+    description: "RPM, speed, coolant, fuel level — bind ELM327 adapter in app"
+    device:
+      id: obd_vehicle
+      name: "OBD Vehicle"
+      source: obd
+      obd:
+        service_uuid: "FFF0"
+        tx_char_uuid: "FFF2"
+        rx_char_uuid: "FFF1"
+      sensors:
+        - { key: rpm, preset: rpm, update_interval: 1s }
+        - { key: speed, preset: speed, update_interval: 1s }
+        - { key: coolant_temp, preset: coolant_temp, update_interval: 10s }
+        - { key: fuel_level, preset: fuel_level, update_interval: 30s }

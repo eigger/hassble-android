@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,9 +18,9 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -66,9 +67,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.ble.AdvertisementCapture
@@ -78,7 +81,6 @@ import dev.eigger.hassble.config.DataType
 import dev.eigger.hassble.config.DecodeConfig
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.Endian
-import dev.eigger.hassble.config.MatchConfig
 import dev.eigger.hassble.config.SourceField
 import dev.eigger.hassble.decode.Decoder
 
@@ -98,12 +100,15 @@ fun AdvertisementWizardDialog(
     var step by remember { mutableStateOf(AdvWizardStep.SCAN) }
     var selection by remember { mutableStateOf<AdvWizardSelection?>(null) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Card(
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 400.dp, max = 560.dp),
-            shape = RoundedCornerShape(24.dp),
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.92f),
+            shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             when (step) {
@@ -198,10 +203,9 @@ private fun AdvScanStep(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(stringResource(R.string.config_add_adv), fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
                 Text(stringResource(R.string.adv_wizard_scan_hint), fontSize = 12.sp, color = Color.Gray)
             }
@@ -220,21 +224,35 @@ private fun AdvScanStep(
             modifier = Modifier.fillMaxWidth(),
         )
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.adv_wizard_group_by_format), fontSize = 12.sp, color = Color.White)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.adv_wizard_group_by_format),
+                    fontSize = 12.sp,
+                    color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
                 Switch(
                     checked = groupByFormat,
                     onCheckedChange = { groupByFormat = it },
                     colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = MaterialTheme.colorScheme.primary),
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.adv_wizard_nearby_only), fontSize = 12.sp, color = Color.White)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.adv_wizard_nearby_only),
+                    fontSize = 12.sp,
+                    color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
                 Switch(
                     checked = nearbyOnly,
                     onCheckedChange = { nearbyOnly = it },
@@ -269,40 +287,46 @@ private fun AdvScanStep(
                                         .fillMaxWidth()
                                         .clickable { expandedSignature = if (expanded) null else group.signature },
                                     horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    verticalAlignment = Alignment.Top,
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(group.label, fontWeight = FontWeight.SemiBold, color = Color.White, fontSize = 14.sp)
+                                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                        Text(
+                                            group.label,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
                                         Text(
                                             stringResource(R.string.adv_wizard_devices_count, group.deviceCount),
                                             fontSize = 11.sp,
                                             color = Color.Gray,
                                         )
                                     }
-                                    Text("${group.bestRssi} dBm", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                                group.representative.manufacturerHex?.let {
                                     Text(
-                                        "mfr: ${it.take(36)}${if (it.length > 36) "…" else ""}",
-                                        fontSize = 10.sp,
-                                        color = Color.LightGray,
-                                        fontFamily = FontFamily.Monospace,
+                                        "${group.bestRssi} dBm",
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
                                     )
                                 }
-                                Button(
+                                PacketHexBlock(
+                                    manufacturerHex = group.representative.manufacturerHex,
+                                    serviceDataHex = group.representative.serviceDataHex,
+                                    fullScanHex = group.representative.fullScanHex,
+                                )
+                                HassAccentButton(
+                                    text = stringResource(R.string.adv_wizard_use_format),
                                     onClick = {
                                         onSelected(AdvWizardSelection(group.representative, fixMacInMatch = false))
                                     },
                                     modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), contentColor = MaterialTheme.colorScheme.primary),
-                                    shape = RoundedCornerShape(8.dp),
-                                ) {
-                                    Text(stringResource(R.string.adv_wizard_use_format), fontSize = 12.sp)
-                                }
+                                )
                                 if (expanded) {
                                     Text(stringResource(R.string.adv_wizard_pick_mac), fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.SemiBold)
                                     group.devices.forEach { item ->
-                                        Row(
+                                        Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(8.dp))
@@ -335,9 +359,7 @@ private fun AdvScanStep(
         }
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
+            HassCancelButton(onClick = onDismiss)
         }
     }
 }
@@ -348,19 +370,56 @@ private fun CaptureDeviceContent(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(item.name, fontWeight = FontWeight.SemiBold, color = Color.White, fontSize = 13.sp)
-            Text("${item.rssi} dBm", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-        }
-        Text(item.address, color = Color.Gray, fontSize = 11.sp)
-        item.manufacturerHex?.let {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Text(
-                "mfr: ${it.take(32)}${if (it.length > 32) "…" else ""}",
-                fontSize = 10.sp,
-                color = Color.LightGray,
-                fontFamily = FontFamily.Monospace,
+                item.name,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
+            Text("${item.rssi} dBm", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
+        Text(item.address, color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        PacketHexBlock(
+            manufacturerHex = item.manufacturerHex,
+            serviceDataHex = item.serviceDataHex,
+            fullScanHex = item.fullScanHex,
+        )
+    }
+}
+
+@Composable
+private fun PacketHexBlock(
+    manufacturerHex: String?,
+    serviceDataHex: String?,
+    fullScanHex: String?,
+) {
+    if (manufacturerHex == null && serviceDataHex == null && fullScanHex == null) return
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        manufacturerHex?.let { HexLine("mfr", it) }
+        serviceDataHex?.let { HexLine("svc", it) }
+        fullScanHex?.let { HexLine("raw", it) }
+    }
+}
+
+@Composable
+private fun HexLine(label: String, hex: String) {
+    val formatted = hex.uppercase().chunked(2).joinToString(" ")
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(label, fontSize = 9.sp, color = Color.Gray, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = formatted,
+            fontSize = 10.sp,
+            color = Color.LightGray,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 14.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+        )
     }
 }
 
@@ -403,17 +462,25 @@ private fun AdvEditStep(
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(stringResource(R.string.adv_wizard_edit_title), fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-        Text("${capture.name} · ${capture.address}", fontSize = 11.sp, color = Color.Gray)
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(stringResource(R.string.adv_wizard_edit_title), fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+            Text("${capture.name} · ${capture.address}", fontSize = 11.sp, color = Color.Gray, fontFamily = FontFamily.Monospace)
 
-        OutlinedTextField(
+            Text(stringResource(R.string.adv_wizard_packet_preview), fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.SemiBold)
+            PacketHexBlock(
+                manufacturerHex = capture.manufacturerHex,
+                serviceDataHex = capture.serviceDataHex,
+                fullScanHex = capture.fullScanHex,
+            )
+
+            OutlinedTextField(
             value = deviceId,
             onValueChange = { deviceId = it },
             label = { Text(stringResource(R.string.config_device_id_label)) },
@@ -525,7 +592,8 @@ private fun AdvEditStep(
             )
         }
 
-        Button(
+        HassSecondaryButton(
+            text = stringResource(R.string.adv_wizard_add_sensor_btn),
             onClick = {
                 val scale = scaleText.toDoubleOrNull() ?: 1.0
                 val key = sensorKey.trim().ifBlank { "value_${sensors.size + 1}" }
@@ -545,36 +613,28 @@ private fun AdvEditStep(
                 )
                 sensorKey = "value_${sensors.size + 1}"
             },
-            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.size(4.dp))
-            Text(stringResource(R.string.adv_wizard_add_sensor_btn), fontSize = 12.sp)
+        )
         }
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = onBack) { Text(stringResource(R.string.adv_wizard_back)) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-                Button(
-                    onClick = {
-                        if (deviceId.isBlank() || deviceName.isBlank()) {
-                            Toast.makeText(context, context.getString(R.string.adv_wizard_fill_device), Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        if (sensors.isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.adv_wizard_need_sensor), Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        onCreate(AdvDeviceBuilder.build(deviceId, deviceName, match, sensors.toList()))
-                    },
-                    enabled = sensors.isNotEmpty(),
-                ) {
-                    Text(stringResource(R.string.config_add_device_confirm))
+        HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 4.dp))
+
+        HassDialogActionRowWithBack(
+            backLabel = stringResource(R.string.adv_wizard_back),
+            onBack = onBack,
+            primaryLabel = stringResource(R.string.config_add_device_confirm),
+            onPrimary = {
+                when {
+                    deviceId.isBlank() || deviceName.isBlank() ->
+                        Toast.makeText(context, context.getString(R.string.adv_wizard_fill_device), Toast.LENGTH_SHORT).show()
+                    sensors.isEmpty() ->
+                        Toast.makeText(context, context.getString(R.string.adv_wizard_need_sensor), Toast.LENGTH_SHORT).show()
+                    else -> onCreate(AdvDeviceBuilder.build(deviceId, deviceName, match, sensors.toList()))
                 }
-            }
-        }
+            },
+            onCancel = onDismiss,
+            primaryEnabled = sensors.isNotEmpty(),
+        )
     }
 }
 
@@ -600,28 +660,34 @@ private fun HexBytePicker(
     onOffsetSelected: (Int) -> Unit,
 ) {
     val pairs = hex.chunked(2).filter { it.length == 2 }
-    FlowRow(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(max = 180.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black.copy(alpha = 0.3f))
+            .verticalScroll(rememberScrollState())
             .padding(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        pairs.forEachIndexed { index, pair ->
-            val selected = index in selectedOffset until (selectedOffset + selectedLength)
-            Text(
-                text = pair,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                color = if (selected) Color.Black else Color.LightGray,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
-                    .clickable { onOffsetSelected(index) }
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-            )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            pairs.forEachIndexed { index, pair ->
+                val selected = index in selectedOffset until (selectedOffset + selectedLength)
+                Text(
+                    text = pair,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (selected) Color.Black else Color.LightGray,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                        .clickable { onOffsetSelected(index) }
+                        .padding(horizontal = 5.dp, vertical = 4.dp),
+                )
+            }
         }
     }
 }

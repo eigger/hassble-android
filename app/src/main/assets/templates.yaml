@@ -1,4 +1,4 @@
-# Built-in device templates — import from Sensors tab without hand-writing YAML.
+# Offline fallback — primary source is templates.yaml in the Git config repo.
 templates:
   - id: jaalee_jht
     name: "Jaalee JHT"
