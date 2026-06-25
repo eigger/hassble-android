@@ -124,6 +124,8 @@ import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.ConfigLoader
+import dev.eigger.hassble.config.ConfigCatalog
+import dev.eigger.hassble.config.ConfigMerger
 import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
@@ -260,9 +262,10 @@ private fun HomeScreen() {
     var tokenInput by remember { mutableStateOf("") }
     var gitRepoInput by remember { mutableStateOf("") }
     var gitFileInput by remember { mutableStateOf("") }
+    var gitBranchInput by remember { mutableStateOf("main") }
     var gitTokenInput by remember { mutableStateOf("") }
 
-    val gitUrlInput = GitHubHelper.buildRawUrl(gitRepoInput, gitFileInput)
+    val gitUrlInput = GitHubHelper.buildRawUrl(gitRepoInput, gitFileInput, gitBranchInput)
 
     LaunchedEffect(savedHaUrl, savedHaToken) {
         urlInput = savedHaUrl
@@ -270,8 +273,16 @@ private fun HomeScreen() {
     }
     LaunchedEffect(savedGitUrl, savedGitToken) {
         val parsed = GitHubHelper.parseGitUrl(savedGitUrl)
-        gitRepoInput = parsed?.repoShort ?: savedGitUrl
-        gitFileInput = parsed?.file ?: ""
+        if (parsed != null) {
+            val parts = parsed.repoShort.split('/')
+            gitRepoInput = if (parts.size >= 2) "${parts[0]}/${parts[1]}" else parsed.repoShort
+            gitBranchInput = parsed.branch
+            gitFileInput = parsed.file
+        } else {
+            gitRepoInput = savedGitUrl
+            gitBranchInput = "main"
+            gitFileInput = ""
+        }
         gitTokenInput = savedGitToken ?: ""
     }
 
@@ -303,6 +314,7 @@ private fun HomeScreen() {
     val presets = remember {
         ObdPresetStore.fromYaml(context.assets.open("obd_presets.yaml").bufferedReader().readText())
     }
+    val configCatalog = remember { ConfigCatalog.fromAssets(context) }
     val loader = remember { ConfigLoader(File(context.filesDir, "config_cache"), presets) }
     val isRunning by BleGatewayService.isServiceRunning.collectAsState()
     val connState by BleGatewayService.serviceConnectionState.collectAsState()
@@ -316,12 +328,28 @@ private fun HomeScreen() {
     val sensorLastValues by BleGatewayService.sensorLastValues.collectAsState()
 
     var loadedConfig by remember { mutableStateOf<GatewayConfig?>(null) }
+    var draftDevices by remember { mutableStateOf<List<DeviceConfig>>(emptyList()) }
     var configError by remember { mutableStateOf<String?>(null) }
     var isConfigLoading by remember { mutableStateOf(false) }
     var reloadTrigger by remember { mutableStateOf(0) }
     var usingCachedConfig by remember { mutableStateOf(false) }
     var showOnboarding by remember { mutableStateOf(false) }
+    var showCatalogDialog by remember { mutableStateOf(false) }
+    var showObdDialog by remember { mutableStateOf(false) }
+    var showAdvWizard by remember { mutableStateOf(false) }
     var missingPermCount by remember { mutableStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        draftDevices = repository.loadDraftDevices()
+    }
+
+    val effectiveConfig = remember(loadedConfig, draftDevices) {
+        ConfigMerger.effectiveConfig(loadedConfig, draftDevices)
+    }
+
+    val cacheSavedAtMs = remember(gitUrlInput, usingCachedConfig) {
+        if (usingCachedConfig) loader.cacheSavedAt(gitUrlInput) else null
+    }
 
     LaunchedEffect(onboardingComplete) {
         if (!onboardingComplete) showOnboarding = true
@@ -356,17 +384,21 @@ private fun HomeScreen() {
         }
     }
 
-    LaunchedEffect(loadedConfig) {
-        val config = loadedConfig ?: return@LaunchedEffect
+    LaunchedEffect(effectiveConfig) {
+        val config = effectiveConfig ?: return@LaunchedEffect
         repository.syncEnabledSensors(config)
     }
 
-    val validationIssues = remember(loadedConfig) {
-        loadedConfig?.let { ConfigValidator.validate(it) } ?: emptyList()
+    val validationIssues = remember(effectiveConfig) {
+        effectiveConfig?.let { ConfigValidator.validate(it) } ?: emptyList()
     }
 
-    val effectiveEnabledSensors = remember(loadedConfig, enabledSensors, enabledSensorsInitialized) {
-        val configKeys = loadedConfig?.allSensorKeys().orEmpty()
+    val effectiveEnabledSensors = remember(effectiveConfig, enabledSensors, enabledSensorsInitialized, validationIssues) {
+        val errorKeys = validationIssues
+            .filter { it.level == ValidationLevel.ERROR && it.sensorKey != null }
+            .map { "${it.deviceId}/${it.sensorKey}" }
+            .toSet()
+        val configKeys = effectiveConfig?.allSensorKeys().orEmpty() - errorKeys
         when {
             configKeys.isEmpty() -> enabledSensors
             !enabledSensorsInitialized || enabledSensors.isEmpty() -> configKeys
@@ -450,8 +482,11 @@ private fun HomeScreen() {
 
         val showCacheBanner = usingCachedConfig || usingCachedConfigService
         if (showCacheBanner) {
+            val cacheText = cacheSavedAtMs?.let {
+                stringResource(R.string.config_cache_banner_with_time, formatLastRefreshed(context, it))
+            } ?: stringResource(R.string.config_cache_banner)
             InfoBanner(
-                text = stringResource(R.string.config_cache_banner),
+                text = cacheText,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
@@ -510,7 +545,7 @@ private fun HomeScreen() {
                     isRunning = isRunning,
                     isConfigLoading = isConfigLoading,
                     configError = configError,
-                    loadedConfig = loadedConfig,
+                    loadedConfig = effectiveConfig,
                     validationIssues = validationIssues,
                     boundDevices = boundDevices,
                     enabledSensors = effectiveEnabledSensors,
@@ -521,11 +556,22 @@ private fun HomeScreen() {
                     deviceLinkStatuses = deviceLinkStatuses,
                     gitRepoInput = gitRepoInput,
                     gitFileInput = gitFileInput,
+                    gitBranchInput = gitBranchInput,
                     gitTokenInput = gitTokenInput,
+                    draftDeviceCount = draftDevices.size,
+                    cacheSavedAtMs = cacheSavedAtMs,
+                    usingCachedConfig = usingCachedConfig,
                     onGitRepoChange = { gitRepoInput = it },
                     onGitFileChange = { gitFileInput = it },
+                    onGitBranchChange = { gitBranchInput = it },
                     onGitTokenChange = { gitTokenInput = it },
                     onReloadConfig = { reloadTrigger++ },
+                    onImportCatalog = { showCatalogDialog = true },
+                    onAddObd = { showObdDialog = true },
+                    onAddAdv = { showAdvWizard = true },
+                    onExportYaml = {
+                        effectiveConfig?.let { exportConfigYaml(context, it) }
+                    },
                     onBindClick = { scanningDevice = it },
                     onUnbindClick = { deviceId -> scope.launch { repository.unbindDevice(deviceId) } },
                     onSensorToggle = { key, enabled ->
@@ -601,6 +647,73 @@ private fun HomeScreen() {
             showOnboarding = false
             scope.launch { repository.setOnboardingComplete(true) }
         })
+    }
+
+    if (showCatalogDialog) {
+        CatalogImportDialog(
+            catalog = configCatalog,
+            onDismiss = { showCatalogDialog = false },
+            onImport = { template ->
+                scope.launch {
+                    val existingIds = (effectiveConfig?.devices?.map { it.id } ?: emptyList()).toSet()
+                    val device = presets.expandDevice(template.device)
+                    val unique = ConfigMerger.ensureUniqueId(device, existingIds)
+                    repository.addDraftDevice(unique)
+                    draftDevices = repository.loadDraftDevices()
+                    showCatalogDialog = false
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.config_imported_toast, unique.name),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                }
+            },
+        )
+    }
+
+    if (showObdDialog) {
+        AddObdDeviceDialog(
+            presets = presets,
+            onDismiss = { showObdDialog = false },
+            onCreate = { device ->
+                scope.launch {
+                    val existingIds = (effectiveConfig?.devices?.map { it.id } ?: emptyList()).toSet()
+                    val expanded = presets.expandDevice(device)
+                    val unique = ConfigMerger.ensureUniqueId(expanded, existingIds)
+                    repository.addDraftDevice(unique)
+                    draftDevices = repository.loadDraftDevices()
+                    showObdDialog = false
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.config_imported_toast, unique.name),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                }
+            },
+        )
+    }
+
+    if (showAdvWizard) {
+        AdvertisementWizardDialog(
+            onDismiss = { showAdvWizard = false },
+            onCreate = { device ->
+                scope.launch {
+                    val existingIds = (effectiveConfig?.devices?.map { it.id } ?: emptyList()).toSet()
+                    val unique = ConfigMerger.ensureUniqueId(device, existingIds)
+                    repository.addDraftDevice(unique)
+                    draftDevices = repository.loadDraftDevices()
+                    showAdvWizard = false
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.config_imported_toast, unique.name),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
+                }
+            },
+        )
     }
 }
 
@@ -981,11 +1094,20 @@ private fun SensorsTabContent(
     deviceLinkStatuses: List<DeviceLinkStatus>,
     gitRepoInput: String,
     gitFileInput: String,
+    gitBranchInput: String,
     gitTokenInput: String,
+    draftDeviceCount: Int = 0,
+    cacheSavedAtMs: Long? = null,
+    usingCachedConfig: Boolean = false,
     onGitRepoChange: (String) -> Unit,
     onGitFileChange: (String) -> Unit,
+    onGitBranchChange: (String) -> Unit,
     onGitTokenChange: (String) -> Unit,
     onReloadConfig: () -> Unit,
+    onImportCatalog: () -> Unit,
+    onAddObd: () -> Unit,
+    onAddAdv: () -> Unit,
+    onExportYaml: () -> Unit,
     onBindClick: (DeviceConfig) -> Unit,
     onUnbindClick: (String) -> Unit,
     onSensorToggle: (String, Boolean) -> Unit,
@@ -1005,10 +1127,21 @@ private fun SensorsTabContent(
             GitConfigSection(
                 repoInput = gitRepoInput,
                 fileInput = gitFileInput,
+                branchInput = gitBranchInput,
                 tokenInput = gitTokenInput,
                 onRepoChange = onGitRepoChange,
                 onFileChange = onGitFileChange,
+                onBranchChange = onGitBranchChange,
                 onTokenChange = onGitTokenChange,
+            )
+        }
+        item {
+            ConfigToolsRow(
+                onImportCatalog = onImportCatalog,
+                onAddObd = onAddObd,
+                onAddAdv = onAddAdv,
+                onExportYaml = onExportYaml,
+                draftDeviceCount = draftDeviceCount,
             )
         }
         item {
@@ -1055,8 +1188,18 @@ private fun SensorsTabContent(
             }
         }
 
-        if (configError != null && loadedConfig != null) {
-            item { WarningBanner(text = stringResource(R.string.config_cache_banner)) }
+        if (usingCachedConfig) {
+            item {
+                val ctx = LocalContext.current
+                val cacheText = cacheSavedAtMs?.let {
+                    stringResource(R.string.config_cache_banner_with_time, formatLastRefreshed(ctx, it))
+                } ?: stringResource(R.string.config_cache_banner)
+                WarningBanner(text = cacheText)
+            }
+        }
+
+        if (configError != null && loadedConfig != null && !usingCachedConfig) {
+            item { WarningBanner(text = configError) }
         }
 
         if (isConfigLoading) {
@@ -1365,8 +1508,9 @@ private fun DeviceConfigCard(
                                         )
                                         sensorIssues.forEach { issue ->
                                             val isErr = issue.level == ValidationLevel.ERROR
+                                            val pathHint = if (issue.yamlPath.isNotBlank()) " (${issue.yamlPath})" else ""
                                             Text(
-                                                text = "${if (isErr) "⚠ ERROR" else "⚠ WARN"}: ${issue.message}",
+                                                text = "${if (isErr) "⚠ ERROR" else "⚠ WARN"}: ${issue.message}$pathHint",
                                                 color = if (isErr) MaterialTheme.colorScheme.error
                                                         else Color(0xFFFFB300),
                                                 fontSize = 10.sp,
@@ -1382,9 +1526,9 @@ private fun DeviceConfigCard(
                                         }
                                     }
                                     Switch(
-                                        checked = checked,
-                                        onCheckedChange = { onSensorToggle(sensorKey, it) },
-                                        enabled = !isRunning,
+                                        checked = checked && !hasError,
+                                        onCheckedChange = { if (!hasError) onSensorToggle(sensorKey, it) },
+                                        enabled = !isRunning && !hasError,
                                         colors = SwitchDefaults.colors(
                                             checkedThumbColor = Color.Black,
                                             checkedTrackColor = if (hasError) MaterialTheme.colorScheme.error
@@ -2317,9 +2461,11 @@ private fun formatLastRefreshed(context: Context, timestamp: Long): String {
 private fun GitConfigSection(
     repoInput: String,
     fileInput: String,
+    branchInput: String,
     tokenInput: String,
     onRepoChange: (String) -> Unit,
     onFileChange: (String) -> Unit,
+    onBranchChange: (String) -> Unit,
     onTokenChange: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -2365,7 +2511,7 @@ private fun GitConfigSection(
                         scope.launch {
                             isBrowsing = true
                             browseError = null
-                            val result = GitHubHelper.fetchYamlFiles(repo, tokenInput.ifBlank { null })
+                            val result = GitHubHelper.fetchYamlFiles(repo, branchInput, tokenInput.ifBlank { null })
                             isBrowsing = false
                             lastBrowsedRepo = repo
                             result.onSuccess { files ->
@@ -2401,6 +2547,16 @@ private fun GitConfigSection(
             browseError?.let { err ->
                 Text(err, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
             }
+
+            OutlinedTextField(
+                value = branchInput,
+                onValueChange = onBranchChange,
+                label = { Text(stringResource(R.string.git_branch_label)) },
+                placeholder = { Text("main", color = Color.Gray, fontSize = 13.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+            )
 
             // File dropdown — shown when files were browsed OR when there's already a selection
             if (yamlFiles.isNotEmpty() || fileInput.isNotBlank()) {

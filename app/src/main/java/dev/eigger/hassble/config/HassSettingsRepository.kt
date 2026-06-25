@@ -40,6 +40,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_KNOWN_DEVICE_IDS = stringPreferencesKey("known_device_ids")
         private val KEY_AUTO_CONNECT_DISABLED = stringPreferencesKey("auto_connect_disabled")
         private val KEY_ENTITY_FINGERPRINTS = stringPreferencesKey("entity_fingerprints")
+        private val KEY_DRAFT_DEVICES = stringPreferencesKey("draft_devices")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -238,8 +239,13 @@ class HassSettingsRepository(private val context: Context) {
     }
 
     suspend fun syncEnabledSensors(config: GatewayConfig) {
-        val allKeys = config.allSensorKeys()
-        if (allKeys.isEmpty()) return
+        val issues = ConfigValidator.validate(config)
+        val errorKeys = issues
+            .filter { it.level == ValidationLevel.ERROR && it.sensorKey != null }
+            .map { "${it.deviceId}/${it.sensorKey}" }
+            .toSet()
+        val allKeys = config.allSensorKeys() - errorKeys
+        if (allKeys.isEmpty() && errorKeys.isEmpty()) return
         context.dataStore.edit { prefs ->
             val initialized = prefs[KEY_ENABLED_SENSORS_INITIALIZED] ?: false
             val current = runCatching {
@@ -259,24 +265,56 @@ class HassSettingsRepository(private val context: Context) {
                     )
                     prefs[KEY_ALL_KNOWN_SENSORS] = json.encodeToString(
                         ListSerializer(String.serializer()),
-                        allKeys.sorted(),
+                        config.allSensorKeys().sorted(),
                     )
                     prefs[KEY_ENABLED_SENSORS_INITIALIZED] = true
                 }
                 else -> {
                     val newKeys = allKeys - allKnown
-                    val pruned = current.intersect(allKeys) + newKeys
+                    val pruned = (current.intersect(allKeys) + newKeys) - errorKeys
                     prefs[KEY_ENABLED_SENSORS] = json.encodeToString(
                         ListSerializer(String.serializer()),
                         pruned.sorted(),
                     )
                     prefs[KEY_ALL_KNOWN_SENSORS] = json.encodeToString(
                         ListSerializer(String.serializer()),
-                        allKeys.sorted(),
+                        config.allSensorKeys().sorted(),
                     )
                 }
             }
         }
+    }
+
+    suspend fun loadDraftDevices(): List<DeviceConfig> {
+        val prefs = context.dataStore.data.first()
+        val jsonStr = prefs[KEY_DRAFT_DEVICES] ?: return emptyList()
+        return runCatching {
+            json.decodeFromString(ListSerializer(DeviceConfig.serializer()), jsonStr)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun saveDraftDevices(devices: List<DeviceConfig>) {
+        context.dataStore.edit { prefs ->
+            if (devices.isEmpty()) {
+                prefs.remove(KEY_DRAFT_DEVICES)
+            } else {
+                prefs[KEY_DRAFT_DEVICES] = json.encodeToString(
+                    ListSerializer(DeviceConfig.serializer()),
+                    devices,
+                )
+            }
+        }
+    }
+
+    suspend fun addDraftDevice(device: DeviceConfig) {
+        val current = loadDraftDevices().toMutableList()
+        current.removeAll { it.id == device.id }
+        current += device
+        saveDraftDevices(current)
+    }
+
+    suspend fun clearDraftDevices() {
+        saveDraftDevices(emptyList())
     }
 
     suspend fun setSensorEnabled(sensorKey: String, enabled: Boolean) {

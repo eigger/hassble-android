@@ -15,6 +15,7 @@ import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.ConfigLoader
+import dev.eigger.hassble.config.ConfigMerger
 import dev.eigger.hassble.config.ConfigValidator
 import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.HassSettingsRepository
@@ -218,11 +219,20 @@ class BleGatewayService : Service() {
             val loader = ConfigLoader(File(filesDir, "config_cache"), presets)
             val cachedConfig = runCatching { loader.loadCache(currentGitUrl) }.getOrNull()
             val fetch = loader.load(currentGitUrl, currentGitToken)
-            val config = if (fetch.isSuccess) {
+            val repository = HassSettingsRepository(applicationContext)
+            val draftDevices = repository.loadDraftDevices()
+            val baseConfig = if (fetch.isSuccess) {
                 fetch.getOrNull()
             } else {
                 _usingCachedConfig.value = true
                 cachedConfig
+            }
+            val config = when {
+                baseConfig != null && draftDevices.isNotEmpty() ->
+                    ConfigMerger.merge(baseConfig, draftDevices)
+                baseConfig != null -> baseConfig
+                draftDevices.isNotEmpty() -> GatewayConfig(devices = draftDevices)
+                else -> null
             }
 
             if (config == null) {
@@ -234,7 +244,6 @@ class BleGatewayService : Service() {
 
             currentConfig = config
             val defaultEnabled = defaultEnabled(config)
-            val repository = HassSettingsRepository(applicationContext)
 
             // ─── HA 엔티티 fingerprint 비교 ────────────────────────────────────────
             // config 변경 또는 앱 선언 방식 변경 시 해당 device의 HA 엔티티 자동 cleanup

@@ -105,8 +105,7 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
     - { key: rpm,          preset: rpm,             update_interval: 1s }
     - { key: coolant_temp, preset: coolant_temp,    update_interval: 10s }
     - { key: gear,         preset: gm_current_gear, update_interval: 1s }
-    - { key: fuel_level,   preset: fuel_level,      update_interval: 30s,
-        filters: [ { median: { window: 5 } }, { delta: 0.5 }, { throttle: 60s } ] }
+    - { key: fuel_level,   preset: fuel_level,      update_interval: 30s }
     # 비표준/커스텀 (preset 없이 직접 지정)
     - key: custom_pressure
       mode: "22"
@@ -129,7 +128,10 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 | `update_interval` | 폴링 주기 (기본 60s) |
 | `pre_commands` | 이 PID 전에 보낼 AT 명령 (헤더 전환용) |
 | `unit` `device_class` `state_class` `icon` `accuracy_decimals` | HA 메타 |
-| `filters` | median / delta / throttle (ESPHome 호환) |
+| `publish` | 값 필터 (on_change_only, min_interval, deadband, heartbeat) — `defaults.publish` 상속 |
+
+> **참고:** ESPHome 스타일 `filters`(median/delta/throttle)는 v1 스키마에서 지원하지 않습니다.
+> 대신 센서/기기/defaults의 `publish` 규칙을 사용하세요.
 
 ## decode 블록 (구조적 파싱)
 

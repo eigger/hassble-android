@@ -7,12 +7,23 @@ data class ValidationIssue(
     val deviceId: String,
     val sensorKey: String? = null,
     val message: String,
+    val yamlPath: String = "",
 ) {
     val tag: String get() = if (sensorKey != null) "device='$deviceId' sensor='$sensorKey'" else "device='$deviceId'"
     override fun toString() = "[${level.name}] $tag: $message"
 }
 
 object ConfigValidator {
+
+    private fun sensorPath(deviceId: String, sensorKey: String, field: String? = null): String {
+        val base = "devices[$deviceId].sensors[$sensorKey]"
+        return if (field != null) "$base.$field" else base
+    }
+
+    private fun controlPath(deviceId: String, controlKey: String, field: String? = null): String {
+        val base = "devices[$deviceId].controls[$controlKey]"
+        return if (field != null) "$base.$field" else base
+    }
 
     private val validStatClasses = setOf("measurement", "total", "total_increasing")
     private val numericDeviceClasses = setOf(
@@ -50,32 +61,40 @@ object ConfigValidator {
             if (isText(s)) {
                 if (s.unit != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "unit='${s.unit}' is ignored for text_sensor — HA requires numeric values for sensors with units")
+                        "unit='${s.unit}' is ignored for text_sensor — HA requires numeric values for sensors with units",
+                        sensorPath(id, key, "unit"))
                 if (effStateClass != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "state_class='$effStateClass' is ignored for text_sensor")
+                        "state_class='$effStateClass' is ignored for text_sensor",
+                        sensorPath(id, key, "state_class"))
                 if (s.accuracyDecimals != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "accuracy_decimals is ignored for text_sensor")
+                        "accuracy_decimals is ignored for text_sensor",
+                        sensorPath(id, key, "accuracy_decimals"))
                 if (s.deviceClass in numericDeviceClasses)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "device_class='${s.deviceClass}' expects a numeric value but platform is text_sensor")
+                        "device_class='${s.deviceClass}' expects a numeric value but platform is text_sensor",
+                        sensorPath(id, key, "device_class"))
             }
 
             // 숫자 센서 검증
             if (!isText(s)) {
                 if (effStateClass != null && effStateClass !in validStatClasses)
                     issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                        "invalid state_class='$effStateClass' — must be one of $validStatClasses")
+                        "invalid state_class='$effStateClass' — must be one of $validStatClasses",
+                        sensorPath(id, key, "state_class"))
                 if (s.unit != null && effStateClass == null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "unit='${s.unit}' set but state_class is missing — HA may infer measurement and show as graph")
+                        "unit='${s.unit}' set but state_class is missing — HA may infer measurement and show as graph",
+                        sensorPath(id, key, "unit"))
                 if (effStateClass != null && s.unit == null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "state_class='$effStateClass' set but unit is missing — HA long-term statistics require a unit")
+                        "state_class='$effStateClass' set but unit is missing — HA long-term statistics require a unit",
+                        sensorPath(id, key, "state_class"))
                 if (s.deviceClass == "timestamp" && s.accuracyDecimals != null)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                        "accuracy_decimals is meaningless for device_class='timestamp'")
+                        "accuracy_decimals is meaningless for device_class='timestamp'",
+                        sensorPath(id, key, "accuracy_decimals"))
             }
 
             // decode 범위 검증
@@ -83,23 +102,27 @@ object ConfigValidator {
                 val required = s.decode.offset + s.decode.length
                 if (s.minLength != null && required > s.minLength) {
                     issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                        "decode(offset=${s.decode.offset} + length=${s.decode.length}=$required) exceeds min_length=${s.minLength}")
+                        "decode(offset=${s.decode.offset} + length=${s.decode.length}=$required) exceeds min_length=${s.minLength}",
+                        sensorPath(id, key, "decode"))
                 }
                 if (s.length != null && required > s.length) {
                     issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                        "decode(offset=${s.decode.offset} + length=${s.decode.length}=$required) exceeds length=${s.length}")
+                        "decode(offset=${s.decode.offset} + length=${s.decode.length}=$required) exceeds length=${s.length}",
+                        sensorPath(id, key, "decode"))
                 }
             }
 
             // OBD 센서는 pid가 있어야 폴링 가능
             if (device.source == Source.obd && s.pid == null && s.preset == null)
                 issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                    "OBD sensor requires 'pid' or 'preset' — sensor will be skipped")
+                    "OBD sensor requires 'pid' or 'preset' — sensor will be skipped",
+                    sensorPath(id, key, "preset"))
 
             // advertisement/gatt_notify 센서는 decode가 있어야 값 추출 가능
             if (device.source != Source.obd && s.decode == null && s.platform != "binary_sensor")
                 issues += ValidationIssue(ValidationLevel.WARNING, id, key,
-                    "no decode config — sensor will never produce a value")
+                    "no decode config — sensor will never produce a value",
+                    sensorPath(id, key, "decode"))
         }
 
         // ── 컨트롤 검증 ────────────────────────────────────────────────────────
@@ -108,10 +131,12 @@ object ConfigValidator {
             val key = c.key
             if (device.source == Source.gatt_notify && device.gatt?.writeCharUuid.isNullOrBlank())
                 issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                    "control requires write_char_uuid in gatt config — control will be skipped")
+                    "control requires write_char_uuid in gatt config — control will be skipped",
+                    controlPath(id, key, "command"))
             if (device.source == Source.obd && device.obd?.txCharUuid.isNullOrBlank())
                 issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                    "control requires tx_char_uuid in obd config — control will be skipped")
+                    "control requires tx_char_uuid in obd config — control will be skipped",
+                    controlPath(id, key, "command"))
 
             // 컨트롤 타입별 필수 command 키 검증
             val missingKeys = when (c.type) {
@@ -122,7 +147,8 @@ object ConfigValidator {
             }
             if (missingKeys.isNotEmpty())
                 issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                    "control type '${c.type}' missing command key(s): $missingKeys — control will not work")
+                    "control type '${c.type}' missing command key(s): $missingKeys — control will not work",
+                    controlPath(id, key, "command"))
         }
 
         return issues
