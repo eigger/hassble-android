@@ -35,7 +35,6 @@ import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanFilter
-import android.os.ParcelUuid
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
@@ -100,11 +99,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             scanMode = nativeScanMode,
             legacy = true,
         )
-        val scanFilters = if (unfiltered) {
-            null
-        } else {
-            buildScanFilters(devices).takeIf { it.isNotEmpty() }
-        }
+        val scanFilters: List<BleScanFilter> = if (unfiltered) emptyList()
+        else buildScanFilters(devices)
         LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}")
 
         try {
@@ -259,39 +255,11 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     }
 
     private fun buildScanFilters(devices: List<DeviceConfig>): List<BleScanFilter> {
+        // Nordic BLE 라이브러리는 MAC 주소 기반 필터만 지원.
+        // manufacturer_id / service_data_uuid 매칭은 앱 레벨(scan 콜백)에서 처리함.
         return devices.mapNotNull { d ->
-            val match = d.match ?: return@mapNotNull null
-            var hasCriteria = false
-            var deviceAddress: String? = null
-            var serviceUuid: ParcelUuid? = null
-            var manufacturerId: Int? = null
-
-            val mac = match.mac
-            if (!mac.isNullOrBlank()) {
-                deviceAddress = mac.uppercase().replace("-", ":")
-                hasCriteria = true
-            }
-
-            if (!match.serviceDataUuid.isNullOrBlank()) {
-                serviceUuid = ParcelUuid(uuidFrom(match.serviceDataUuid))
-                hasCriteria = true
-            }
-
-            if (match.manufacturerId != null) {
-                manufacturerId = match.manufacturerId
-                hasCriteria = true
-            }
-
-            if (hasCriteria) {
-                BleScanFilter(
-                    deviceAddress = deviceAddress,
-                    serviceUuid = serviceUuid,
-                    serviceDataUuid = serviceUuid,
-                    manufacturerId = manufacturerId
-                )
-            } else {
-                null
-            }
+            val mac = d.match?.mac?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            BleScanFilter(deviceAddress = mac.uppercase().replace("-", ":"))
         }
     }
 
