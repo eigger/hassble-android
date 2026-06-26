@@ -1,5 +1,7 @@
 package dev.eigger.hassble.service
 
+import android.content.Context
+import androidx.annotation.StringRes
 import dev.eigger.hassble.config.HassBleDefaults
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -28,6 +30,22 @@ data class LogEntry(
 object LiveEventLogger {
     val BUFFER_LIMIT_OPTIONS = HassBleDefaults.LOG_BUFFER_LIMIT_OPTIONS
     const val DEFAULT_MAX_LOGS = HassBleDefaults.DEFAULT_LOG_BUFFER_LIMIT
+
+    @Volatile
+    private var appContext: Context? = null
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    fun logRes(type: LogType, @StringRes resId: Int, vararg formatArgs: Any?) {
+        val ctx = appContext
+        if (ctx == null) {
+            log(type, "[$resId]")
+            return
+        }
+        log(type, ctx.getString(resId, *formatArgs))
+    }
 
     @Volatile
     var maxLogs: Int = DEFAULT_MAX_LOGS

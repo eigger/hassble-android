@@ -290,7 +290,11 @@ class BleGatewayService : Service() {
                 val removalModes = removedIds.associateWith { haRemoveModeFor(it) }
                 repository.queueHaEntityRemoval(removedIds, removalModes)
                 pendingEntityCleanupDeviceIds = pendingEntityCleanupDeviceIds + removedIds
-                LiveEventLogger.log(LogType.LINK, "Config 변경: 삭제된 기기 HA 정리 중 (${removedIds.joinToString()})")
+                LiveEventLogger.logRes(
+                    LogType.LINK,
+                    R.string.log_config_removed_devices_cleanup,
+                    removedIds.joinToString(),
+                )
                 removedIds.forEach { deviceId ->
                     runCatching { ws?.removeDevice(deviceId, removalModes.getValue(deviceId)) }
                     repository.unbindDevice(deviceId)

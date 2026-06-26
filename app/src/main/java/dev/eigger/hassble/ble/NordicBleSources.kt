@@ -38,6 +38,7 @@ import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanFilter
 import dev.eigger.hassble.config.BleScanModeOption
+import dev.eigger.hassble.R
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import java.util.UUID
@@ -274,7 +275,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 serviceUuidsCache.remove(addr)
                 cacheTimestamps.remove(addr)
             }
-            LiveEventLogger.log(LogType.LINK, "BLE 캐시 정리 완료: ${expiredAddresses.size}개 기기 정보 만료됨")
+            LiveEventLogger.logRes(LogType.LINK, R.string.log_ble_cache_expired, expiredAddresses.size)
         }
     }
 

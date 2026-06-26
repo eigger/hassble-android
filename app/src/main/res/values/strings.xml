@@ -115,6 +115,7 @@
     <string name="config_err_yaml">YAML syntax error.\n(%1$s)</string>
     <string name="config_err_parse">Config parse error.\n(%1$s)</string>
     <string name="config_err_generic">Cannot load config.\n(%1$s)</string>
+    <string name="config_err_unknown_preset">Unknown OBD preset: %1$s</string>
     <string name="config_cache_banner">Using cached config. Latest fetch failed.</string>
     <string name="config_cache_toast">Using cached config.</string>
     <string name="service_config_load_failed">Config load failed. Gateway has no devices.</string>
@@ -181,6 +182,12 @@
     <string name="logs_scroll_to_latest">Jump to latest</string>
     <string name="logs_empty_gateway_stopped">No logs yet. Start the gateway to collect events.</string>
     <string name="logs_type_filter">Type</string>
+    <string name="log_ble_cache_expired">BLE cache cleared: %1$d device entries expired</string>
+    <string name="log_config_removed_devices_cleanup">Config changed: cleaning up removed devices in HA (%1$s)</string>
+    <string name="log_oauth_auth_failed_no_refresh">[OAuth] Auth failed: no refresh token. Manual token is invalid.</string>
+    <string name="log_oauth_token_expired_refreshing">[OAuth] Access token expired, attempting automatic refresh.</string>
+    <string name="log_oauth_refresh_success">[OAuth] Token refreshed successfully (extended by 30 minutes).</string>
+    <string name="log_oauth_refresh_failed">[OAuth] Token refresh failed: %1$s</string>
     <string name="oauth_login_btn">HA OAuth Login</string>
     <string name="ha_url_required_toast">Please enter HA URL first.</string>
     <string name="oauth_fetching_token_toast">Fetching HA tokens...</string>

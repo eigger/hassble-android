@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.eigger.hassble.BuildConfig
+import dev.eigger.hassble.R
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.withTimeoutOrNull
@@ -320,10 +321,10 @@ class HaWsClient(
                 "auth_ok" -> subscribe()
                 "auth_invalid" -> {
                     if (refreshToken.isNullOrBlank()) {
-                        LiveEventLogger.log(LogType.LINK, "[OAuth] 인증 실패: 리프레시 토큰이 없습니다. 수동 입력 토큰이 무효합니다.")
+                        LiveEventLogger.logRes(LogType.LINK, R.string.log_oauth_auth_failed_no_refresh)
                         handleAuthFailed(webSocket)
                     } else {
-                        LiveEventLogger.log(LogType.LINK, "[OAuth] 엑세스 토큰 만료 감지, 자동 갱신을 시도합니다.")
+                        LiveEventLogger.logRes(LogType.LINK, R.string.log_oauth_token_expired_refreshing)
                         scope.launch(Dispatchers.IO) {
                             val result = HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
                             if (result.isSuccess) {
@@ -331,10 +332,14 @@ class HaWsClient(
                                 token = newToken
                                 onTokenRefreshed?.invoke(newToken)
                                 reconnectDelayMs = 500L
-                                LiveEventLogger.log(LogType.LINK, "[OAuth] 토큰 자동 갱신 성공 (수명 30분 연장)")
+                                LiveEventLogger.logRes(LogType.LINK, R.string.log_oauth_refresh_success)
                                 webSocket.close(4000, "Token refreshed, reconnecting")
                             } else {
-                                LiveEventLogger.log(LogType.LINK, "[OAuth] 토큰 자동 갱신 실패: ${result.exceptionOrNull()?.localizedMessage}")
+                                LiveEventLogger.logRes(
+                                    LogType.LINK,
+                                    R.string.log_oauth_refresh_failed,
+                                    result.exceptionOrNull()?.localizedMessage ?: "",
+                                )
                                 handleAuthFailed(webSocket)
                             }
                         }
