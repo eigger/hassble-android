@@ -31,6 +31,7 @@ import no.nordicsemi.android.kotlin.ble.client.main.callback.ClientBleGatt
 import no.nordicsemi.android.kotlin.ble.client.main.service.ClientBleGattCharacteristic
 import no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray
 import no.nordicsemi.android.kotlin.ble.core.data.BleWriteType
+import no.nordicsemi.android.kotlin.ble.core.data.GattConnectionState
 import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
@@ -310,7 +311,11 @@ class NordicGattNotifySource(
 ) : GattNotifySource {
     private val activeConnections = mutableMapOf<String, ClientBleGatt>()
 
-    override fun connect(device: DeviceConfig, waitForDevice: suspend () -> Unit): Flow<RawReading> = flow {
+    override fun connect(
+        device: DeviceConfig,
+        waitForDevice: suspend () -> Unit,
+        autoReconnect: Boolean,
+    ): Flow<RawReading> = flow {
         val mac = device.gatt?.mac ?: return@flow
         val serviceUuidStr = device.gatt.serviceUuid
         val notifyCharUuidStr = device.gatt.notifyCharUuid
@@ -336,6 +341,10 @@ class NordicGattNotifySource(
                             val hex = bytes.value.joinToString("") { String.format("%02X", it) }
                             emit(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
                         }
+                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac))
+                        activeConnections.remove(device.id)
+                        if (!autoReconnect) break
+                        delay(3_000)
                     } else {
                         throw IllegalStateException("Notify characteristic $notifyCharUuidStr not found")
                     }
@@ -343,8 +352,12 @@ class NordicGattNotifySource(
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "GATT session ended for ${device.id}: ${e.message}")
-                    onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message))
+                    onLinkStatus(
+                        DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = e.message),
+                    )
                     activeConnections.remove(device.id)
+                    if (!autoReconnect) break
+                    delay(3_000)
                 }
             }
         } finally {
@@ -402,7 +415,12 @@ class NordicElm327Source(
         val pollTarget: PollTarget? = null,
     )
 
-    override fun connect(device: DeviceConfig, enabledKeys: Set<String>, waitForDevice: suspend () -> Unit): Flow<RawReading> = flow {
+    override fun connect(
+        device: DeviceConfig,
+        enabledKeys: Set<String>,
+        waitForDevice: suspend () -> Unit,
+        autoReconnect: Boolean,
+    ): Flow<RawReading> = flow {
         val mac = device.obd?.mac ?: return@flow
         try {
             while (currentCoroutineContext().isActive) {
@@ -414,9 +432,10 @@ class NordicElm327Source(
                 } catch (e: Exception) {
                     Log.w(TAG, "OBD session ended for ${device.id}: ${e.message}")
                     onLinkStatus(
-                        DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message),
+                        DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = e.message),
                     )
                     teardown(device.id)
+                    if (!autoReconnect) break
                     delay(3_000)
                 }
             }
@@ -446,6 +465,15 @@ class NordicElm327Source(
             val client = ClientBleGatt.connect(context, mac, this)
             activeConnections[device.id] = client
             onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+
+            launch {
+                client.connectionState.collect { st ->
+                    if (st == GattConnectionState.STATE_DISCONNECTED) {
+                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac))
+                        throw IOException("BLE disconnected")
+                    }
+                }
+            }
 
             val services = client.discoverServices()
             val service = services.findService(uuidFrom(serviceUuidStr))
@@ -487,7 +515,6 @@ class NordicElm327Source(
             var currentPreCommands: List<String> = emptyList()
             var lastTxAtMs = 0L
             var collectIdx = 0
-            var consecutiveTimeouts = 0
 
             try {
                 while (isActive) {
@@ -497,17 +524,6 @@ class NordicElm327Source(
                         val item = txQueue.removeFirst()
                         val resp = sendCommand(device.id, txChar, item.cmd)
                         lastTxAtMs = System.currentTimeMillis()
-
-                        if (resp == null && item.pollTarget != null) {
-                            consecutiveTimeouts++
-                            Log.w(TAG, "OBD PID timeout ($consecutiveTimeouts/${MAX_CONSECUTIVE_TIMEOUTS}) for ${item.cmd}")
-                            if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
-                                LiveEventLogger.log(LogType.LINK, "OBD disconnect detected: $consecutiveTimeouts consecutive timeouts")
-                                throw IOException("OBD not responding after $consecutiveTimeouts timeouts")
-                            }
-                        } else if (resp != null) {
-                            consecutiveTimeouts = 0
-                        }
 
                         if (!elmReady && item.pollTarget == null && txQueue.isEmpty()) {
                             elmReady = true
@@ -640,6 +656,5 @@ class NordicElm327Source(
         private const val POLL_LOOP_MS = 10L
         private const val SINGLE_FRAME_TIMEOUT_MS = 2_000L
         private const val MULTIFRAME_TIMEOUT_MS = 5_000L
-        private const val MAX_CONSECUTIVE_TIMEOUTS = 3
     }
 }

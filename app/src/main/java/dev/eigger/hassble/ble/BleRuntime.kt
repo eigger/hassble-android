@@ -379,8 +379,11 @@ class BleRuntime(
                     if (!mac.isNullOrBlank() && (forceConnect || d.id !in autoConnectDisabledIds)) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         if (keys.isNotEmpty()) {
+                            val autoReconnect = d.id !in autoConnectDisabledIds
                             var skipScan = forceConnect  // 첫 수동 연결만 스캔 생략, 이후 재연결은 항상 광고 대기
-                            gatt.connect(resolved, waitForDevice = {
+                            gatt.connect(
+                                resolved,
+                                waitForDevice = {
                                 if (skipScan) {
                                     skipScan = false
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Connecting, mac))
@@ -390,7 +393,7 @@ class BleRuntime(
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
                                     scanner.scanForMac(mac, scanMode).first()
                                 }
-                            }).collect { reading ->
+                            }, autoReconnect = autoReconnect).collect { reading ->
                                 onReading(reading)
                             }
                         } else {
@@ -403,8 +406,12 @@ class BleRuntime(
                     if (!mac.isNullOrBlank() && (forceConnect || d.id !in autoConnectDisabledIds)) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         if (keys.isNotEmpty()) {
+                            val autoReconnect = d.id !in autoConnectDisabledIds
                             var skipScan = forceConnect  // 첫 수동 연결만 스캔 생략, 이후 재연결은 광고 대기
-                            obd.connect(resolved, keys, waitForDevice = {
+                            obd.connect(
+                                resolved,
+                                keys,
+                                waitForDevice = {
                                 if (skipScan) {
                                     skipScan = false
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Connecting, mac))
@@ -414,7 +421,7 @@ class BleRuntime(
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
                                     scanner.scanForMac(mac, scanMode).first()
                                 }
-                            }).collect { reading ->
+                            }, autoReconnect = autoReconnect).collect { reading ->
                                 onReading(reading)
                             }
                         } else {
