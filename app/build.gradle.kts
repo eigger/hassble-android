@@ -95,3 +95,24 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
 }
+
+// AAB(Android App Bundle) 출력 파일명을 APK와 동일한 형식으로 맞춘다.
+// ApkVariantOutput API는 AAB에 적용되지 않으므로 bundleXxx 태스크 완료 후 rename.
+// 결과: HassBle-v0.3.21-release.aab / HassBle-v0.3.21-debug.aab
+tasks.whenTaskAdded {
+    if (name.startsWith("bundle") && (name.endsWith("Release") || name.endsWith("Debug"))) {
+        val buildTypeName = when {
+            name.endsWith("Release") -> "release"
+            else -> "debug"
+        }
+        doLast {
+            val outDir = project.layout.buildDirectory
+                .dir("outputs/bundle/$buildTypeName")
+                .get().asFile
+            val versionName = android.defaultConfig.versionName
+            outDir.listFiles()
+                ?.firstOrNull { it.extension == "aab" }
+                ?.renameTo(File(outDir, "HassBle-v${versionName}-${buildTypeName}.aab"))
+        }
+    }
+}
