@@ -63,6 +63,13 @@ android {
         compose = true
         buildConfig = true
     }
+    packaging {
+        jniLibs {
+            // datastore-preferences가 포함하는 네이티브 라이브러리:
+            // NDK strip 툴이 처리하지 못해 경고가 발생하므로 suppress
+            keepDebugSymbols += "**/libdatastore_shared_counter.so"
+        }
+    }
 }
 
 dependencies {
