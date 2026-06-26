@@ -218,7 +218,9 @@ class BleRuntime(
                         }
                     }
                 } else {
-                    startDevice(d)
+                    // MAC이 새로 바인딩된 경우: 광고 스캔 없이 즉시 연결 시도
+                    val justBound = boundMacChanged && d.source != Source.advertisement
+                    startDevice(d, forceConnect = justBound)
                 }
             }
         }
@@ -358,11 +360,16 @@ class BleRuntime(
                     if (!mac.isNullOrBlank() && (forceConnect || d.id !in autoConnectDisabledIds)) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         if (keys.isNotEmpty()) {
+                            var skipScan = forceConnect  // 첫 수동 연결만 스캔 생략, 이후 재연결은 항상 광고 대기
                             gatt.connect(resolved, waitForDevice = {
-                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                                scanner.scanForMac(mac, scanMode).first()
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                                if (skipScan) {
+                                    skipScan = false
+                                    LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: direct GATT connect (manual) $mac")
+                                } else {
+                                    onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                                    LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
+                                    scanner.scanForMac(mac, scanMode).first()
+                                }
                             }).collect { reading ->
                                 onReading(reading)
                             }
@@ -376,9 +383,16 @@ class BleRuntime(
                     if (!mac.isNullOrBlank() && (forceConnect || d.id !in autoConnectDisabledIds)) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         if (keys.isNotEmpty()) {
-                            // ELM327은 바인딩 후 광고를 멈추는 경우가 많으므로 광고 스캔 없이 GATT 직접 연결
+                            var skipScan = forceConnect  // 첫 수동 연결만 스캔 생략, 이후 재연결은 광고 대기
                             obd.connect(resolved, keys, waitForDevice = {
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: connecting to OBD at $mac")
+                                if (skipScan) {
+                                    skipScan = false
+                                    LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: direct OBD connect (manual) $mac")
+                                } else {
+                                    onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
+                                    LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
+                                    scanner.scanForMac(mac, scanMode).first()
+                                }
                             }).collect { reading ->
                                 onReading(reading)
                             }
