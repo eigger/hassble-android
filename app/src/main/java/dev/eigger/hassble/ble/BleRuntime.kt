@@ -371,6 +371,7 @@ class BleRuntime(
                             gatt.connect(resolved, waitForDevice = {
                                 if (skipScan) {
                                     skipScan = false
+                                    onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Connecting, mac))
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: direct GATT connect (manual) $mac")
                                 } else {
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
@@ -394,6 +395,7 @@ class BleRuntime(
                             obd.connect(resolved, keys, waitForDevice = {
                                 if (skipScan) {
                                     skipScan = false
+                                    onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Connecting, mac))
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: direct OBD connect (manual) $mac")
                                 } else {
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
@@ -578,8 +580,9 @@ class BleRuntime(
     /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 시작. */
     fun connectDevice(deviceId: String) {
         if (!::config.isInitialized) return
-        if (deviceConnectionJobs[deviceId]?.isActive == true) return
         val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return
+        // 수동 연결: 기존 job(스캔 대기 포함)을 취소하고 강제 재연결
+        stopDevice(deviceId)
         startDevice(d, forceConnect = true)
     }
 
