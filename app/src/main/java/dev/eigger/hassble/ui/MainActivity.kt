@@ -768,7 +768,7 @@ private fun HomeScreen() {
                     }.onFailure { e ->
                         Toast.makeText(
                             context,
-                            context.getString(R.string.config_import_failed, e.message ?: template.name),
+                            context.getString(R.string.config_import_failed, ConfigErrorMapper.message(context, e)),
                             Toast.LENGTH_LONG,
                         ).show()
                     }
@@ -802,7 +802,7 @@ private fun HomeScreen() {
                     }.onFailure { e ->
                         Toast.makeText(
                             context,
-                            context.getString(R.string.config_import_failed, e.message ?: device.name),
+                            context.getString(R.string.config_import_failed, ConfigErrorMapper.message(context, e)),
                             Toast.LENGTH_LONG,
                         ).show()
                     }

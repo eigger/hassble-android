@@ -4,6 +4,10 @@ import com.charleskorn.kaml.Yaml
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+/** [ObdPresetStore]에서 알 수 없는 `preset:` 참조를 만났을 때. */
+class UnknownObdPresetException(val preset: String) :
+    IllegalArgumentException("Unknown preset: $preset")
+
 /**
  * 내장 OBD preset DB (assets/obd_presets.yaml). git 설정의 `preset:` 참조를
  * mode/pid/formula/단위로 펼친다. ESPHome ble_elm327 preset과 동일 개념.
@@ -24,7 +28,7 @@ class ObdPresetStore(private val presets: Map<String, ObdPreset>) {
         expand(GatewayConfig(devices = listOf(device))).devices.first()
 
     private fun expandSensor(s: SensorConfig): SensorConfig {
-        val p = s.preset?.let { presets[it] ?: error("알 수 없는 preset: $it") } ?: return s
+        val p = s.preset?.let { presets[it] ?: throw UnknownObdPresetException(it) } ?: return s
         return s.copy(
             mode = if (s.pid == null) p.mode else s.mode,
             pid = s.pid ?: p.pid,
