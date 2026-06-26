@@ -34,6 +34,8 @@ import no.nordicsemi.android.kotlin.ble.core.data.BleWriteType
 import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
+import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanFilter
+import android.os.ParcelUuid
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
@@ -74,7 +76,11 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         }
     }
 
-    override fun scan(devices: List<DeviceConfig>, scanMode: BleScanModeOption): Flow<RawReading> = flow {
+    override fun scan(
+        devices: List<DeviceConfig>,
+        scanMode: BleScanModeOption,
+        unfiltered: Boolean
+    ): Flow<RawReading> = flow {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "BLUETOOTH_SCAN permission not granted")
             LiveEventLogger.log(LogType.LINK, "BLE scan failed: BLUETOOTH_SCAN permission not granted")
@@ -82,8 +88,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         }
 
         val scanner = this@NordicAdvertisementScanner.scanner
-        Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles")
-        LiveEventLogger.log(LogType.LINK, "Starting Nordic BLE scan for ${devices.size} profiles...")
+        Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles (unfiltered=$unfiltered)")
+        LiveEventLogger.log(LogType.LINK, "Starting Nordic BLE scan for ${devices.size} profiles (unfiltered=$unfiltered)...")
 
         val nativeScanMode = when (scanMode) {
             BleScanModeOption.LOW_POWER -> BleScanMode.SCAN_MODE_LOW_POWER
@@ -94,10 +100,15 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             scanMode = nativeScanMode,
             legacy = true,
         )
+        val scanFilters = if (unfiltered) {
+            null
+        } else {
+            buildScanFilters(devices).takeIf { it.isNotEmpty() }
+        }
         LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}")
 
         try {
-            scanner.scan(settings = scanSettings).collect { result ->
+            scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
                 val deviceName = result.device.name ?: ""
                 val deviceAddress = result.device.address
                 val scanRecord = result.data?.scanRecord
@@ -239,10 +250,48 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             BleScanModeOption.BALANCED -> BleScanMode.SCAN_MODE_BALANCED
             BleScanModeOption.LOW_LATENCY -> BleScanMode.SCAN_MODE_LOW_LATENCY
         }
+        val filters = listOf(BleScanFilter(deviceAddress = normalizedMac))
         val scanner = this@NordicAdvertisementScanner.scanner
-        scanner.scan(settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
+        scanner.scan(filters = filters, settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
             val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
             if (addr == normalizedMac) emit(Unit)
+        }
+    }
+
+    private fun buildScanFilters(devices: List<DeviceConfig>): List<BleScanFilter> {
+        return devices.mapNotNull { d ->
+            val match = d.match ?: return@mapNotNull null
+            var hasCriteria = false
+            var deviceAddress: String? = null
+            var serviceUuid: ParcelUuid? = null
+            var manufacturerId: Int? = null
+
+            val mac = match.mac
+            if (!mac.isNullOrBlank()) {
+                deviceAddress = mac.uppercase().replace("-", ":")
+                hasCriteria = true
+            }
+
+            if (!match.serviceDataUuid.isNullOrBlank()) {
+                serviceUuid = ParcelUuid(uuidFrom(match.serviceDataUuid))
+                hasCriteria = true
+            }
+
+            if (match.manufacturerId != null) {
+                manufacturerId = match.manufacturerId
+                hasCriteria = true
+            }
+
+            if (hasCriteria) {
+                BleScanFilter(
+                    deviceAddress = deviceAddress,
+                    serviceUuid = serviceUuid,
+                    serviceDataUuid = serviceUuid,
+                    manufacturerId = manufacturerId
+                )
+            } else {
+                null
+            }
         }
     }
 

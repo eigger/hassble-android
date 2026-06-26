@@ -3,6 +3,9 @@ package dev.eigger.hassble.service
 import dev.eigger.hassble.config.HassBleDefaults
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,10 +33,12 @@ object LiveEventLogger {
     var maxLogs: Int = DEFAULT_MAX_LOGS
         private set
 
-    /** BLE 광고 스캔 로그 — 양이 많아 기본 OFF, 이벤트(LINK/TX/RX 등)는 항상 기록 */
     @Volatile
     var includeAdvLogs: Boolean = false
         private set
+
+    private val _includeAdvLogsFlow = MutableStateFlow(false)
+    val includeAdvLogsFlow: StateFlow<Boolean> = _includeAdvLogsFlow.asStateFlow()
 
     private val _logFlow = MutableSharedFlow<LogEntry>(extraBufferCapacity = BUFFER_LIMIT_OPTIONS.max())
     val logFlow = _logFlow.asSharedFlow()
@@ -58,6 +63,7 @@ object LiveEventLogger {
 
     fun setIncludeAdvLogs(enabled: Boolean, purgeExisting: Boolean = false) {
         includeAdvLogs = enabled
+        _includeAdvLogsFlow.value = enabled
         if (!enabled && purgeExisting) {
             removeLogsByType(LogType.ADV)
         }

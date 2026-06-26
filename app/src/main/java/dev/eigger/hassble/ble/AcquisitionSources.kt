@@ -23,7 +23,11 @@ data class RawReading(
 
 /** 경로 A: 광고 passive scan. match를 ScanFilter로 변환. */
 interface AdvertisementScanner {
-    fun scan(devices: List<DeviceConfig>, scanMode: BleScanModeOption = BleScanModeOption.BALANCED): Flow<RawReading>
+    fun scan(
+        devices: List<DeviceConfig>,
+        scanMode: BleScanModeOption = BleScanModeOption.BALANCED,
+        unfiltered: Boolean = false
+    ): Flow<RawReading>
     /** 특정 MAC 주소의 BLE 광고가 수신될 때마다 Unit을 방출하는 플로우. */
     fun scanForMac(mac: String, scanMode: BleScanModeOption = BleScanModeOption.BALANCED): Flow<Unit>
     fun stop()

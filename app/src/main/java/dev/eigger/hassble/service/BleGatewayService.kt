@@ -48,6 +48,7 @@ private data class SettingsSnapshot(
     val enabledSensors: Set<String>,
     val scanMode: dev.eigger.hassble.config.BleScanModeOption,
     val autoConnectDisabled: Set<String>,
+    val unfilteredScan: Boolean,
 )
 
 class BleGatewayService : Service() {
@@ -344,18 +345,21 @@ class BleGatewayService : Service() {
                     repository.enabledSensorsInitialized,
                     repository.scanMode,
                     repository.autoConnectDisabled,
+                    LiveEventLogger.includeAdvLogsFlow,
                 ) { args ->
                     val boundMap = args[0] as Map<*, *>
                     val enabledSensors = args[1] as Set<*>
                     val initialized = args[2] as Boolean
                     val scanMode = args[3] as dev.eigger.hassble.config.BleScanModeOption
                     val autoConnectDisabled = args[4] as Set<*>
+                    val unfilteredScan = args[5] as Boolean
                     val effectiveEnabled = if (!initialized) defaultEnabled else enabledSensors.filterIsInstance<String>().toSet()
                     SettingsSnapshot(
                         boundMap = boundMap.entries.associate { it.key.toString() to it.value.toString() },
                         enabledSensors = effectiveEnabled,
                         scanMode = scanMode,
                         autoConnectDisabled = autoConnectDisabled.filterIsInstance<String>().toSet(),
+                        unfilteredScan = unfilteredScan,
                     )
                 }.collect { snapshot ->
                     runtime?.apply(
@@ -364,6 +368,7 @@ class BleGatewayService : Service() {
                         snapshot.boundMap,
                         snapshot.scanMode,
                         snapshot.autoConnectDisabled,
+                        snapshot.unfilteredScan,
                     )
                 }
             }

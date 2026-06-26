@@ -64,6 +64,7 @@ class BleRuntime(
     private var boundDevices: Map<String, String> = emptyMap() // Map of deviceId -> MAC
     private var scanMode: BleScanModeOption = BleScanModeOption.BALANCED
     private var autoConnectDisabledIds: Set<String> = emptySet()
+    private var unfilteredScan: Boolean = false
 
     // Cached states for change tracking between apply() calls
     private var lastConfig: GatewayConfig? = null
@@ -71,6 +72,7 @@ class BleRuntime(
     private var lastBoundDevices: Map<String, String> = emptyMap()
     private var lastScanMode: BleScanModeOption? = null
     private var lastAutoConnectDisabledIds: Set<String> = emptySet()
+    private var lastUnfilteredScan: Boolean? = null
 
     private val devices = java.util.concurrent.ConcurrentHashMap<String, DeviceConfig>()
     private val filters = java.util.concurrent.ConcurrentHashMap<String, ValueFilter>()  // uniqueId → filter
@@ -116,13 +118,15 @@ class BleRuntime(
         enabledKeys: Set<String>,
         boundDevices: Map<String, String>,
         scanMode: BleScanModeOption = BleScanModeOption.BALANCED,
-        autoConnectDisabledIds: Set<String> = emptySet()
+        autoConnectDisabledIds: Set<String> = emptySet(),
+        unfilteredScan: Boolean = false
     ) {
         val oldConfig = this.lastConfig
         val oldEnabled = this.lastEnabled
         val oldBoundDevices = this.lastBoundDevices
         val oldScanMode = this.lastScanMode
         val oldAutoConnectDisabledIds = this.lastAutoConnectDisabledIds
+        val oldUnfilteredScan = this.lastUnfilteredScan
 
         if (config != oldConfig) runConfigValidation(config)
 
@@ -131,6 +135,7 @@ class BleRuntime(
         this.boundDevices = boundDevices
         this.scanMode = scanMode
         this.autoConnectDisabledIds = autoConnectDisabledIds
+        this.unfilteredScan = unfilteredScan
 
         if (oldConfig == null) {
             // First run: complete initialization
@@ -150,6 +155,7 @@ class BleRuntime(
         val oldAdvDevices = oldConfig.devices.filter { it.source == Source.advertisement }
 
         val advChanged = scanMode != oldScanMode ||
+                unfilteredScan != oldUnfilteredScan ||
                 newAdvDevices.size != oldAdvDevices.size ||
                 newAdvDevices.zip(oldAdvDevices).any { (newD, oldD) -> newD != oldD }
 
@@ -158,7 +164,7 @@ class BleRuntime(
             scanJob = null
             scanner.stop()
             if (newAdvDevices.isNotEmpty()) {
-                scanJob = scanner.scan(newAdvDevices, scanMode).onEach(::onReading).launchIn(scope)
+                scanJob = scanner.scan(newAdvDevices, scanMode, unfilteredScan).onEach(::onReading).launchIn(scope)
             }
         }
 
@@ -231,6 +237,7 @@ class BleRuntime(
         this.lastBoundDevices = boundDevices
         this.lastScanMode = scanMode
         this.lastAutoConnectDisabledIds = autoConnectDisabledIds
+        this.lastUnfilteredScan = unfilteredScan
     }
 
     private fun declareAndPrepare(d: DeviceConfig) {
@@ -410,7 +417,7 @@ class BleRuntime(
     private fun startSources() {
         val adv = config.devices.filter { it.source == Source.advertisement }
         if (adv.isNotEmpty()) {
-            scanJob = scanner.scan(adv, scanMode).onEach(::onReading).launchIn(scope)
+            scanJob = scanner.scan(adv, scanMode, unfilteredScan).onEach(::onReading).launchIn(scope)
         }
         for (d in config.devices) {
             startDevice(d)
@@ -619,6 +626,7 @@ class BleRuntime(
         lastBoundDevices = emptyMap()
         lastScanMode = null
         lastAutoConnectDisabledIds = emptySet()
+        lastUnfilteredScan = null
     }
 
     private fun recordSensorValue(
