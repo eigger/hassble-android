@@ -389,10 +389,10 @@ class NordicElm327Source(
     private val scope: CoroutineScope,
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) : Elm327Source {
-    private val activeConnections = mutableMapOf<String, ClientBleGatt>()
+    private val activeConnections = java.util.concurrent.ConcurrentHashMap<String, ClientBleGatt>()
     private val deviceMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     private val pendingDeferreds = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<String>>()
-    private val sessionJobs = mutableMapOf<String, Job>()
+    private val sessionJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     private data class PollTarget(
         val sensor: SensorConfig,
