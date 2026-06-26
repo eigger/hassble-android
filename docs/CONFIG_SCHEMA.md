@@ -111,7 +111,7 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
     tx_char_uuid: "2AF1"         # write (phone → adapter)
     rx_char_uuid: "2AF0"         # notify (adapter → phone)
     tx_delay: 50ms
-    init_commands: [ "ATSP6" ]   # base(ATZ/ATE0/ATL0/ATS0/ATH0/ATSP0) 뒤에 추가
+    init_commands: [ "ATSP6" ]   # base(ATZ/ATE0/ATL0/ATS0/ATH0/ATSP0)는 앱에서 자동 실행하므로 제외 가능 (중복 입력 시 자동 제거됨)
   sensors:
     - { key: rpm,          preset: rpm,             update_interval: 1s }
     - { key: coolant_temp, preset: coolant_temp,    update_interval: 10s }
