@@ -39,7 +39,11 @@ interface GattNotifySource {
      * [waitForDevice]: 실제 연결 시도 전에 호출되는 suspend 함수.
      * BleRuntime이 광고 감지 로직을 주입한다.
      */
-    fun connect(device: DeviceConfig, waitForDevice: suspend () -> Unit = {}): Flow<RawReading>
+    fun connect(
+        device: DeviceConfig,
+        waitForDevice: suspend () -> Unit = {},
+        autoReconnect: Boolean = true,
+    ): Flow<RawReading>
     suspend fun write(device: DeviceConfig, hex: String)
     fun disconnect(deviceId: String)
 }
@@ -53,7 +57,12 @@ interface Elm327Source {
      * [waitForDevice]: 연결 시도(초기 및 재연결) 전마다 호출되는 suspend 함수.
      * BleRuntime이 광고 감지 로직을 주입한다.
      */
-    fun connect(device: DeviceConfig, enabledKeys: Set<String>, waitForDevice: suspend () -> Unit = {}): Flow<RawReading>
+    fun connect(
+        device: DeviceConfig,
+        enabledKeys: Set<String>,
+        waitForDevice: suspend () -> Unit = {},
+        autoReconnect: Boolean = true,
+    ): Flow<RawReading>
     suspend fun write(device: DeviceConfig, hex: String)
     fun disconnect(deviceId: String)
 
