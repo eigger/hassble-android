@@ -99,12 +99,10 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             scanMode = nativeScanMode,
             legacy = true,
         )
-        val scanFilters: List<BleScanFilter> = if (unfiltered) emptyList()
-        else buildScanFilters(devices)
         LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}")
 
         try {
-            scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
+            scanner.scan(filters = emptyList(), settings = scanSettings).collect { result ->
                 val deviceName = result.device.name ?: ""
                 val deviceAddress = result.device.address
                 val scanRecord = result.data?.scanRecord
@@ -251,15 +249,6 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         scanner.scan(filters = filters, settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
             val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
             if (addr == normalizedMac) emit(Unit)
-        }
-    }
-
-    private fun buildScanFilters(devices: List<DeviceConfig>): List<BleScanFilter> {
-        // Nordic BLE 라이브러리는 MAC 주소 기반 필터만 지원.
-        // manufacturer_id / service_data_uuid 매칭은 앱 레벨(scan 콜백)에서 처리함.
-        return devices.mapNotNull { d ->
-            val mac = d.match?.mac?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            BleScanFilter(deviceAddress = mac.uppercase().replace("-", ":"))
         }
     }
 
