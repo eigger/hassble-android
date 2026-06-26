@@ -355,8 +355,9 @@ class BleRuntime(
 
         val resolved = resolveDeviceMac(d)
         val job = scope.launch {
+            val selfJob = coroutineContext[kotlinx.coroutines.Job]
             val oldJob = deviceConnectionJobs[resolved.id]
-            if (oldJob != null && oldJob.isActive) {
+            if (oldJob != null && oldJob !== selfJob && oldJob.isActive) {
                 LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: cancelling previous active job before reconnecting")
                 oldJob.cancelAndJoin()
             }
