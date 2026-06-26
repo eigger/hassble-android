@@ -139,6 +139,17 @@ class BleRuntime(
 
         if (oldConfig == null) {
             // First run: complete initialization
+            // 캐시 파라미터를 return 전에 반드시 업데이트해야 한다.
+            // 업데이트하지 않으면 settingsJob이 apply()를 재호출할 때마다
+            // oldConfig==null로 판단해 startSources()를 반복 호출하고,
+            // 진행 중인 연결 Job이 계속 취소·재시작된다.
+            this.lastConfig = config
+            this.lastEnabled = enabledKeys
+            this.lastBoundDevices = boundDevices
+            this.lastScanMode = scanMode
+            this.lastAutoConnectDisabledIds = autoConnectDisabledIds
+            this.lastUnfilteredScan = unfilteredScan
+
             devices.clear(); filters.clear(); obdIndex.clear(); controls.clear()
             declaredAdvInstances.clear()
             discoveredAdvInstances.clear()
