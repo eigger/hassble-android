@@ -150,7 +150,9 @@ class HassSettingsRepository(private val context: Context) {
                         Source.obd -> d.obd?.autoConnect != false
                         else -> true
                     }
-                    if (!autoConnect) current.add(d.id) else current.remove(d.id)
+                    if (!autoConnect) {
+                        current.add(d.id)
+                    }
                 }
             prefs[KEY_AUTO_CONNECT_DISABLED] = json.encodeToString(ListSerializer(String.serializer()), current.sorted())
         }

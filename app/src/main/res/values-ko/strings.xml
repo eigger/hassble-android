@@ -26,6 +26,7 @@
     <string name="auto_detecting">자동 탐색 수집 중</string>
     <string name="bound_in_config">설정에 고정됨 (MAC: %1$s)</string>
     <string name="connected_mac">연결됨: %1$s</string>
+    <string name="bound_mac">바인딩됨: %1$s</string>
     <string name="rebind">재설정</string>
     <string name="unbind">해제</string>
     <string name="connection_needed">연결이 필요합니다</string>

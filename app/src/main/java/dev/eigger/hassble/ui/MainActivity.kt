@@ -2103,9 +2103,9 @@ private fun DeviceConfigCard(
                         } else if (!boundMac.isNullOrBlank()) {
                             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                    Box(modifier = Modifier.size(6.dp).background(Color(0xFF00E676), CircleShape))
+                                    Box(modifier = Modifier.size(6.dp).background(Color.Gray, CircleShape))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(text = stringResource(R.string.connected_mac, boundMac), color = Color(0xFF00E676), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                    Text(text = stringResource(R.string.bound_mac, boundMac), color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.weight(1f))
                                 }
                                 Row {
                                     Text(text = stringResource(R.string.rebind), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBindClick() }.padding(horizontal = 8.dp, vertical = 4.dp))
