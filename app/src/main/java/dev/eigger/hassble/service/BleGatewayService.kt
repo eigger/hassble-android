@@ -318,7 +318,7 @@ class BleGatewayService : Service() {
                     this@BleGatewayService, scope, onLinkStatus,
                 )
                 val obdSource = dev.eigger.hassble.ble.NordicElm327Source(
-                    this@BleGatewayService, scope, onLinkStatus,
+                    this@BleGatewayService, onLinkStatus,
                 )
                 runtime = BleRuntime(
                     scope,

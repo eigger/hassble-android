@@ -16,7 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -386,13 +386,11 @@ class NordicGattNotifySource(
  */
 class NordicElm327Source(
     private val context: Context,
-    private val scope: CoroutineScope,
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) : Elm327Source {
     private val activeConnections = java.util.concurrent.ConcurrentHashMap<String, ClientBleGatt>()
     private val deviceMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     private val pendingDeferreds = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<String>>()
-    private val sessionJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     private data class PollTarget(
         val sensor: SensorConfig,
@@ -441,122 +439,126 @@ class NordicElm327Source(
 
         Log.d(TAG, "Connecting to OBD reader ${device.id} at $mac")
         onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
-        val client = ClientBleGatt.connect(context, mac, scope)
-        activeConnections[device.id] = client
-        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
-        val services = client.discoverServices()
-        val service = services.findService(uuidFrom(serviceUuidStr))
-        val txChar = service?.findCharacteristic(uuidFrom(txCharUuidStr))
-        val rxChar = service?.findCharacteristic(uuidFrom(rxCharUuidStr))
-            ?: throw IllegalStateException("OBD RX characteristic not found")
-
-        if (txChar == null) throw IllegalStateException("OBD TX characteristic not found")
-
-        val responseBuffer = StringBuilder()
-        val rxJob = scope.launch {
-            rxChar.getNotifications().collect { bytes ->
-                val chunk = String(bytes.value, Charsets.US_ASCII)
-                responseBuffer.append(chunk)
-                if (responseBuffer.contains(">")) {
-                    val fullResponse = responseBuffer.toString().trim()
-                    responseBuffer.clear()
-                    pendingDeferreds[device.id]?.complete(fullResponse)
-                }
-            }
-        }
-        sessionJobs[device.id] = rxJob
-
-        val targets = device.sensors
-            .filter { it.key in enabledKeys && it.pid != null }
-            .map { PollTarget(it, System.currentTimeMillis()) }
-        if (targets.isEmpty()) {
+        // coroutineScope로 GATT 연결·rxJob·폴 루프를 단일 구조화 스코프로 묶는다.
+        // 폴 루프 예외나 외부 Job 취소 시 rxJob과 GATT 내부 코루틴이 함께 정리된다.
+        coroutineScope {
+            val client = ClientBleGatt.connect(context, mac, this)
+            activeConnections[device.id] = client
             onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
-            return
-        }
 
-        val txQueue = ArrayDeque<TxItem>()
-        for (cmd in Elm327Source.BASE_INIT) txQueue.add(TxItem(cmd))
-        for (cmd in obd.initCommands) {
-            if (!isDuplicateInit(cmd)) txQueue.add(TxItem(cmd))
-        }
+            val services = client.discoverServices()
+            val service = services.findService(uuidFrom(serviceUuidStr))
+            val txChar = service?.findCharacteristic(uuidFrom(txCharUuidStr))
+            val rxChar = service?.findCharacteristic(uuidFrom(rxCharUuidStr))
+                ?: throw IllegalStateException("OBD RX characteristic not found")
 
-        var elmReady = false
-        var currentPreCommands: List<String> = emptyList()
-        var lastTxAtMs = 0L
-        var collectIdx = 0
-        var consecutiveTimeouts = 0
+            if (txChar == null) throw IllegalStateException("OBD TX characteristic not found")
 
-        try {
-            while (currentCoroutineContext().isActive) {
-                val now = System.currentTimeMillis()
-
-                if (txQueue.isNotEmpty() && now - lastTxAtMs >= txDelayMs) {
-                    val item = txQueue.removeFirst()
-                    val resp = sendCommand(device.id, txChar, item.cmd)
-                    lastTxAtMs = System.currentTimeMillis()
-
-                    if (resp == null && item.pollTarget != null) {
-                        consecutiveTimeouts++
-                        Log.w(TAG, "OBD PID timeout ($consecutiveTimeouts/${MAX_CONSECUTIVE_TIMEOUTS}) for ${item.cmd}")
-                        if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
-                            LiveEventLogger.log(LogType.LINK, "OBD disconnect detected: $consecutiveTimeouts consecutive timeouts")
-                            throw IOException("OBD not responding after $consecutiveTimeouts timeouts")
-                        }
-                    } else if (resp != null) {
-                        consecutiveTimeouts = 0
+            val responseBuffer = StringBuilder()
+            val rxJob = launch {
+                rxChar.getNotifications().collect { bytes ->
+                    val chunk = String(bytes.value, Charsets.US_ASCII)
+                    responseBuffer.append(chunk)
+                    if (responseBuffer.contains(">")) {
+                        val fullResponse = responseBuffer.toString().trim()
+                        responseBuffer.clear()
+                        pendingDeferreds[device.id]?.complete(fullResponse)
                     }
-
-                    if (!elmReady && item.pollTarget == null && txQueue.isEmpty()) {
-                        elmReady = true
-                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
-                        Log.d(TAG, "OBD dongle ready for ${device.id}")
-                    }
-
-                    if (elmReady && item.pollTarget != null && resp != null) {
-                        ObdResponseParser.normalizeElm327Response(resp)?.let { hex ->
-                            onLinkStatus(
-                                DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()),
-                            )
-                            collector.emit(
-                                RawReading(deviceId = device.id, source = "obd", rawHex = hex),
-                            )
-                        }
-                    }
-                    continue
-                }
-
-                if (!elmReady) {
-                    delay(POLL_LOOP_MS)
-                    continue
-                }
-
-                if (txQueue.isEmpty()) {
-                    val n = targets.size
-                    var scheduled = false
-                    for (i in 0 until n) {
-                        val target = targets[(collectIdx + i) % n]
-                        if (now >= target.nextPollAtMs) {
-                            val sensor = target.sensor
-                            if (sensor.preCommands != currentPreCommands) {
-                                sensor.preCommands.forEach { txQueue.add(TxItem(it)) }
-                                currentPreCommands = sensor.preCommands
-                            }
-                            txQueue.add(TxItem("${sensor.mode}${sensor.pid}", target))
-                            target.nextPollAtMs = now + parseDurationMs(sensor.updateInterval, 60_000L)
-                            collectIdx = (collectIdx + i + 1) % n
-                            scheduled = true
-                            break
-                        }
-                    }
-                    if (!scheduled) delay(POLL_LOOP_MS)
-                } else {
-                    delay(POLL_LOOP_MS)
                 }
             }
-        } finally {
-            rxJob.cancel()
-            sessionJobs.remove(device.id)
+
+            val targets = device.sensors
+                .filter { it.key in enabledKeys && it.pid != null }
+                .map { PollTarget(it, System.currentTimeMillis()) }
+            if (targets.isEmpty()) {
+                onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+                rxJob.cancel()
+                return@coroutineScope
+            }
+
+            val txQueue = ArrayDeque<TxItem>()
+            for (cmd in Elm327Source.BASE_INIT) txQueue.add(TxItem(cmd))
+            for (cmd in obd.initCommands) {
+                if (!isDuplicateInit(cmd)) txQueue.add(TxItem(cmd))
+            }
+
+            var elmReady = false
+            var currentPreCommands: List<String> = emptyList()
+            var lastTxAtMs = 0L
+            var collectIdx = 0
+            var consecutiveTimeouts = 0
+
+            try {
+                while (isActive) {
+                    val now = System.currentTimeMillis()
+
+                    if (txQueue.isNotEmpty() && now - lastTxAtMs >= txDelayMs) {
+                        val item = txQueue.removeFirst()
+                        val resp = sendCommand(device.id, txChar, item.cmd)
+                        lastTxAtMs = System.currentTimeMillis()
+
+                        if (resp == null && item.pollTarget != null) {
+                            consecutiveTimeouts++
+                            Log.w(TAG, "OBD PID timeout ($consecutiveTimeouts/${MAX_CONSECUTIVE_TIMEOUTS}) for ${item.cmd}")
+                            if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+                                LiveEventLogger.log(LogType.LINK, "OBD disconnect detected: $consecutiveTimeouts consecutive timeouts")
+                                throw IOException("OBD not responding after $consecutiveTimeouts timeouts")
+                            }
+                        } else if (resp != null) {
+                            consecutiveTimeouts = 0
+                        }
+
+                        if (!elmReady && item.pollTarget == null && txQueue.isEmpty()) {
+                            elmReady = true
+                            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
+                            Log.d(TAG, "OBD dongle ready for ${device.id}")
+                        }
+
+                        if (elmReady && item.pollTarget != null && resp != null) {
+                            ObdResponseParser.normalizeElm327Response(resp)?.let { hex ->
+                                onLinkStatus(
+                                    DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()),
+                                )
+                                collector.emit(
+                                    RawReading(deviceId = device.id, source = "obd", rawHex = hex),
+                                )
+                            }
+                        }
+                        continue
+                    }
+
+                    if (!elmReady) {
+                        delay(POLL_LOOP_MS)
+                        continue
+                    }
+
+                    if (txQueue.isEmpty()) {
+                        val n = targets.size
+                        var scheduled = false
+                        for (i in 0 until n) {
+                            val target = targets[(collectIdx + i) % n]
+                            if (now >= target.nextPollAtMs) {
+                                val sensor = target.sensor
+                                if (sensor.preCommands != currentPreCommands) {
+                                    sensor.preCommands.forEach { txQueue.add(TxItem(it)) }
+                                    currentPreCommands = sensor.preCommands
+                                }
+                                txQueue.add(TxItem("${sensor.mode}${sensor.pid}", target))
+                                target.nextPollAtMs = now + parseDurationMs(sensor.updateInterval, 60_000L)
+                                collectIdx = (collectIdx + i + 1) % n
+                                scheduled = true
+                                break
+                            }
+                        }
+                        if (!scheduled) delay(POLL_LOOP_MS)
+                    } else {
+                        delay(POLL_LOOP_MS)
+                    }
+                }
+            } finally {
+                rxJob.cancel()
+            }
         }
     }
 
@@ -610,7 +612,8 @@ class NordicElm327Source(
     }
 
     private fun teardown(deviceId: String) {
-        sessionJobs.remove(deviceId)?.cancel()
+        // rxJob은 coroutineScope 내 자식 코루틴이므로 외부 Job 취소 시 자동 정리됨.
+        // 명시적 disconnect만 처리한다.
         activeConnections.remove(deviceId)?.disconnect()
         deviceMutexes.remove(deviceId)
         pendingDeferreds.remove(deviceId)
