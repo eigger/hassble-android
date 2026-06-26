@@ -2153,13 +2153,29 @@ private fun DeviceConfigCard(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (isActive) {
-                                    HassDangerOutlinedButton(
+                                when {
+                                    isConnected -> HassDangerOutlinedButton(
                                         text = stringResource(R.string.device_disconnect_btn),
                                         onClick = onDisconnectDevice,
                                     )
-                                } else {
-                                    HassAccentButton(
+                                    isActive -> OutlinedButton(
+                                        onClick = {},
+                                        enabled = false,
+                                        border = BorderStroke(1.dp, Color.Gray),
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color.Gray,
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = stringResource(R.string.device_connecting_btn),
+                                            fontSize = 13.sp,
+                                            color = Color.Gray,
+                                        )
+                                    }
+                                    else -> HassAccentButton(
                                         text = stringResource(R.string.device_connect_btn),
                                         onClick = onConnectDevice,
                                     )

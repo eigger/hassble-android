@@ -376,11 +376,9 @@ class BleRuntime(
                     if (!mac.isNullOrBlank() && (forceConnect || d.id !in autoConnectDisabledIds)) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         if (keys.isNotEmpty()) {
+                            // ELM327은 바인딩 후 광고를 멈추는 경우가 많으므로 광고 스캔 없이 GATT 직접 연결
                             obd.connect(resolved, keys, waitForDevice = {
-                                onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: scanning for advertisement from $mac")
-                                scanner.scanForMac(mac, scanMode).first()
-                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: advertisement received, connecting")
+                                LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: connecting to OBD at $mac")
                             }).collect { reading ->
                                 onReading(reading)
                             }

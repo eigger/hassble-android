@@ -413,7 +413,7 @@ class NordicElm327Source(
                         DeviceLinkStatus(device.id, DeviceLinkState.Error, mac, errorMessage = e.message),
                     )
                     teardown(device.id)
-                    // waitForDevice() at top of loop gates the next reconnect attempt
+                    delay(3_000)
                 }
             }
         } finally {

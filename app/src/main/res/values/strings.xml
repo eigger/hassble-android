@@ -307,6 +307,7 @@
     <string name="notif_warn_channel_desc">HassBle warning and status change notifications</string>
     <string name="link_state_scanning">Scanning…</string>
     <string name="device_connect_btn">Connect</string>
+    <string name="device_connecting_btn">Connecting…</string>
     <string name="device_disconnect_btn">Disconnect</string>
     <string name="github_error_401">Unauthorized: GitHub Token is invalid or missing permission.</string>
     <string name="github_error_404">Not Found: Repository or branch not found. Check repository path.</string>
