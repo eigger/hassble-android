@@ -6,6 +6,13 @@ It consists of two parts: a **Smart Android app (similar to the Companion app)**
 Instead of forwarding all raw packets (like ESPHome Bluetooth Proxy does), it parses and filters packets on the phone, sending **only changed sensor values** to Home Assistant, where they are exposed as **native entities**. Configuration (parsing rules) is **loaded by the app from Git**, and users **select which sensors** to apply on their phones.
 It **does not use MQTT**, relying solely on the existing Home Assistant URL + access token (no additional ports required).
 
+## Screenshots
+
+| Gateway | Sensors | Logs |
+|:---:|:---:|:---:|
+| ![Gateway tab](docs/screenshots/gateway.png) | ![Sensors tab](docs/screenshots/sensors.png) | ![Logs tab](docs/screenshots/logs.png) |
+| HA URL, OAuth, start/stop gateway | Git config, devices, sensor toggles | Live BLE/WS event log with filters |
+
 ## Architecture
 
 ```
@@ -24,6 +31,12 @@ It **does not use MQTT**, relying solely on the existing Home Assistant URL + ac
 ### BLE data paths
 1. **Advertisement Parsing** — Decodes raw passive scan advertisements into Home Assistant sensors.
 2. **OBD (ELM327) Polling** — Polls BLE OBD adapters like vLinker. Compatible with the preset/formula model of ESPHome [`ble_elm327`](https://github.com/eigger/espcomponents/tree/master/components/ble_elm327).
+
+   | App (Sensors tab) | Home Assistant |
+   |:---:|:---:|
+   | ![OBD device in HassBle app](docs/screenshots/obd-app.png) | ![OBD entities in Home Assistant](docs/screenshots/obd-home-assistant.png) |
+   | Bind ELM327 adapter, enable PIDs, auto-connect | Native sensors (fuel, odometer, battery, …) via ws_bridge |
+
 3. **GATT notify + Bi-directional Control** — Receives data from push-based BLE devices and allows bi-directional control from Home Assistant to BLE devices via switch/number controls.
 
 ### App UI (three tabs)
