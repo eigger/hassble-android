@@ -335,7 +335,7 @@ class BleRuntime(
         onLinkStatus(DeviceLinkStatus(deviceId, DeviceLinkState.Disconnected, mac))
     }
 
-    private fun startDevice(d: DeviceConfig) {
+    private fun startDevice(d: DeviceConfig, forceConnect: Boolean = false) {
         devices[d.id] = d
         if (d.source == Source.obd) {
             val errKeys = ConfigValidator.errorKeys(validationIssues, d.id)
@@ -355,7 +355,7 @@ class BleRuntime(
             when (resolved.source) {
                 Source.gatt_notify -> {
                     val mac = resolved.gatt?.mac
-                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
+                    if (!mac.isNullOrBlank() && (forceConnect || d.id !in autoConnectDisabledIds)) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         if (keys.isNotEmpty()) {
                             gatt.connect(resolved, waitForDevice = {
@@ -373,7 +373,7 @@ class BleRuntime(
                 }
                 Source.obd -> {
                     val mac = resolved.obd?.mac
-                    if (!mac.isNullOrBlank() && d.id !in autoConnectDisabledIds) {
+                    if (!mac.isNullOrBlank() && (forceConnect || d.id !in autoConnectDisabledIds)) {
                         val keys = resolved.sensors.map { it.key }.filter { isEnabled(resolved.id, it) }.toSet()
                         if (keys.isNotEmpty()) {
                             obd.connect(resolved, keys, waitForDevice = {
@@ -561,7 +561,7 @@ class BleRuntime(
         if (!::config.isInitialized) return
         if (deviceConnectionJobs[deviceId]?.isActive == true) return
         val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return
-        startDevice(d)
+        startDevice(d, forceConnect = true)
     }
 
     /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 해제. */

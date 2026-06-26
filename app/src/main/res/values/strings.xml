@@ -26,6 +26,7 @@
     <string name="auto_detecting">Auto-detecting</string>
     <string name="bound_in_config">Fixed in Config (MAC: %1$s)</string>
     <string name="connected_mac">Connected: %1$s</string>
+    <string name="bound_mac">Bound: %1$s</string>
     <string name="rebind">Reset</string>
     <string name="unbind">Disconnect</string>
     <string name="connection_needed">Connection Needed</string>
