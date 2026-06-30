@@ -37,6 +37,8 @@ import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanFilter
+import no.nordicsemi.android.kotlin.ble.core.scanner.FilteredManufacturerData
+import no.nordicsemi.android.kotlin.ble.core.scanner.FilteredServiceData
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.R
 import dev.eigger.hassble.service.LiveEventLogger
@@ -102,137 +104,146 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             scanMode = nativeScanMode,
             legacy = true,
         )
-        LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}")
+        val scanFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
+        LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size}")
 
-        try {
-            scanner.scan(filters = emptyList(), settings = scanSettings).collect { result ->
-                val deviceName = result.device.name ?: ""
-                val deviceAddress = result.device.address
-                val scanRecord = result.data?.scanRecord
-                val isConnectable = result.data?.isConnectable
+        while (currentCoroutineContext().isActive) {
+            try {
+                scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
+                    val deviceName = result.device.name ?: ""
+                    val deviceAddress = result.device.address
+                    val scanRecord = result.data?.scanRecord
+                    val isConnectable = result.data?.isConnectable
 
-                // Update caches with new data if available
-                var cacheUpdated = false
-                scanRecord?.manufacturerSpecificData?.let {
-                    if (it.size() > 0) {
-                        manufacturerDataCache[deviceAddress] = it
-                        cacheUpdated = true
-                    }
-                }
-                scanRecord?.serviceData?.let {
-                    if (it.isNotEmpty()) {
-                        serviceDataCache[deviceAddress] = it
-                        cacheUpdated = true
-                    }
-                }
-                scanRecord?.serviceUuids?.let {
-                    if (it.isNotEmpty()) {
-                        serviceUuidsCache[deviceAddress] = it
-                        cacheUpdated = true
-                    }
-                }
-                if (cacheUpdated) {
-                    cacheTimestamps[deviceAddress] = System.currentTimeMillis()
-                }
-                cleanupOldCaches()
-
-                // Use merged data for matching and decoding
-                val manufacturerData = manufacturerDataCache[deviceAddress] ?: scanRecord?.manufacturerSpecificData
-                val serviceData = serviceDataCache[deviceAddress] ?: scanRecord?.serviceData ?: emptyMap()
-                val advertisedServiceUuids = serviceUuidsCache[deviceAddress] ?: scanRecord?.serviceUuids.orEmpty()
-                val rawBytes = scanRecord?.bytes
-
-                val mfrHex = manufacturerData?.let {
-                    val list = mutableListOf<String>()
-                    for (i in 0 until it.size()) {
-                        val id = it.keyAt(i)
-                        val bytes = it.valueAt(i).value
-                        list.add("0x%04X: %s".format(id, bytes.joinToString("") { String.format("%02X", it) }))
-                    }
-                    list.joinToString(", ")
-                }
-                val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
-                    "${getShortUuid(key.uuid)}: ${value.value.joinToString("") { String.format("%02X", it) }}"
-                }
-                val logMsg = buildString {
-                    append("addr=$deviceAddress")
-                    if (deviceName.isNotBlank()) append(", name='$deviceName'")
-                    if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
-                    if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
-                    isConnectable?.let { append(", connectable=$it") }
-                }
-                LiveEventLogger.log(LogType.ADV, logMsg)
-
-                if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
-                    val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }
-                    val svcUuids = serviceData.keys.map { getShortUuid(it.uuid) }
-                    Log.d(TAG, "ADV addr=$deviceAddress name='$deviceName' mfr=$mfrIds svc=$svcUuids")
-                }
-
-                for (d in devices) {
-                    if (d.source != Source.advertisement) continue
-                    val match = d.match ?: continue
-
-                    if (!AdvertisementMatcher.matches(
-                            match,
-                            deviceAddress,
-                            deviceName,
-                            hasServiceUuid = { uuid ->
-                                val target = uuid.uppercase()
-                                serviceData.keys.any { it.uuid.toString().uppercase().contains(target) }
-                                    || advertisedServiceUuids.any {
-                                        it.uuid.toString().uppercase().contains(target)
-                                    }
-                            },
-                            manufacturerPayload = { id ->
-                                manufacturerData?.get(id)?.value?.takeIf { it.isNotEmpty() }
-                            },
-                        )
-                    ) {
-                        if (match.manufacturerId != null || match.serviceDataUuid != null) {
-                            Log.d(TAG, "  NO MATCH profile=${d.id} mfrId=${match.manufacturerId} svcUuid=${match.serviceDataUuid}")
+                    // Update caches with new data if available
+                    var cacheUpdated = false
+                    scanRecord?.manufacturerSpecificData?.let {
+                        if (it.size() > 0) {
+                            manufacturerDataCache[deviceAddress] = it
+                            cacheUpdated = true
                         }
-                        continue
+                    }
+                    scanRecord?.serviceData?.let {
+                        if (it.isNotEmpty()) {
+                            serviceDataCache[deviceAddress] = it
+                            cacheUpdated = true
+                        }
+                    }
+                    scanRecord?.serviceUuids?.let {
+                        if (it.isNotEmpty()) {
+                            serviceUuidsCache[deviceAddress] = it
+                            cacheUpdated = true
+                        }
+                    }
+                    if (cacheUpdated) {
+                        cacheTimestamps[deviceAddress] = System.currentTimeMillis()
+                    }
+                    cleanupOldCaches()
+
+                    // Use merged data for matching and decoding
+                    val manufacturerData = manufacturerDataCache[deviceAddress] ?: scanRecord?.manufacturerSpecificData
+                    val serviceData = serviceDataCache[deviceAddress] ?: scanRecord?.serviceData ?: emptyMap()
+                    val advertisedServiceUuids = serviceUuidsCache[deviceAddress] ?: scanRecord?.serviceUuids.orEmpty()
+                    val rawBytes = scanRecord?.bytes
+
+                    val mfrHex = manufacturerData?.let {
+                        val list = mutableListOf<String>()
+                        for (i in 0 until it.size()) {
+                            val id = it.keyAt(i)
+                            val bytes = it.valueAt(i).value
+                            list.add("0x%04X: %s".format(id, bytes.joinToString("") { String.format("%02X", it) }))
+                        }
+                        list.joinToString(", ")
+                    }
+                    val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
+                        "${getShortUuid(key.uuid)}: ${value.value.joinToString("") { String.format("%02X", it) }}"
+                    }
+                    val logMsg = buildString {
+                        append("addr=$deviceAddress")
+                        if (deviceName.isNotBlank()) append(", name='$deviceName'")
+                        if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
+                        if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
+                        isConnectable?.let { append(", connectable=$it") }
+                    }
+                    LiveEventLogger.log(LogType.ADV, logMsg)
+
+                    if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
+                        val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }
+                        val svcUuids = serviceData.keys.map { getShortUuid(it.uuid) }
+                        Log.d(TAG, "ADV addr=$deviceAddress name='$deviceName' mfr=$mfrIds svc=$svcUuids")
                     }
 
-                    val manufacturerHex = resolveManufacturerHex(manufacturerData, match.manufacturerId)
-                    val serviceDataHex = match.serviceDataUuid?.let { uuid ->
-                        val target = uuid.uppercase()
-                        serviceData.entries.firstOrNull { (key, _) ->
-                            key.uuid.toString().uppercase().contains(target)
-                        }?.value?.value?.let { AdvertisementMatcher.bytesToHex(it) }
-                    }
-                    val fullScanHex = rawBytes?.value?.let { bytesToHex(it) }
-                    val primaryField = d.sensors.firstOrNull()?.sourceField ?: SourceField.raw
-                    val primaryHex = when (primaryField) {
-                        SourceField.service_data -> serviceDataHex
-                        SourceField.manufacturer_data -> manufacturerHex
-                        SourceField.raw -> fullScanHex
-                    }
-                    if (primaryHex.isNullOrBlank()) {
-                        Log.d(TAG, "  MATCHED ${d.id} addr=$deviceAddress but $primaryField is null (mfr=$manufacturerHex)")
-                        continue
-                    }
-                    Log.i(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
+                    for (d in devices) {
+                        if (d.source != Source.advertisement) continue
+                        val match = d.match ?: continue
 
-                    emit(
-                        RawReading(
-                            deviceId = d.id,
-                            source = "advertisement",
-                            rawHex = primaryHex,
-                            macAddress = deviceAddress,
-                            deviceName = deviceName.takeIf { it.isNotBlank() },
-                            manufacturerHex = manufacturerHex,
-                            serviceDataHex = serviceDataHex,
-                            fullScanHex = fullScanHex,
-                            isConnectable = isConnectable,
-                        ),
-                    )
+                        if (!AdvertisementMatcher.matches(
+                                match,
+                                deviceAddress,
+                                deviceName,
+                                hasServiceUuid = { uuid ->
+                                    val target = uuid.uppercase()
+                                    serviceData.keys.any { it.uuid.toString().uppercase().contains(target) }
+                                        || advertisedServiceUuids.any {
+                                            it.uuid.toString().uppercase().contains(target)
+                                        }
+                                },
+                                manufacturerPayload = { id ->
+                                    manufacturerData?.get(id)?.value?.takeIf { it.isNotEmpty() }
+                                },
+                            )
+                        ) {
+                            if (match.manufacturerId != null || match.serviceDataUuid != null) {
+                                Log.d(TAG, "  NO MATCH profile=${d.id} mfrId=${match.manufacturerId} svcUuid=${match.serviceDataUuid}")
+                            }
+                            continue
+                        }
+
+                        val manufacturerHex = resolveManufacturerHex(manufacturerData, match.manufacturerId)
+                        val serviceDataHex = match.serviceDataUuid?.let { uuid ->
+                            val target = uuid.uppercase()
+                            serviceData.entries.firstOrNull { (key, _) ->
+                                key.uuid.toString().uppercase().contains(target)
+                            }?.value?.value?.let { AdvertisementMatcher.bytesToHex(it) }
+                        }
+                        val fullScanHex = rawBytes?.value?.let { bytesToHex(it) }
+                        val primaryField = d.sensors.firstOrNull()?.sourceField ?: SourceField.raw
+                        val primaryHex = when (primaryField) {
+                            SourceField.service_data -> serviceDataHex
+                            SourceField.manufacturer_data -> manufacturerHex
+                            SourceField.raw -> fullScanHex
+                        }
+                        if (primaryHex.isNullOrBlank()) {
+                            Log.d(TAG, "  MATCHED ${d.id} addr=$deviceAddress but $primaryField is null (mfr=$manufacturerHex)")
+                            continue
+                        }
+                        Log.i(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
+
+                        emit(
+                            RawReading(
+                                deviceId = d.id,
+                                source = "advertisement",
+                                rawHex = primaryHex,
+                                macAddress = deviceAddress,
+                                deviceName = deviceName.takeIf { it.isNotBlank() },
+                                manufacturerHex = manufacturerHex,
+                                serviceDataHex = serviceDataHex,
+                                fullScanHex = fullScanHex,
+                                isConnectable = isConnectable,
+                            ),
+                        )
+                    }
                 }
+                // Scan ended without exception — restart to keep scanning in background
+                Log.w(TAG, "BLE scanner flow ended, restarting in 5s...")
+                LiveEventLogger.log(LogType.LINK, "BLE scan ended, restarting...")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in BleScanner stream, restarting in 5s", e)
+                LiveEventLogger.log(LogType.LINK, "BLE scan error: ${e.localizedMessage}, restarting...")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in BleScanner stream", e)
-            LiveEventLogger.log(LogType.LINK, "BLE scanner error: ${e.localizedMessage}")
+            delay(5_000)
         }
     }
 
@@ -262,6 +273,37 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         serviceDataCache.clear()
         serviceUuidsCache.clear()
         cacheTimestamps.clear()
+    }
+
+    // Derive scan filters from device configs to prevent Android opportunistic-mode throttling
+    // in background. A non-empty filter list keeps the scan active even when screen is off.
+    // Falls back to empty list (unfiltered) if any device has no filterable property.
+    private fun buildScanFilters(devices: List<DeviceConfig>): List<BleScanFilter> {
+        val filters = mutableListOf<BleScanFilter>()
+        for (d in devices) {
+            if (d.source != Source.advertisement) continue
+            val match = d.match
+            when {
+                match?.mac != null ->
+                    filters.add(BleScanFilter(deviceAddress = match.mac.uppercase()))
+                match?.manufacturerId != null ->
+                    filters.add(BleScanFilter(
+                        manufacturerData = FilteredManufacturerData(
+                            id = match.manufacturerId,
+                            data = DataByteArray(ByteArray(0))
+                        )
+                    ))
+                match?.serviceDataUuid != null ->
+                    filters.add(BleScanFilter(
+                        serviceData = FilteredServiceData(
+                            uuid = android.os.ParcelUuid(uuidFrom(match.serviceDataUuid)),
+                            data = DataByteArray(ByteArray(0))
+                        )
+                    ))
+                else -> return emptyList() // unfilterable device — fall back to unfiltered scan
+            }
+        }
+        return filters
     }
 
     private fun cleanupOldCaches() {
