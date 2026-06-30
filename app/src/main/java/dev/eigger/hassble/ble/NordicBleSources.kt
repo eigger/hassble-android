@@ -107,7 +107,30 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         val scanFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
         LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size}")
 
+        // Sliding-window throttle guard: Android throttles if ≥5 scans start within 30s.
+        // Track start timestamps and delay only when the next start would hit the limit.
+        val scanStartTimes = ArrayDeque<Long>()
+
         while (currentCoroutineContext().isActive) {
+            // Drop entries outside the 30-second window
+            val now = System.currentTimeMillis()
+            while (scanStartTimes.isNotEmpty() && now - scanStartTimes.first() >= 30_000L) {
+                scanStartTimes.removeFirst()
+            }
+            // If 4 starts already recorded, the next would be the 5th — wait until oldest clears
+            if (scanStartTimes.size >= 4) {
+                val waitMs = (scanStartTimes.first() + 30_000L) - System.currentTimeMillis() + 100L
+                if (waitMs > 0) {
+                    LiveEventLogger.log(LogType.LINK, "BLE scan throttle guard: waiting ${waitMs}ms")
+                    delay(waitMs)
+                }
+                val after = System.currentTimeMillis()
+                while (scanStartTimes.isNotEmpty() && after - scanStartTimes.first() >= 30_000L) {
+                    scanStartTimes.removeFirst()
+                }
+            }
+            scanStartTimes.addLast(System.currentTimeMillis())
+
             try {
                 scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
                     val deviceName = result.device.name ?: ""
@@ -234,16 +257,15 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                         )
                     }
                 }
-                // Scan ended without exception — restart to keep scanning in background
-                Log.w(TAG, "BLE scanner flow ended, restarting in 5s...")
+                // Scan ended without exception — restart immediately (throttle guard above handles rate)
+                Log.w(TAG, "BLE scanner flow ended, restarting...")
                 LiveEventLogger.log(LogType.LINK, "BLE scan ended, restarting...")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Error in BleScanner stream, restarting in 5s", e)
+                Log.e(TAG, "Error in BleScanner stream, restarting...", e)
                 LiveEventLogger.log(LogType.LINK, "BLE scan error: ${e.localizedMessage}, restarting...")
             }
-            delay(5_000)
         }
     }
 
@@ -282,25 +304,35 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         val filters = mutableListOf<BleScanFilter>()
         for (d in devices) {
             if (d.source != Source.advertisement) continue
-            val match = d.match
+            val match = d.match ?: continue
             when {
-                match?.mac != null ->
+                match.mac != null ->
                     filters.add(BleScanFilter(deviceAddress = match.mac.uppercase()))
-                match?.manufacturerId != null ->
-                    filters.add(BleScanFilter(
-                        manufacturerData = FilteredManufacturerData(
-                            id = match.manufacturerId,
-                            data = DataByteArray(ByteArray(0))
-                        )
-                    ))
-                match?.serviceDataUuid != null ->
+                match.serviceDataUuid != null ->
                     filters.add(BleScanFilter(
                         serviceData = FilteredServiceData(
                             uuid = android.os.ParcelUuid(uuidFrom(match.serviceDataUuid)),
                             data = DataByteArray(ByteArray(0))
                         )
                     ))
-                else -> return emptyList() // unfilterable device — fall back to unfiltered scan
+                match.manufacturerId != null -> {
+                    // Empty data bytes (ByteArray(0)) is ambiguous: some BLE chips interpret it
+                    // as "payload must be empty", silently dropping all non-empty payloads.
+                    // Use manufacturer_hex_prefix bytes as the filter when available — this gives
+                    // a reliable, non-empty hardware filter that also enables background scanning.
+                    val prefixBytes = match.manufacturerHexPrefix
+                        ?.chunked(2)
+                        ?.mapNotNull { it.toIntOrNull(16)?.toByte() }
+                        ?.toByteArray()
+                        ?.takeIf { it.isNotEmpty() }
+                    filters.add(BleScanFilter(
+                        manufacturerData = FilteredManufacturerData(
+                            id = match.manufacturerId,
+                            data = DataByteArray(prefixBytes ?: ByteArray(0))
+                        )
+                    ))
+                }
+                else -> return emptyList()
             }
         }
         return filters
