@@ -37,6 +37,8 @@ import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanFilter
+import no.nordicsemi.android.kotlin.ble.core.scanner.FilteredManufacturerData
+import no.nordicsemi.android.kotlin.ble.core.scanner.FilteredServiceData
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.R
 import dev.eigger.hassble.service.LiveEventLogger
@@ -102,11 +104,12 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             scanMode = nativeScanMode,
             legacy = true,
         )
-        LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}")
+        val scanFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
+        LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size}")
 
         while (currentCoroutineContext().isActive) {
             try {
-                scanner.scan(filters = emptyList(), settings = scanSettings).collect { result ->
+                scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
                     val deviceName = result.device.name ?: ""
                     val deviceAddress = result.device.address
                     val scanRecord = result.data?.scanRecord
@@ -270,6 +273,37 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         serviceDataCache.clear()
         serviceUuidsCache.clear()
         cacheTimestamps.clear()
+    }
+
+    // Derive scan filters from device configs to prevent Android opportunistic-mode throttling
+    // in background. A non-empty filter list keeps the scan active even when screen is off.
+    // Falls back to empty list (unfiltered) if any device has no filterable property.
+    private fun buildScanFilters(devices: List<DeviceConfig>): List<BleScanFilter> {
+        val filters = mutableListOf<BleScanFilter>()
+        for (d in devices) {
+            if (d.source != Source.advertisement) continue
+            val match = d.match
+            when {
+                match?.mac != null ->
+                    filters.add(BleScanFilter(deviceAddress = match.mac.uppercase()))
+                match?.manufacturerId != null ->
+                    filters.add(BleScanFilter(
+                        manufacturerData = FilteredManufacturerData(
+                            id = match.manufacturerId,
+                            data = DataByteArray(ByteArray(0))
+                        )
+                    ))
+                match?.serviceDataUuid != null ->
+                    filters.add(BleScanFilter(
+                        serviceData = FilteredServiceData(
+                            uuid = android.os.ParcelUuid(uuidFrom(match.serviceDataUuid)),
+                            data = DataByteArray(ByteArray(0))
+                        )
+                    ))
+                else -> return emptyList() // unfilterable device — fall back to unfiltered scan
+            }
+        }
+        return filters
     }
 
     private fun cleanupOldCaches() {
