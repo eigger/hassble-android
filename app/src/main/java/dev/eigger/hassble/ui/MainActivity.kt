@@ -1583,7 +1583,7 @@ private fun SensorsTabContent(
             }
         }
 
-        if (configError != null && loadedConfig != null && !usingCachedConfig) {
+        if (configError != null && loadedConfig != null) {
             item { WarningBanner(text = configError) }
         }
 

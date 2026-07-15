@@ -589,9 +589,7 @@ class BleGatewayService : Service() {
             val i = Intent(context, BleGatewayService::class.java)
                 .setAction(ACTION_RELOAD_CONFIG)
             gitUrl?.let { i.putExtra(EXTRA_GIT_URL, it) }
-            if (gitToken != null) {
-                i.putExtra(EXTRA_GIT_TOKEN, gitToken)
-            }
+            i.putExtra(EXTRA_GIT_TOKEN, gitToken)
             context.startService(i)
         }
 

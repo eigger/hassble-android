@@ -62,11 +62,12 @@ class ConfigLoader(
     private fun parse(text: String): GatewayConfig =
         presets.expand(Yaml.default.decodeFromString(GatewayConfig.serializer(), text))
 
-    private fun cacheFileFor(normalizedUrl: String): File {
+    internal fun cacheFileFor(normalizedUrl: String): File {
+        val hash = normalizedUrl.hashCode().toUInt().toString(16)
         val leaf = normalizedUrl.substringAfterLast('/')
             .takeIf { it.contains('.') } ?: "config.yaml"
         val safe = leaf.replace(Regex("""[^\w.\-]"""), "_")
-        return File(cacheDir, safe)
+        return File(cacheDir, "config_${hash}_$safe")
     }
 
     /**

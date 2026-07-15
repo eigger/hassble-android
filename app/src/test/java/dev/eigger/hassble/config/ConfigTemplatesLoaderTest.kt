@@ -24,6 +24,22 @@ class ConfigTemplatesLoaderTest {
     }
 
     @Test
+    fun `config cache file names are unique per repository URL`() {
+        val dir = File(System.getProperty("java.io.tmpdir"), "hassble-config-test")
+        val configLoader = ConfigLoader(dir, ObdPresetStore(emptyMap()))
+        val url1 = "https://raw.githubusercontent.com/eigger/hassble-config/main/config.yaml"
+        val url2 = "https://raw.githubusercontent.com/ravest/hassble-config/main/config.yaml"
+        
+        val file1 = configLoader.cacheFileFor(url1)
+        val file2 = configLoader.cacheFileFor(url2)
+        
+        org.junit.Assert.assertNotEquals(file1.name, file2.name)
+        org.junit.Assert.assertTrue(file1.name.contains("config.yaml"))
+        org.junit.Assert.assertTrue(file2.name.contains("config.yaml"))
+    }
+
+
+    @Test
     fun buildTemplatesUrl_uses_fixed_filename() {
         assertEquals(
             "https://raw.githubusercontent.com/o/r/dev/templates.yaml",
