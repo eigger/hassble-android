@@ -1,6 +1,7 @@
 package dev.eigger.hassble.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
@@ -2433,6 +2434,10 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
     val targetServiceUuid = if (deviceConfig.source == Source.gatt_notify) deviceConfig.gatt?.serviceUuid else if (deviceConfig.source == Source.obd) deviceConfig.obd?.serviceUuid else null
     val scanCallback = remember {
         object : ScanCallback() {
+            // BLUETOOTH_CONNECT is required for BluetoothDevice.getName() on API 31+. Safe here:
+            // onScanResult only fires while an active scan is running, which is gated behind a
+            // BLUETOOTH_SCAN permission check below before startScan() is called.
+            @SuppressLint("MissingPermission")
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val name = result.device.name ?: context.getString(R.string.unknown_device)
                 val address = result.device.address
