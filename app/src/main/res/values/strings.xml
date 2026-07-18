@@ -2,6 +2,11 @@
 <resources>
     <string name="app_name">HassBle</string>
     <string name="app_sub_title">Home Assistant BLE Gateway</string>
+    <string name="cd_status">Status</string>
+    <string name="cd_error">Error</string>
+    <string name="cd_search">Search</string>
+    <string name="cd_clear">Clear</string>
+    <string name="label_ha_url">HA URL</string>
     <string name="system_monitor">System Monitor</string>
     <string name="service_running">Service Running</string>
     <string name="status_running">Running</string>
@@ -117,6 +122,7 @@
     <string name="config_err_generic">Cannot load config.\n(%1$s)</string>
     <string name="config_err_unknown_preset">Unknown OBD preset: %1$s</string>
     <string name="config_cache_banner">Using cached config. Latest fetch failed.</string>
+    <string name="config_loading_banner">Fetching latest config…</string>
     <string name="config_cache_toast">Using cached config.</string>
     <string name="service_config_load_failed">Config load failed. Gateway has no devices.</string>
     <string name="service_error_banner">Gateway error: %1$s</string>
@@ -163,6 +169,8 @@
     <string name="logs_empty_hint">No logs yet.</string>
     <string name="logs_filter_empty">No logs match the filter.</string>
     <string name="logs_clear">Clear</string>
+    <string name="logs_clear_confirm_title">Clear all logs?</string>
+    <string name="logs_clear_confirm_body">This will remove all currently buffered log entries. This cannot be undone.</string>
     <string name="logs_share">Share</string>
     <string name="logs_save">Save</string>
     <string name="logs_empty">No logs to share</string>
@@ -238,6 +246,7 @@
     <string name="config_obd_presets_label">OBD presets</string>
     <string name="config_add_device_confirm">Add</string>
     <string name="config_imported_toast">Added: %1$s</string>
+    <string name="config_imported_toast_renamed">Added: %1$s (ID already in use — assigned "%2$s" instead)</string>
     <string name="config_import_failed">Failed to add: %1$s</string>
     <string name="config_export_failed">Export failed: %1$s</string>
     <string name="config_cache_banner_with_time">Using cached config (saved %1$s). Latest fetch failed.</string>
@@ -258,7 +267,11 @@
     <string name="adv_wizard_sensor_key">Sensor key</string>
     <string name="adv_wizard_tap_offset">Tap a byte to set decode offset</string>
     <string name="adv_wizard_no_payload">No payload for selected source field</string>
+    <string name="adv_wizard_offset">offset</string>
+    <string name="adv_wizard_type">type</string>
+    <string name="adv_wizard_endian">endian</string>
     <string name="adv_wizard_scale">Scale</string>
+    <string name="adv_wizard_scale_invalid">Enter a valid number, e.g. 0.1 or -1</string>
     <string name="adv_wizard_unit">Unit (optional)</string>
     <string name="adv_wizard_device_class">device_class (optional)</string>
     <string name="adv_wizard_state_class">state_class (optional)</string>
@@ -300,6 +313,9 @@
     <string name="scan_mode_low_latency_btn">High Performance</string>
     <string name="auto_connect_label">Auto Connect</string>
     <string name="device_delete_btn">Delete</string>
+    <string name="device_delete_confirm_title">Delete this device?</string>
+    <string name="device_delete_confirm_body">This will also remove its entities from Home Assistant. This cannot be undone.</string>
+    <string name="device_delete_confirm_button">Delete</string>
     <string name="device_edit_btn">Edit</string>
     <string name="device_edit_title">Edit device</string>
     <string name="device_edit_save">Save changes</string>
@@ -308,6 +324,9 @@
     <string name="device_edit_mfr_min_length">manufacturer_min_length</string>
     <string name="device_edit_match_readonly">Read-only match keys (edit in YAML)</string>
     <string name="device_edit_editing_sensor">Editing sensor</string>
+    <string name="device_edit_sensor_delete_title">Remove this sensor?</string>
+    <string name="device_edit_sensor_delete_body">"%1$s" will be removed from this device. This cannot be undone.</string>
+    <string name="device_edit_sensor_delete_confirm">Remove</string>
     <string name="device_edit_update_sensor">Apply changes</string>
     <string name="device_edit_cancel_sensor">New</string>
     <string name="notif_warn_channel_name">HassBle Warnings</string>

@@ -593,7 +593,7 @@ private fun AdvEditStep(
             OutlinedTextField(
                 value = offset.toString(),
                 onValueChange = { offset = it.toIntOrNull()?.coerceAtLeast(0) ?: 0 },
-                label = { Text("offset") },
+                label = { Text(stringResource(R.string.adv_wizard_offset)) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
@@ -651,10 +651,15 @@ private fun AdvEditStep(
         }
 
         if (isNumericDecode) {
+            val scaleInvalid = scaleText.isNotBlank() && scaleText.toDoubleOrNull() == null
             OutlinedTextField(
                 value = scaleText,
-                onValueChange = { scaleText = it },
+                onValueChange = { scaleText = filterDecimalInput(it) },
                 label = { Text(stringResource(R.string.adv_wizard_scale)) },
+                isError = scaleInvalid,
+                supportingText = if (scaleInvalid) {
+                    { Text(stringResource(R.string.adv_wizard_scale_invalid), color = MaterialTheme.colorScheme.error) }
+                } else null,
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -899,7 +904,7 @@ internal fun DataTypeDropdown(
             value = selected.name,
             onValueChange = {},
             readOnly = true,
-            label = { Text("type") },
+            label = { Text(stringResource(R.string.adv_wizard_type)) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(),
         )
@@ -924,7 +929,7 @@ internal fun EndianDropdown(
             value = selected.name,
             onValueChange = {},
             readOnly = true,
-            label = { Text("endian") },
+            label = { Text(stringResource(R.string.adv_wizard_endian)) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(),
         )

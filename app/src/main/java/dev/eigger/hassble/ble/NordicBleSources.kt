@@ -71,6 +71,33 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     private val serviceUuidsCache = mutableMapOf<String, List<android.os.ParcelUuid>>()
     private val cacheTimestamps = mutableMapOf<String, Long>()
 
+    // Shared throttle guard: Android counts scan starts per-app across ALL scan sessions
+    // (scan() for advertisement devices, scanForMac() for OBD reconnect-wait), not per callback.
+    // A single tracker here ensures both paths respect the same 5-starts-per-30s system limit.
+    private val scanStartTimesMutex = Mutex()
+    private val scanStartTimes = ArrayDeque<Long>()
+
+    private suspend fun awaitScanThrottleSlot() {
+        scanStartTimesMutex.withLock {
+            val now = System.currentTimeMillis()
+            while (scanStartTimes.isNotEmpty() && now - scanStartTimes.first() >= 30_000L) {
+                scanStartTimes.removeFirst()
+            }
+            if (scanStartTimes.size >= 4) {
+                val waitMs = (scanStartTimes.first() + 30_000L) - System.currentTimeMillis() + 100L
+                if (waitMs > 0) {
+                    LiveEventLogger.log(LogType.LINK, "BLE scan throttle guard: waiting ${waitMs}ms")
+                    delay(waitMs)
+                }
+                val after = System.currentTimeMillis()
+                while (scanStartTimes.isNotEmpty() && after - scanStartTimes.first() >= 30_000L) {
+                    scanStartTimes.removeFirst()
+                }
+            }
+            scanStartTimes.addLast(System.currentTimeMillis())
+        }
+    }
+
     private fun getShortUuid(uuid: java.util.UUID): String {
         val s = uuid.toString().uppercase()
         return if (s.endsWith("-0000-1000-8000-00805F9B34FB")) {
@@ -107,29 +134,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         val scanFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
         LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size}")
 
-        // Sliding-window throttle guard: Android throttles if ≥5 scans start within 30s.
-        // Track start timestamps and delay only when the next start would hit the limit.
-        val scanStartTimes = ArrayDeque<Long>()
-
         while (currentCoroutineContext().isActive) {
-            // Drop entries outside the 30-second window
-            val now = System.currentTimeMillis()
-            while (scanStartTimes.isNotEmpty() && now - scanStartTimes.first() >= 30_000L) {
-                scanStartTimes.removeFirst()
-            }
-            // If 4 starts already recorded, the next would be the 5th — wait until oldest clears
-            if (scanStartTimes.size >= 4) {
-                val waitMs = (scanStartTimes.first() + 30_000L) - System.currentTimeMillis() + 100L
-                if (waitMs > 0) {
-                    LiveEventLogger.log(LogType.LINK, "BLE scan throttle guard: waiting ${waitMs}ms")
-                    delay(waitMs)
-                }
-                val after = System.currentTimeMillis()
-                while (scanStartTimes.isNotEmpty() && after - scanStartTimes.first() >= 30_000L) {
-                    scanStartTimes.removeFirst()
-                }
-            }
-            scanStartTimes.addLast(System.currentTimeMillis())
+            awaitScanThrottleSlot()
 
             try {
                 scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
@@ -282,6 +288,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         }
         val filters = listOf(BleScanFilter(deviceAddress = normalizedMac))
         val scanner = this@NordicAdvertisementScanner.scanner
+        awaitScanThrottleSlot()
         scanner.scan(filters = filters, settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
             val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
             if (addr == normalizedMac) emit(Unit)
