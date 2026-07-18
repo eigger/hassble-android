@@ -2,6 +2,11 @@
 <resources>
     <string name="app_name">HassBle</string>
     <string name="app_sub_title">Home Assistant BLE 게이트웨이</string>
+    <string name="cd_status">상태</string>
+    <string name="cd_error">오류</string>
+    <string name="cd_search">검색</string>
+    <string name="cd_clear">지우기</string>
+    <string name="label_ha_url">HA URL</string>
     <string name="system_monitor">시스템 모니터</string>
     <string name="service_running">서비스 작동</string>
     <string name="status_running">실행 중</string>
@@ -114,6 +119,7 @@
     <string name="config_err_generic">설정을 불러올 수 없습니다.\n(%1$s)</string>
     <string name="config_err_unknown_preset">알 수 없는 OBD preset: %1$s</string>
     <string name="config_cache_banner">캐시된 설정을 사용 중입니다. 최신 설정 불러오기에 실패했습니다.</string>
+    <string name="config_loading_banner">최신 설정을 불러오는 중…</string>
     <string name="config_cache_toast">캐시된 설정을 사용합니다.</string>
     <string name="service_config_load_failed">설정 로드 실패. 등록된 기기가 없습니다.</string>
     <string name="service_error_banner">게이트웨이 오류: %1$s</string>
@@ -156,6 +162,8 @@
     <string name="logs_empty_hint">아직 로그가 없습니다.</string>
     <string name="logs_filter_empty">필터와 일치하는 로그가 없습니다.</string>
     <string name="logs_clear">지우기</string>
+    <string name="logs_clear_confirm_title">모든 로그를 지울까요?</string>
+    <string name="logs_clear_confirm_body">현재 버퍼에 있는 모든 로그 항목이 삭제됩니다. 되돌릴 수 없습니다.</string>
     <string name="logs_share">공유</string>
     <string name="logs_save">저장</string>
     <string name="logs_empty">공유할 로그가 없습니다</string>
@@ -231,6 +239,7 @@
     <string name="config_obd_presets_label">OBD preset</string>
     <string name="config_add_device_confirm">추가</string>
     <string name="config_imported_toast">추가됨: %1$s</string>
+    <string name="config_imported_toast_renamed">추가됨: %1$s (ID가 이미 사용 중이라 "%2$s"로 변경됨)</string>
     <string name="config_import_failed">추가 실패: %1$s</string>
     <string name="config_export_failed">보내기 실패: %1$s</string>
     <string name="config_cache_banner_with_time">캐시된 설정 사용 중 (저장: %1$s). 최신 불러오기 실패.</string>
@@ -251,7 +260,11 @@
     <string name="adv_wizard_sensor_key">센서 키</string>
     <string name="adv_wizard_tap_offset">바이트를 탭해 decode offset 지정</string>
     <string name="adv_wizard_no_payload">선택한 필드에 payload 없음</string>
+    <string name="adv_wizard_offset">offset</string>
+    <string name="adv_wizard_type">type</string>
+    <string name="adv_wizard_endian">endian</string>
     <string name="adv_wizard_scale">스케일</string>
+    <string name="adv_wizard_scale_invalid">올바른 숫자를 입력하세요 (예: 0.1, -1)</string>
     <string name="adv_wizard_unit">단위 (선택)</string>
     <string name="adv_wizard_device_class">device_class (선택)</string>
     <string name="adv_wizard_state_class">state_class (선택)</string>
@@ -293,6 +306,9 @@
     <string name="scan_mode_low_latency_btn">고성능</string>
     <string name="auto_connect_label">자동 연결</string>
     <string name="device_delete_btn">삭제</string>
+    <string name="device_delete_confirm_title">이 기기를 삭제할까요?</string>
+    <string name="device_delete_confirm_body">Home Assistant의 관련 엔티티도 함께 삭제됩니다. 되돌릴 수 없습니다.</string>
+    <string name="device_delete_confirm_button">삭제</string>
     <string name="device_edit_btn">편집</string>
     <string name="device_edit_title">기기 편집</string>
     <string name="device_edit_save">변경사항 저장</string>
@@ -301,6 +317,9 @@
     <string name="device_edit_mfr_min_length">manufacturer_min_length</string>
     <string name="device_edit_match_readonly">읽기 전용 매칭 항목 (YAML에서 수정)</string>
     <string name="device_edit_editing_sensor">센서 편집 중</string>
+    <string name="device_edit_sensor_delete_title">이 센서를 삭제할까요?</string>
+    <string name="device_edit_sensor_delete_body">"%1$s" 센서가 이 기기에서 제거됩니다. 되돌릴 수 없습니다.</string>
+    <string name="device_edit_sensor_delete_confirm">삭제</string>
     <string name="device_edit_update_sensor">변경 적용</string>
     <string name="device_edit_cancel_sensor">새로 추가</string>
     <string name="notif_warn_channel_name">HassBle 경고</string>

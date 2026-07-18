@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -130,6 +132,7 @@ private fun DecodeEditContent(
 
     val sensors = remember(device.id) { mutableStateListOf<SensorConfig>().apply { addAll(device.sensors) } }
     var editingIndex by remember(device.id) { mutableStateOf<Int?>(null) }
+    var pendingDeleteIndex by remember(device.id) { mutableStateOf<Int?>(null) }
 
     // 센서 입력 폼 상태
     var sensorKey by remember(device.id) { mutableStateOf("value") }
@@ -190,6 +193,38 @@ private fun DecodeEditContent(
 
     val isNumericDecode = dataType !in setOf(DataType.timestamp, DataType.string)
     val decodeLengthEditable = dataType == DataType.string
+
+    pendingDeleteIndex?.let { index ->
+        val target = sensors.getOrNull(index)
+        if (target == null) {
+            pendingDeleteIndex = null
+        } else {
+            Dialog(onDismissRequest = { pendingDeleteIndex = null }) {
+                Card(shape = HassBleShapes.Dialog, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text(stringResource(R.string.device_edit_sensor_delete_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.device_edit_sensor_delete_body, target.key), color = Color.Gray, fontSize = 13.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            HassCancelButton(onClick = { pendingDeleteIndex = null })
+                            Spacer(Modifier.width(8.dp))
+                            HassDangerButton(
+                                text = stringResource(R.string.device_edit_sensor_delete_confirm),
+                                onClick = {
+                                    sensors.removeAt(index)
+                                    if (editingIndex == index) resetForm()
+                                    pendingDeleteIndex = null
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Column(
@@ -277,13 +312,10 @@ private fun DecodeEditContent(
                         color = if (highlighted) MaterialTheme.colorScheme.primary else Color.LightGray,
                     )
                     IconButton(onClick = { loadForm(index) }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.device_edit_btn), tint = MaterialTheme.colorScheme.primary)
                     }
-                    IconButton(onClick = {
-                        sensors.removeAt(index)
-                        if (editingIndex == index) resetForm()
-                    }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
+                    IconButton(onClick = { pendingDeleteIndex = index }) {
+                        Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.device_edit_sensor_delete_confirm), tint = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -318,7 +350,7 @@ private fun DecodeEditContent(
                 OutlinedTextField(
                     value = offset.toString(),
                     onValueChange = { offset = it.toIntOrNull()?.coerceAtLeast(0) ?: 0 },
-                    label = { Text("offset") },
+                    label = { Text(stringResource(R.string.adv_wizard_offset)) },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                 )
@@ -388,10 +420,15 @@ private fun DecodeEditContent(
             }
 
             if (isNumericDecode) {
+                val scaleInvalid = scaleText.isNotBlank() && scaleText.toDoubleOrNull() == null
                 OutlinedTextField(
                     value = scaleText,
-                    onValueChange = { scaleText = it },
+                    onValueChange = { scaleText = filterDecimalInput(it) },
                     label = { Text(stringResource(R.string.adv_wizard_scale)) },
+                    isError = scaleInvalid,
+                    supportingText = if (scaleInvalid) {
+                        { Text(stringResource(R.string.adv_wizard_scale_invalid), color = MaterialTheme.colorScheme.error) }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -597,6 +634,20 @@ private fun decodeLengthEditableFor(type: DataType): Boolean = type == DataType.
 
 private fun formatScale(d: Double): String =
     if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
+
+/** 숫자 필드용 입력 필터: 숫자, 맨 앞의 '-', 소수점 하나만 허용 (scale은 음수·소수 모두 가능). */
+internal fun filterDecimalInput(raw: String): String {
+    val sb = StringBuilder()
+    var seenDot = false
+    for ((i, ch) in raw.withIndex()) {
+        when {
+            ch == '-' && i == 0 -> sb.append(ch)
+            ch == '.' && !seenDot -> { seenDot = true; sb.append(ch) }
+            ch.isDigit() -> sb.append(ch)
+        }
+    }
+    return sb.toString()
+}
 
 private fun buildSensor(
     base: SensorConfig?,

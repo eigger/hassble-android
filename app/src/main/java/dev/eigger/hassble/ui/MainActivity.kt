@@ -160,6 +160,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -269,7 +270,8 @@ private fun HomeScreen() {
     val enabledSensorsInitialized by repository.enabledSensorsInitialized.collectAsState(initial = false)
     val startOnBoot by repository.startOnBoot.collectAsState(initial = true)
     val scanMode by repository.scanMode.collectAsState(initial = dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY)
-    val onboardingComplete by repository.onboardingComplete.collectAsState(initial = false)
+    val onboardingCompleteFlow = remember(repository) { repository.onboardingComplete.map<Boolean, Boolean?> { it } }
+    val onboardingComplete by onboardingCompleteFlow.collectAsState(initial = null)
 
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     var isBatteryIgnored by remember { mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName)) }
@@ -391,7 +393,8 @@ private fun HomeScreen() {
     }
 
     LaunchedEffect(onboardingComplete) {
-        if (!onboardingComplete) showOnboarding = true
+        // null: DataStore에서 아직 읽지 못한 초기 상태 — 실제 값 로드 전에는 판단하지 않는다
+        if (onboardingComplete == false) showOnboarding = true
     }
 
     LaunchedEffect(gitUrlInput, gitTokenInput, templatesReloadTrigger) {
@@ -549,6 +552,24 @@ private fun HomeScreen() {
                 text = stringResource(R.string.service_error_banner, err),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
+        }
+        if (isConfigLoading && selectedTab == 0) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = stringResource(R.string.config_loading_banner),
+                    fontSize = 12.sp,
+                    color = Color.Gray,
+                )
+            }
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -755,15 +776,16 @@ private fun HomeScreen() {
                         val unique = ConfigMerger.ensureUniqueId(device, existingIds)
                         repository.addDraftDevice(unique)
                         draftDevices = repository.loadDraftDevices()
-                        unique
+                        device.id to unique
                     }
                     showTemplateDialog = false
-                    result.onSuccess { unique ->
-                        Toast.makeText(
-                            context,
-                            context.getString(R.string.config_imported_toast, unique.name),
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                    result.onSuccess { (requestedId, unique) ->
+                        val toastText = if (unique.id != requestedId) {
+                            context.getString(R.string.config_imported_toast_renamed, unique.name, unique.id)
+                        } else {
+                            context.getString(R.string.config_imported_toast, unique.name)
+                        }
+                        Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
                         if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
                     }.onFailure { e ->
                         Toast.makeText(
@@ -789,15 +811,16 @@ private fun HomeScreen() {
                         val unique = ConfigMerger.ensureUniqueId(expanded, existingIds)
                         repository.addDraftDevice(unique)
                         draftDevices = repository.loadDraftDevices()
-                        unique
+                        expanded.id to unique
                     }
                     showObdDialog = false
-                    result.onSuccess { unique ->
-                        Toast.makeText(
-                            context,
-                            context.getString(R.string.config_imported_toast, unique.name),
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                    result.onSuccess { (requestedId, unique) ->
+                        val toastText = if (unique.id != requestedId) {
+                            context.getString(R.string.config_imported_toast_renamed, unique.name, unique.id)
+                        } else {
+                            context.getString(R.string.config_imported_toast, unique.name)
+                        }
+                        Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
                         if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
                     }.onFailure { e ->
                         Toast.makeText(
@@ -830,11 +853,12 @@ private fun HomeScreen() {
                     repository.addDraftDevice(unique)
                     draftDevices = repository.loadDraftDevices()
                     showAdvWizard = false
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.config_imported_toast, unique.name),
-                        Toast.LENGTH_SHORT,
-                    ).show()
+                    val toastText = if (unique.id != device.id) {
+                        context.getString(R.string.config_imported_toast_renamed, unique.name, unique.id)
+                    } else {
+                        context.getString(R.string.config_imported_toast, unique.name)
+                    }
+                    Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
                     if (isRunning) BleGatewayService.reloadConfig(context, gitUrlInput, gitTokenInput.ifBlank { null })
                 }
             },
@@ -1037,7 +1061,7 @@ private fun GatewayTabContent(
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Info, contentDescription = "Status", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    Icon(imageVector = Icons.Default.Info, contentDescription = stringResource(R.string.cd_status), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(text = stringResource(R.string.system_monitor), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
@@ -1064,7 +1088,7 @@ private fun GatewayTabContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = stringResource(R.string.logs_settings), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(text = stringResource(R.string.server_integration_settings), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     }
@@ -1137,7 +1161,7 @@ private fun GatewayTabContent(
                         onUrlChange(it)
                         urlError = validateHaUrl(context, it)
                     },
-                    label = { Text("HA URL") },
+                    label = { Text(stringResource(R.string.label_ha_url)) },
                     enabled = inputsEnabled,
                     isError = urlError != null,
                     modifier = Modifier.fillMaxWidth(),
@@ -1264,7 +1288,7 @@ private fun GatewayTabContent(
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    Icon(imageVector = Icons.Default.Settings, contentDescription = stringResource(R.string.logs_settings), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(text = stringResource(R.string.background_battery_settings), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
@@ -1497,7 +1521,7 @@ private fun SensorsTabContent(
                         if (deviceSearchText.isNotEmpty()) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = null,
+                                contentDescription = stringResource(R.string.cd_clear),
                                 tint = Color.Gray,
                                 modifier = Modifier
                                     .size(18.dp)
@@ -1602,7 +1626,7 @@ private fun SensorsTabContent(
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(imageVector = Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
+                            Icon(imageVector = Icons.Default.Warning, contentDescription = stringResource(R.string.cd_error), tint = MaterialTheme.colorScheme.error)
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = stringResource(R.string.config_load_error, configError),
@@ -1738,6 +1762,30 @@ private fun DeviceConfigCard(
         validationIssues.count { it.level == ValidationLevel.WARNING && it.sensorKey != null }
     }
     var expanded by remember(device.id) { mutableStateOf(false) }
+    var showDeleteConfirm by remember(device.id) { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        Dialog(onDismissRequest = { showDeleteConfirm = false }) {
+            Card(shape = HassBleShapes.Dialog, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(stringResource(R.string.device_delete_confirm_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.device_delete_confirm_body), color = Color.Gray, fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        HassCancelButton(onClick = { showDeleteConfirm = false })
+                        Spacer(Modifier.width(8.dp))
+                        HassDangerButton(
+                            text = stringResource(R.string.device_delete_confirm_button),
+                            onClick = { showDeleteConfirm = false; onDelete() },
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     Card(
         modifier = Modifier
@@ -2210,7 +2258,7 @@ private fun DeviceConfigCard(
                         }
                         HassDangerTintButton(
                             text = stringResource(R.string.device_delete_btn),
-                            onClick = onDelete,
+                            onClick = { showDeleteConfirm = true },
                             enabled = !isConnected,
                         )
                     }
@@ -2517,6 +2565,34 @@ private fun LogsTabContent(
     var settingsExpanded by remember { mutableStateOf(false) }
     var followLatest by remember { mutableStateOf(true) }
     var disabledTypes by remember { mutableStateOf(setOf<LogType>()) }
+    var showClearLogsConfirm by remember { mutableStateOf(false) }
+
+    if (showClearLogsConfirm) {
+        Dialog(onDismissRequest = { showClearLogsConfirm = false }) {
+            Card(shape = HassBleShapes.Dialog, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(stringResource(R.string.logs_clear_confirm_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.logs_clear_confirm_body), color = Color.Gray, fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        HassCancelButton(onClick = { showClearLogsConfirm = false })
+                        Spacer(Modifier.width(8.dp))
+                        HassDangerButton(
+                            text = stringResource(R.string.logs_clear),
+                            onClick = {
+                                showClearLogsConfirm = false
+                                logsList.clear()
+                                LiveEventLogger.clearLogs()
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     LaunchedEffect(logBufferLimit) {
         LiveEventLogger.setMaxLogs(logBufferLimit)
@@ -2661,10 +2737,7 @@ private fun LogsTabContent(
                         )
                         HassLinkButton(
                             text = stringResource(R.string.logs_clear),
-                            onClick = {
-                                logsList.clear()
-                                LiveEventLogger.clearLogs()
-                            },
+                            onClick = { showClearLogsConfirm = true },
                         )
                     }
                 }
@@ -2691,7 +2764,7 @@ private fun LogsTabContent(
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.Search,
-                            contentDescription = "Search",
+                            contentDescription = stringResource(R.string.cd_search),
                             tint = Color.Gray,
                             modifier = Modifier.size(16.dp),
                         )
@@ -2700,7 +2773,7 @@ private fun LogsTabContent(
                         if (filterText.isNotEmpty()) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Clear",
+                                contentDescription = stringResource(R.string.cd_clear),
                                 tint = Color.Gray,
                                 modifier = Modifier
                                     .size(16.dp)
