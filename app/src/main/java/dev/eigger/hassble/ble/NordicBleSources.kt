@@ -1,6 +1,7 @@
 package dev.eigger.hassble.ble
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.pm.PackageManager
@@ -394,6 +395,11 @@ class NordicGattNotifySource(
 ) : GattNotifySource {
     private val activeConnections = mutableMapOf<String, ClientBleGatt>()
 
+    // BLUETOOTH_CONNECT is required for ClientBleGatt.connect() on API 31+. The app requests it
+    // as part of its startup permission flow before the gateway service is allowed to run, and
+    // any runtime revocation surfaces as a SecurityException already caught by the retry loop
+    // below (treated like any other connection failure).
+    @SuppressLint("MissingPermission")
     override fun connect(
         device: DeviceConfig,
         waitForDevice: suspend () -> Unit,
@@ -448,6 +454,9 @@ class NordicGattNotifySource(
         }
     }
 
+    // BLUETOOTH_CONNECT is required for BluetoothGattCharacteristic.write() on API 31+, satisfied
+    // the same way as connect() above; any revocation is caught below like any other write failure.
+    @SuppressLint("MissingPermission")
     override suspend fun write(device: DeviceConfig, hex: String) {
         val client = activeConnections[device.id] ?: return
         val serviceUuidStr = device.gatt?.serviceUuid ?: return
@@ -527,6 +536,11 @@ class NordicElm327Source(
         }
     }
 
+    // BLUETOOTH_CONNECT is required for ClientBleGatt.connect() on API 31+. The app requests it
+    // as part of its startup permission flow before the gateway service is allowed to run, and
+    // any runtime revocation surfaces as a SecurityException already caught by the retry loop
+    // in connect() above (treated like any other connection failure).
+    @SuppressLint("MissingPermission")
     private suspend fun runObdSession(
         collector: FlowCollector<RawReading>,
         device: DeviceConfig,
@@ -661,6 +675,9 @@ class NordicElm327Source(
         }
     }
 
+    // BLUETOOTH_CONNECT is required for BluetoothGattCharacteristic.write() on API 31+, satisfied
+    // the same way as runObdSession above; any revocation is caught below as a write failure.
+    @SuppressLint("MissingPermission")
     private suspend fun sendCommand(
         deviceId: String,
         txChar: ClientBleGattCharacteristic,
@@ -690,6 +707,9 @@ class NordicElm327Source(
         }
     }
 
+    // BLUETOOTH_CONNECT is required for BluetoothGattCharacteristic.write() on API 31+, satisfied
+    // the same way as runObdSession above; any revocation is caught below like any other write failure.
+    @SuppressLint("MissingPermission")
     override suspend fun write(device: DeviceConfig, hex: String) {
         val client = activeConnections[device.id] ?: return
         val serviceUuidStr = device.obd?.serviceUuid ?: return

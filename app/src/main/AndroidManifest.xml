@@ -4,18 +4,23 @@
 
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- BLE (Android 12+) -->
+    <!-- BLE (Android 12+)
+         neverForLocation은 의도적으로 쓰지 않음: 이 앱은 사용자가 임의의 BLE 기기를 등록하는
+         범용 게이트웨이라, iBeacon/AltBeacon/Eddystone 표준 포맷 기기(예: config.yaml의
+         Jaalee JHT처럼 Apple 0x004C + iBeacon 마커를 쓰는 기기)를 향후 등록할 수 있는데,
+         neverForLocation을 선언하면 Android가 이런 표준 포맷 광고를 스캔 결과에서 제외한다. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
         tools:targetApi="s" />
 
-    <!-- BLE 스캔 (Android 11 이하) -->
+    <!-- BLE 스캔에는 모든 Android 버전에서 위치 권한이 필요 (Android 12+ 포함, neverForLocation 미사용) -->
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

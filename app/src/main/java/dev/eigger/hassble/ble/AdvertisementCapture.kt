@@ -1,5 +1,6 @@
 package dev.eigger.hassble.ble
 
+import android.annotation.SuppressLint
 import android.bluetooth.le.ScanResult
 
 /**
@@ -24,6 +25,10 @@ object AdvertisementCapture {
         }
     }
 
+    // BLUETOOTH_CONNECT is required for BluetoothDevice.getName() on API 31+. Safe here: this is
+    // only reached from a ScanCallback fired by an active scan, which the caller already gates
+    // behind a BLUETOOTH_SCAN permission check (see AdvertisementWizardDialog's startScan calls).
+    @SuppressLint("MissingPermission")
     fun fromScanResult(result: ScanResult, unknownName: String): CapturedAdvertisement {
         val record = result.scanRecord
         val name = result.device.name?.takeIf { it.isNotBlank() } ?: unknownName
