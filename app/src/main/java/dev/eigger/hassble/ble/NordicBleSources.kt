@@ -454,6 +454,9 @@ class NordicGattNotifySource(
         }
     }
 
+    // BLUETOOTH_CONNECT is required for BluetoothGattCharacteristic.write() on API 31+, satisfied
+    // the same way as connect() above; any revocation is caught below like any other write failure.
+    @SuppressLint("MissingPermission")
     override suspend fun write(device: DeviceConfig, hex: String) {
         val client = activeConnections[device.id] ?: return
         val serviceUuidStr = device.gatt?.serviceUuid ?: return
@@ -672,6 +675,9 @@ class NordicElm327Source(
         }
     }
 
+    // BLUETOOTH_CONNECT is required for BluetoothGattCharacteristic.write() on API 31+, satisfied
+    // the same way as runObdSession above; any revocation is caught below as a write failure.
+    @SuppressLint("MissingPermission")
     private suspend fun sendCommand(
         deviceId: String,
         txChar: ClientBleGattCharacteristic,
@@ -701,6 +707,9 @@ class NordicElm327Source(
         }
     }
 
+    // BLUETOOTH_CONNECT is required for BluetoothGattCharacteristic.write() on API 31+, satisfied
+    // the same way as runObdSession above; any revocation is caught below like any other write failure.
+    @SuppressLint("MissingPermission")
     override suspend fun write(device: DeviceConfig, hex: String) {
         val client = activeConnections[device.id] ?: return
         val serviceUuidStr = device.obd?.serviceUuid ?: return
