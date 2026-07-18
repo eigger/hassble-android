@@ -4,18 +4,23 @@
 
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- BLE (Android 12+) -->
+    <!-- BLE (Android 12+) — neverForLocation: 이 앱은 BLE 스캔 결과로 위치를 추정하지 않으므로
+         Android 12+에서는 위치 권한 없이 BLUETOOTH_SCAN만으로 스캔 가능 -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
         tools:targetApi="s" />
 
-    <!-- BLE 스캔 (Android 11 이하) -->
+    <!-- BLE 스캔 (Android 11 이하 — 위치 권한 없이는 스캔 자체가 불가) -->
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="30" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
