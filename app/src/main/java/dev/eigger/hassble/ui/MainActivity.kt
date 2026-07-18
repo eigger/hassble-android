@@ -458,15 +458,13 @@ private fun HomeScreen() {
     }
 
     val permissionsToRequest = mutableListOf<String>().apply {
+        // neverForLocation 미사용 — iBeacon 등 표준 포맷 광고도 계속 수신하기 위해
+        // 모든 Android 버전에서 위치 권한을 요청한다.
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android 12+: BLUETOOTH_SCAN은 neverForLocation 플래그로 선언되어 있어
-            // 위치 권한 없이도 스캔 가능 (manifest 참고)
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            // Android 11 이하: 위치 권한 없이는 BLE 스캔 자체가 불가
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
