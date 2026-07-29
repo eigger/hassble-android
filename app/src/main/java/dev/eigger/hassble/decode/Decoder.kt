@@ -9,7 +9,7 @@ import java.util.Calendar
 /**
  * 바이트 → 값 디코더 (앱 측). 광고/notify/OBD 공유.
  *  - decodeStructured : offset/length/type/endian/scale/map (광고/notify)
- *  - evalFormula      : 응답 바이트 a,b,c,d... 식 (OBD)
+ *  - evalFormula      : 응답 바이트 a~t (0~19번째) 식 (OBD)
  *  - parseObdResponse : ELM327 응답 hex → (mode, pid, dataBytes)
  */
 object Decoder {
@@ -32,11 +32,25 @@ object Decoder {
         }
     }
 
+    /** formula에서 응답 바이트를 가리키는 변수명. a=0번째 … t=19번째 바이트. */
+    private const val BYTE_NAMES = "abcdefghijklmnopqrst"
+
+    private val IDENTIFIER = Regex("[a-zA-Z_]+")
+
     fun evalFormula(formula: String, data: ByteArray): Double {
-        val names = "abcdefgh"
         val vars = buildMap {
-            for (i in data.indices.take(names.length)) {
-                put(names[i].toString(), (data[i].toInt() and 0xFF).toDouble())
+            for (i in data.indices.take(BYTE_NAMES.length)) {
+                put(BYTE_NAMES[i].toString(), (data[i].toInt() and 0xFF).toDouble())
+            }
+        }
+        // exp4j는 e/pi/π/φ를 내장 상수로 등록한다. 응답이 짧아 'e'가 바인딩되지 않으면
+        // 오일러 상수 2.718로 조용히 평가되므로, 미바인딩 바이트 변수는 명시적으로 거른다.
+        for (m in IDENTIFIER.findAll(formula)) {
+            val name = m.value
+            if (name.length == 1 && name[0] in BYTE_NAMES && name !in vars) {
+                throw IllegalArgumentException(
+                    "formula '$formula' needs byte '$name' but response has only ${data.size} byte(s)",
+                )
             }
         }
         return ExpressionBuilder(formula).variables(vars.keys).build().setVariables(vars).evaluate()

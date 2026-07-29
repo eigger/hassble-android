@@ -76,7 +76,8 @@ class BleRuntime(
 
     private val devices = java.util.concurrent.ConcurrentHashMap<String, DeviceConfig>()
     private val filters = java.util.concurrent.ConcurrentHashMap<String, ValueFilter>()  // uniqueId → filter
-    private val obdIndex = java.util.concurrent.ConcurrentHashMap<String, Map<Pair<String, String>, SensorConfig>>()
+    // mode+pid 하나에 센서 여러 개가 붙을 수 있다 (예: 현대 22B002 → 오도미터·연료·전압)
+    private val obdIndex = java.util.concurrent.ConcurrentHashMap<String, Map<Pair<String, String>, List<SensorConfig>>>()
     private val controls = java.util.concurrent.ConcurrentHashMap<String, Pair<DeviceConfig, ControlConfig>>()  // uniqueId →
     private val declaredAdvInstances = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val discoveredAdvInstances = java.util.concurrent.ConcurrentHashMap<String, DiscoveredAdvInstance>()
@@ -360,7 +361,7 @@ class BleRuntime(
         if (d.source == Source.obd) {
             val errKeys = ConfigValidator.errorKeys(validationIssues, d.id)
             obdIndex[d.id] = d.sensors.filter { it.pid != null && it.key !in errKeys }
-                .associateBy { it.mode to it.pid!!.uppercase() }
+                .groupBy { it.mode to it.pid!!.uppercase() }
         }
         declareAndPrepare(d)
 
@@ -504,10 +505,16 @@ class BleRuntime(
             }
             Source.obd -> {
                 val (mode, pid, data) = Decoder.parseObdResponse(r.rawHex) ?: return
-                val s = obdIndex[d.id]?.get(mode to pid) ?: return
-                if (!isEnabled(d.id, s.key) || s.formula == null) return
-                onLinkDataReceived(d.id, System.currentTimeMillis())
-                emit(d, d.id, s, runCatching { Decoder.evalFormula(s.formula, data) }.getOrNull(), out)
+                val sensors = obdIndex[d.id]?.get(mode to pid) ?: return
+                var matched = false
+                for (s in sensors) {
+                    if (!isEnabled(d.id, s.key) || s.formula == null) continue
+                    if (!matched) {
+                        onLinkDataReceived(d.id, System.currentTimeMillis())
+                        matched = true
+                    }
+                    emit(d, d.id, s, runCatching { Decoder.evalFormula(s.formula, data) }.getOrNull(), out)
+                }
             }
             Source.gatt_notify -> {
                 val bytes = Decoder.hexToBytes(r.rawHex) ?: return

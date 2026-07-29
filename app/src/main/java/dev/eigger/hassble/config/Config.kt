@@ -68,6 +68,9 @@ data class ObdConfig(
     @SerialName("rx_char_uuid") val rxCharUuid: String = "FFF1",
     @SerialName("tx_delay") val txDelay: String = "50ms",
     @SerialName("init_commands") val initCommands: List<String> = emptyList(),
+    // pre_commands가 없는 센서를 폴링하기 직전에 보낼 명령 (예: ["ATSH7E0"]).
+    // 헤더를 바꾸는 센서가 남긴 상태를 되돌리는 용도. 비우면 종전대로 마지막 헤더가 유지된다.
+    @SerialName("default_commands") val defaultCommands: List<String> = emptyList(),
     @SerialName("auto_connect") val autoConnect: Boolean = true,
 )
 
