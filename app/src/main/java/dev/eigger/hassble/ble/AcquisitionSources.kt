@@ -69,5 +69,33 @@ interface Elm327Source {
     companion object {
         /** 매 연결 시 항상 먼저 보내는 base 시퀀스 (ESPHome ble_elm327과 동일). */
         val BASE_INIT = listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0")
+
+        /** ELM327이 11bit CAN에서 쓰는 기본 전송 헤더 (기능 주소 브로드캐스트). */
+        const val DEFAULT_CAN_HEADER = "ATSH7DF"
+
+        /** `ATSH…` / `AT SH …` 처럼 전송 헤더를 바꾸는 명령인지. */
+        fun isSetHeader(cmd: String): Boolean =
+            cmd.filter { !it.isWhitespace() }.lowercase().startsWith("atsh")
+
+        /**
+         * `pre_commands`가 없는 센서를 폴링하기 직전에 보낼 헤더 복원 명령.
+         *
+         * 헤더를 바꾸는 센서가 하나라도 있으면, 그 뒤에 오는 표준 센서가 남은 헤더를
+         * 물려받아 엉뚱한 ECU로 요청이 나간다. 이를 되돌리기 위한 baseline을 고른다.
+         * 우선순위는 `default_commands` → `init_commands`의 마지막 `ATSH` → CAN 기본 헤더.
+         *
+         * 헤더를 바꾸는 센서가 없으면 빈 목록을 돌려준다. 복원할 것이 없을 뿐 아니라,
+         * K-line(ISO 9141/KWP)처럼 헤더 형식이 다른 프로토콜에 `ATSH7DF`를 밀어넣으면
+         * 오히려 통신이 깨지기 때문이다.
+         */
+        fun resolveHeaderRestore(
+            defaultCommands: List<String>,
+            initCommands: List<String>,
+            sensorPreCommands: List<List<String>>,
+        ): List<String> = when {
+            defaultCommands.isNotEmpty() -> defaultCommands
+            sensorPreCommands.none { it.any(::isSetHeader) } -> emptyList()
+            else -> listOf(initCommands.lastOrNull(::isSetHeader) ?: DEFAULT_CAN_HEADER)
+        }
     }
 }

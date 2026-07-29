@@ -608,6 +608,13 @@ class NordicElm327Source(
                 if (!isDuplicateInit(cmd)) txQueue.add(TxItem(cmd))
             }
 
+            // 헤더를 바꾸는 센서 뒤에 오는 표준 센서를 위해 되돌릴 명령. 없으면 빈 목록.
+            val headerRestore = Elm327Source.resolveHeaderRestore(
+                defaultCommands = obd.defaultCommands,
+                initCommands = obd.initCommands,
+                sensorPreCommands = targets.map { it.sensor.preCommands },
+            )
+
             var elmReady = false
             var currentPreCommands: List<String> = emptyList()
             var lastTxAtMs = 0L
@@ -653,9 +660,10 @@ class NordicElm327Source(
                             val target = targets[(collectIdx + i) % n]
                             if (now >= target.nextPollAtMs) {
                                 val sensor = target.sensor
-                                if (sensor.preCommands != currentPreCommands) {
-                                    sensor.preCommands.forEach { txQueue.add(TxItem(it)) }
-                                    currentPreCommands = sensor.preCommands
+                                val pre = sensor.preCommands.ifEmpty { headerRestore }
+                                if (pre != currentPreCommands) {
+                                    pre.forEach { txQueue.add(TxItem(it)) }
+                                    currentPreCommands = pre
                                 }
                                 txQueue.add(TxItem("${sensor.mode}${sensor.pid}", target))
                                 target.nextPollAtMs = now + parseDurationMs(sensor.updateInterval, 60_000L)
