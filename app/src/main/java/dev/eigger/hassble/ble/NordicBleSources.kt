@@ -699,7 +699,13 @@ class NordicElm327Source(
                                 break
                             }
                         }
-                        if (!scheduled) delay(POLL_LOOP_MS)
+                        if (!scheduled) {
+                            // 다음 센서가 준비될 때까지 정확히 잔다. 10ms 간격으로 계속
+                            // 깨어나면(60s 주기 센서라도 초당 100번) 드라이브 내내 CPU가
+                            // 딥슬립에 못 들어가 배터리를 크게 갉아먹는다. nextPollAtMs는
+                            // 이 루프 밖에서 바뀌지 않으므로 안전하게 최솟값까지 잘 수 있다.
+                            delay(computeIdleWaitMs(targets.map { it.nextPollAtMs }, now))
+                        }
                     } else {
                         delay(POLL_LOOP_MS)
                     }
@@ -808,6 +814,14 @@ class NordicElm327Source(
     companion object {
 
         private const val POLL_LOOP_MS = 10L
+        // 유휴 대기의 상한. nextPollAtMs가 이 루프 밖에서 바뀌지 않으므로 정확히 그때까지
+        // 자도 되지만, 혹시 모를 지연을 대비해 5초를 넘기지는 않는다.
+        private const val MAX_IDLE_WAIT_MS = 5_000L
+
+        /** 가장 빨리 준비될 센서까지 몇 ms 자야 하는지. [POLL_LOOP_MS, MAX_IDLE_WAIT_MS]로 제한. */
+        fun computeIdleWaitMs(nextPollAtMs: List<Long>, now: Long): Long =
+            (nextPollAtMs.min() - now).coerceIn(POLL_LOOP_MS, MAX_IDLE_WAIT_MS)
+
         private const val SINGLE_FRAME_TIMEOUT_MS = 2_000L
         private const val MULTIFRAME_TIMEOUT_MS = 5_000L
     }
