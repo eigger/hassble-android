@@ -24,9 +24,10 @@ class RxBufferTest {
 
     @Test
     fun `a partial response is kept for the next notification`() {
+        // 긴 응답이 알림 두 개로 쪼개져 도착한다. 청크는 그대로 이어붙는다.
         val buf = StringBuilder()
-        assertTrue(drain(buf, "0:6103AA").isEmpty())
-        assertEquals(listOf("0:6103AA\rBBCC\r1:DDEE"), drain(buf, "BBCC\r1:DDEE\r>"))
+        assertTrue(drain(buf, "0:6103AABBCC\r1:DD").isEmpty())
+        assertEquals(listOf("0:6103AABBCC\r1:DDEE"), drain(buf, "EE\r>"))
         assertEquals(0, buf.length)
     }
 
