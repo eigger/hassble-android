@@ -497,6 +497,9 @@ class NordicElm327Source(
     private val deviceMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     private val pendingDeferreds = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<String>>()
 
+    // ELM327 수신 버퍼. 명령을 보내기 직전에 비워야 앞 명령의 늦은 응답이 섞이지 않는다.
+    private val rxBuffers = java.util.concurrent.ConcurrentHashMap<String, StringBuilder>()
+
     private data class PollTarget(
         val sensor: SensorConfig,
         var nextPollAtMs: Long = 0L,
@@ -580,15 +583,18 @@ class NordicElm327Source(
 
             if (txChar == null) throw IllegalStateException("OBD TX characteristic not found")
 
-            val responseBuffer = StringBuilder()
+            val responseBuffer = rxBuffers.getOrPut(device.id) { StringBuilder() }
+            responseBuffer.setLength(0)
             val rxJob = launch {
                 rxChar.getNotifications().collect { bytes ->
-                    val chunk = String(bytes.value, Charsets.US_ASCII)
-                    responseBuffer.append(chunk)
-                    if (responseBuffer.contains(">")) {
-                        val fullResponse = responseBuffer.toString().trim()
-                        responseBuffer.clear()
-                        pendingDeferreds[device.id]?.complete(fullResponse)
+                    val responses = synchronized(responseBuffer) {
+                        responseBuffer.append(String(bytes.value, Charsets.US_ASCII))
+                        ObdResponseParser.drainCompleteResponses(responseBuffer)
+                    }
+                    // 응답 하나가 대기 중인 명령 하나에 대응한다. 짝이 없는 응답은
+                    // 앞 명령이 타임아웃된 뒤 늦게 온 것이므로 버린다.
+                    for (response in responses) {
+                        pendingDeferreds.remove(device.id)?.complete(response)
                     }
                 }
             }
@@ -714,10 +720,18 @@ class NordicElm327Source(
     ): String? {
         val mutex = deviceMutexes.getOrPut(deviceId) { Mutex() }
         return mutex.withLock {
+            // 직전 명령이 타임아웃된 뒤 늦게 도착한 조각이 남아 있으면 이번 응답 앞에 붙는다.
+            rxBuffers[deviceId]?.let { synchronized(it) { it.setLength(0) } }
             val deferred = CompletableDeferred<String>()
             pendingDeferreds[deviceId] = deferred
             val payload = (cmd + "\r").toByteArray(Charsets.US_ASCII)
-            val timeoutMs = if (cmd.length >= 6) MULTIFRAME_TIMEOUT_MS else SINGLE_FRAME_TIMEOUT_MS
+            // mode 21/22 블록 응답은 60바이트를 넘기도 한다. 명령 길이로는 길이를 알 수 없으니
+            // AT 명령만 짧게 잡고 나머지 데이터 요청은 넉넉한 쪽을 쓴다.
+            val timeoutMs = if (cmd.trim().uppercase().startsWith("AT")) {
+                SINGLE_FRAME_TIMEOUT_MS
+            } else {
+                MULTIFRAME_TIMEOUT_MS
+            }
 
             try {
                 txChar.write(DataByteArray(payload), BleWriteType.NO_RESPONSE)
@@ -765,6 +779,7 @@ class NordicElm327Source(
         activeConnections.remove(deviceId)?.disconnect()
         deviceMutexes.remove(deviceId)
         pendingDeferreds.remove(deviceId)
+        rxBuffers.remove(deviceId)
     }
 
     private fun isDuplicateInit(cmd: String): Boolean {

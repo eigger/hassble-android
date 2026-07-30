@@ -50,6 +50,24 @@ object ObdResponseParser {
         else -> "(unknown)"
     }
 
+    /**
+     * 수신 버퍼에서 `>` 프롬프트로 끝난 응답들을 잘라내고, 남은 조각은 버퍼에 그대로 둔다.
+     *
+     * 한 BLE 알림에 프롬프트가 여러 개 실려 올 수 있다. 버퍼를 통째로 비우면 두 응답이
+     * 한 덩어리로 합쳐지고 뒤엣것이 사라져, 이후 명령이 앞 명령의 응답을 받게 된다.
+     */
+    fun drainCompleteResponses(buffer: StringBuilder): List<String> {
+        val out = mutableListOf<String>()
+        var prompt = buffer.indexOf(">")
+        while (prompt >= 0) {
+            val response = buffer.substring(0, prompt).trim()
+            buffer.delete(0, prompt + 1)
+            if (response.isNotEmpty()) out += response
+            prompt = buffer.indexOf(">")
+        }
+        return out
+    }
+
     private fun Char.isHexDigit(): Boolean = isDigit() || this in 'a'..'f' || this in 'A'..'F'
 
     /**
