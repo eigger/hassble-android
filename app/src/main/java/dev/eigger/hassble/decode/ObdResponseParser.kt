@@ -21,6 +21,35 @@ object ObdResponseParser {
         return payload.joinToString("") { "%02X".format(it) }
     }
 
+    /**
+     * 정규화된 payload가 `7F <service> <nrc>` 부정 응답이면 사람이 읽을 설명을, 아니면 null.
+     *
+     * 부정 응답은 정규화 자체는 성공하므로(0x7F가 응답 모드 범위에 들어간다) 값 경로로 흘러가
+     * 조용히 버려진다. ECU가 "그 PID는 못 준다"고 답한 것과 아예 응답이 없는 것을 로그에서
+     * 구분하려면 여기서 따로 집어내야 한다.
+     */
+    fun explainNegativeResponse(payloadHex: String): String? {
+        val hex = payloadHex.uppercase().filter { it.isDigit() || it in 'A'..'F' }
+        if (!hex.startsWith("7F") || hex.length < 6) return null
+        val service = hex.substring(2, 4)
+        val nrc = hex.substring(4, 6)
+        return "negative response to service $service: NRC $nrc ${nrcName(nrc)}"
+    }
+
+    private fun nrcName(nrc: String): String = when (nrc) {
+        "10" -> "(generalReject)"
+        "11" -> "(serviceNotSupported)"
+        "12" -> "(subFunctionNotSupported)"
+        "13" -> "(incorrectMessageLengthOrInvalidFormat)"
+        "21" -> "(busyRepeatRequest)"
+        "22" -> "(conditionsNotCorrect)"
+        "24" -> "(requestSequenceError)"
+        "31" -> "(requestOutOfRange)"
+        "33" -> "(securityAccessDenied)"
+        "78" -> "(responsePending)"
+        else -> "(unknown)"
+    }
+
     /** ELM327 응답에서 16진 바이트열 추출 (줄 번호·공백·프롬프트 제거). */
     fun extractPayloadBytes(response: String): ByteArray? {
         val hex = buildString {
