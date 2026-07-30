@@ -626,6 +626,11 @@ class NordicElm327Source(
 
                     if (txQueue.isNotEmpty() && now - lastTxAtMs >= txDelayMs) {
                         val item = txQueue.removeFirst()
+                        LiveEventLogger.log(
+                            LogType.TX,
+                            "device=${device.id}, cmd=${item.cmd}" +
+                                (item.pollTarget?.let { " (${it.sensor.key})" } ?: ""),
+                        )
                         val resp = sendCommand(device.id, txChar, item.cmd)
                         lastTxAtMs = System.currentTimeMillis()
 
@@ -635,14 +640,30 @@ class NordicElm327Source(
                             Log.d(TAG, "OBD dongle ready for ${device.id}")
                         }
 
-                        if (elmReady && item.pollTarget != null && resp != null) {
-                            ObdResponseParser.normalizeElm327Response(resp)?.let { hex ->
-                                onLinkStatus(
-                                    DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()),
+                        val polled = item.pollTarget
+                        if (elmReady && polled != null) {
+                            val key = polled.sensor.key
+                            val hex = resp?.let { ObdResponseParser.normalizeElm327Response(it) }
+                            // 값이 안 나오는 이유를 로그만 보고 구분할 수 있어야 한다:
+                            // 무응답(NO DATA·타임아웃)인지, ECU가 명시적으로 거부한 것인지.
+                            val negative = hex?.let { ObdResponseParser.explainNegativeResponse(it) }
+                            when {
+                                hex == null -> LiveEventLogger.log(
+                                    LogType.RX,
+                                    "device=${device.id}, cmd=${item.cmd} ($key) → ${describeElmFailure(resp)}",
                                 )
-                                collector.emit(
-                                    RawReading(deviceId = device.id, source = "obd", rawHex = hex),
+                                negative != null -> LiveEventLogger.log(
+                                    LogType.RX,
+                                    "device=${device.id}, cmd=${item.cmd} ($key) → $negative",
                                 )
+                                else -> {
+                                    onLinkStatus(
+                                        DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()),
+                                    )
+                                    collector.emit(
+                                        RawReading(deviceId = device.id, source = "obd", rawHex = hex),
+                                    )
+                                }
                             }
                         }
                         continue
@@ -753,6 +774,13 @@ class NordicElm327Source(
 
     private fun normalizeCommand(cmd: String): String =
         cmd.filter { !it.isWhitespace() }.lowercase()
+
+    /** 파싱되지 않은 ELM327 응답을 로그에 남길 한 줄로 요약한다. */
+    private fun describeElmFailure(resp: String?): String {
+        if (resp == null) return "no response (adapter write/notify failed)"
+        val text = resp.trim().replace(Regex("[\\r\\n>]+"), " ").trim()
+        return text.ifEmpty { "empty response" }
+    }
 
     private fun hexToBytes(hex: String): ByteArray? {
         val cleanHex = hex.replace(" ", "")

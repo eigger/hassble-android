@@ -21,20 +21,67 @@ object ObdResponseParser {
         return payload.joinToString("") { "%02X".format(it) }
     }
 
-    /** ELM327 응답에서 16진 바이트열 추출 (줄 번호·공백·프롬프트 제거). */
+    /**
+     * 정규화된 payload가 `7F <service> <nrc>` 부정 응답이면 사람이 읽을 설명을, 아니면 null.
+     *
+     * 부정 응답은 정규화 자체는 성공하므로(0x7F가 응답 모드 범위에 들어간다) 값 경로로 흘러가
+     * 조용히 버려진다. ECU가 "그 PID는 못 준다"고 답한 것과 아예 응답이 없는 것을 로그에서
+     * 구분하려면 여기서 따로 집어내야 한다.
+     */
+    fun explainNegativeResponse(payloadHex: String): String? {
+        val hex = payloadHex.uppercase().filter { it.isDigit() || it in 'A'..'F' }
+        if (!hex.startsWith("7F") || hex.length < 6) return null
+        val service = hex.substring(2, 4)
+        val nrc = hex.substring(4, 6)
+        return "negative response to service $service: NRC $nrc ${nrcName(nrc)}"
+    }
+
+    private fun nrcName(nrc: String): String = when (nrc) {
+        "10" -> "(generalReject)"
+        "11" -> "(serviceNotSupported)"
+        "12" -> "(subFunctionNotSupported)"
+        "13" -> "(incorrectMessageLengthOrInvalidFormat)"
+        "21" -> "(busyRepeatRequest)"
+        "22" -> "(conditionsNotCorrect)"
+        "24" -> "(requestSequenceError)"
+        "31" -> "(requestOutOfRange)"
+        "33" -> "(securityAccessDenied)"
+        "78" -> "(responsePending)"
+        else -> "(unknown)"
+    }
+
+    private fun Char.isHexDigit(): Boolean = isDigit() || this in 'a'..'f' || this in 'A'..'F'
+
+    /**
+     * ELM327 응답에서 16진 바이트열 추출 (줄 번호·공백·프롬프트 제거).
+     *
+     * 멀티프레임 응답은 `0:`·`1:`… 로 번호가 붙은 줄로 오고, 그 앞에 전체 길이가
+     * **3자리 16진수** 한 줄로 먼저 온다. 길이에 A~F가 들어가면(예: 63바이트 → "03F")
+     * 그 줄이 데이터로 섞여 hex 길이가 홀수가 되고 응답 전체가 버려진다.
+     * 데이터는 항상 짝수 자리이므로, 번호 없는 줄은 3자리 이하일 때 길이 헤더로 보고 버린다.
+     *
+     * 번호 붙은 줄이 하나라도 있으면 그것만 쓴다. 같은 응답에 섞여 들어온 다른 조각을
+     * 데이터로 이어붙이지 않기 위한 것으로, ESPHome ble_elm327과 같은 방식이다.
+     */
     fun extractPayloadBytes(response: String): ByteArray? {
-        val hex = buildString {
-            for (line in response.split('\r', '\n')) {
-                var trimmed = line.trim().removePrefix(">").trim()
-                if (trimmed.isEmpty()) continue
-                if (trimmed.equals("SEARCHING...", ignoreCase = true)) continue
-                if (trimmed.matches(Regex("""\d{3}"""))) continue
-                if (':' in trimmed) trimmed = trimmed.substringAfter(':').trim()
-                for (c in trimmed) {
-                    if (c.isDigit() || c in 'a'..'f' || c in 'A'..'F') append(c)
-                }
+        val framed = StringBuilder()
+        val plain = StringBuilder()
+
+        for (line in response.split('\r', '\n')) {
+            val trimmed = line.trim().removePrefix(">").trim()
+            if (trimmed.isEmpty()) continue
+            if (trimmed.equals("SEARCHING...", ignoreCase = true)) continue
+
+            val colon = trimmed.indexOf(':')
+            if (colon > 0 && trimmed.take(colon).all { it.isDigit() }) {
+                trimmed.drop(colon + 1).filterTo(framed) { it.isHexDigit() }
+            } else {
+                val hex = trimmed.filter { it.isHexDigit() }
+                if (hex.length > 3) plain.append(hex)
             }
         }
+
+        val hex = if (framed.isNotEmpty()) framed.toString() else plain.toString()
         if (hex.length < 4 || hex.length % 2 != 0) return null
         return Decoder.hexToBytes(hex)
     }
