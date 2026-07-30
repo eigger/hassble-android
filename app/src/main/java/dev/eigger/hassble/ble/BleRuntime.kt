@@ -508,12 +508,22 @@ class BleRuntime(
                 val sensors = obdIndex[d.id]?.get(mode to pid) ?: return
                 var matched = false
                 for (s in sensors) {
-                    if (!isEnabled(d.id, s.key) || s.formula == null) continue
+                    if (!isEnabled(d.id, s.key)) continue
+                    if (s.decode == null && s.formula == null) continue
                     if (!matched) {
                         onLinkDataReceived(d.id, System.currentTimeMillis())
                         matched = true
                     }
-                    emit(d, d.id, s, runCatching { Decoder.evalFormula(s.formula, data) }.getOrNull(), out)
+                    // decode가 있으면 우선한다. formula 변수는 응답의 앞 20바이트까지만
+                    // 가리킬 수 있어서, 그 뒤에 있는 값은 offset으로만 읽을 수 있다.
+                    // 응답이 짧아 범위를 벗어나면 decodeStructured가 null을 주고,
+                    // emit이 그것을 버리므로 그 주기에는 아무것도 발행되지 않는다.
+                    val value = if (s.decode != null) {
+                        Decoder.decodeStructured(data, s.decode)
+                    } else {
+                        runCatching { Decoder.evalFormula(s.formula!!, data) }.getOrNull()
+                    }
+                    emit(d, d.id, s, value, out)
                 }
             }
             Source.gatt_notify -> {
