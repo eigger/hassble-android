@@ -118,6 +118,13 @@ object ConfigValidator {
                     "OBD sensor requires 'pid' or 'preset' — sensor will be skipped",
                     sensorPath(id, key, "preset"))
 
+            // OBD 센서는 formula(preset 포함) 또는 decode 중 하나로 값을 뽑는다.
+            // preset은 설정 로딩 시 이미 formula로 펼쳐진 뒤 검증된다.
+            if (device.source == Source.obd && s.pid != null && s.formula == null && s.decode == null)
+                issues += ValidationIssue(ValidationLevel.WARNING, id, key,
+                    "OBD sensor has neither 'formula' nor 'decode' — sensor will never produce a value",
+                    sensorPath(id, key, "formula"))
+
             // advertisement/gatt_notify 센서는 decode가 있어야 값 추출 가능
             if (device.source != Source.obd && s.decode == null && s.platform != "binary_sensor")
                 issues += ValidationIssue(ValidationLevel.WARNING, id, key,
