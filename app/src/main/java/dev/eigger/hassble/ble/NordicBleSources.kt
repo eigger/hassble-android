@@ -278,8 +278,10 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
 
     override fun scanForMac(mac: String, scanMode: BleScanModeOption): Flow<Unit> = flow {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            // 조용히 return하면 빈 Flow가 되어 호출측 first()가 NoSuchElementException을 던진다.
+            // 재연결 루프에서는 그게 "권한 없음"이 아니라 정체불명의 실패로 보이므로 명시한다.
             Log.e(TAG, "BLUETOOTH_SCAN permission not granted for scanForMac")
-            return@flow
+            throw SecurityException("BLUETOOTH_SCAN permission not granted")
         }
         val normalizedMac = mac.uppercase().replace("-", ":")
         val nativeScanMode = when (scanMode) {
@@ -411,8 +413,10 @@ class NordicGattNotifySource(
 
         try {
             while (currentCoroutineContext().isActive) {
-                waitForDevice()
                 try {
+                    // OBD 쪽과 같은 이유로 waitForDevice()도 try 안에 둔다.
+                    // 스캔 실패가 while 밖으로 새면 자동 재연결이 영구히 멈춘다.
+                    waitForDevice()
                     Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
                     onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
                     val client = ClientBleGatt.connect(context, mac, scope)
@@ -519,13 +523,22 @@ class NordicElm327Source(
         val mac = device.obd?.mac ?: return@flow
         try {
             while (currentCoroutineContext().isActive) {
-                waitForDevice()
                 try {
+                    // waitForDevice()도 try 안에 있어야 한다. 재연결 대기는 광고 스캔인데,
+                    // 스캔이 한 번이라도 실패하면(권한 회수, 안드로이드 스캔 제한, 어댑터
+                    // 재시작 등) 그 예외가 while을 통째로 빠져나가 자동 재연결이 영구히
+                    // 죽고, 기기는 "스캔 중" 상태로 남는다. 스캔 실패도 세션 실패와 똑같이
+                    // 로그를 남기고 잠시 뒤 다시 시도해야 한다.
+                    waitForDevice()
                     runObdSession(this, device, enabledKeys, mac)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "OBD session ended for ${device.id}: ${e.message}")
+                    LiveEventLogger.log(
+                        LogType.LINK,
+                        "device=${device.id}: OBD session ended (${e.message}) — retrying in 3s",
+                    )
                     onLinkStatus(
                         DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = e.message),
                     )
