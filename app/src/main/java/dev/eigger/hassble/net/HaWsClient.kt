@@ -60,7 +60,10 @@ class HaWsClient(
     private val refreshToken: String? = null,
     private val onTokenRefreshed: (suspend (String) -> Unit)? = null,
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .pingInterval(5, java.util.concurrent.TimeUnit.SECONDS)
+        // 5초는 라디오를 절전 상태로 못 내려가게 만들 만큼 잦다(하루 종일, OBD 동작 여부와
+        // 무관하게). 30초는 대부분의 통신사 NAT idle timeout보다 짧으면서 웨이크업 빈도를
+        // 1/6로 줄인다.
+        .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
         .build(),
 ) {
     private val json = Json {
