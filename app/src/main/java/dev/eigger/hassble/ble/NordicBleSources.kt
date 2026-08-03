@@ -176,26 +176,31 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                     val advertisedServiceUuids = serviceUuidsCache[deviceAddress] ?: scanRecord?.serviceUuids.orEmpty()
                     val rawBytes = scanRecord?.bytes
 
-                    val mfrHex = manufacturerData?.let {
-                        val list = mutableListOf<String>()
-                        for (i in 0 until it.size()) {
-                            val id = it.keyAt(i)
-                            val bytes = it.valueAt(i).value
-                            list.add("0x%04X: %s".format(id, bytes.joinToString("") { String.format("%02X", it) }))
+                    // LiveEventLogger.log()는 includeAdvLogs가 꺼져 있으면(기본값) ADV 항목을
+                    // 그냥 버린다. 그런데 이 hex 포맷팅 자체가 스캔 결과마다(주행 중엔 초당
+                    // 수십 건) 도는 비용이라, 로그를 쓸 게 아니면 애초에 만들지 않는다.
+                    if (LiveEventLogger.includeAdvLogs) {
+                        val mfrHex = manufacturerData?.let {
+                            val list = mutableListOf<String>()
+                            for (i in 0 until it.size()) {
+                                val id = it.keyAt(i)
+                                val bytes = it.valueAt(i).value
+                                list.add("0x%04X: %s".format(id, bytes.joinToString("") { String.format("%02X", it) }))
+                            }
+                            list.joinToString(", ")
                         }
-                        list.joinToString(", ")
+                        val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
+                            "${getShortUuid(key.uuid)}: ${value.value.joinToString("") { String.format("%02X", it) }}"
+                        }
+                        val logMsg = buildString {
+                            append("addr=$deviceAddress")
+                            if (deviceName.isNotBlank()) append(", name='$deviceName'")
+                            if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
+                            if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
+                            isConnectable?.let { append(", connectable=$it") }
+                        }
+                        LiveEventLogger.log(LogType.ADV, logMsg)
                     }
-                    val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
-                        "${getShortUuid(key.uuid)}: ${value.value.joinToString("") { String.format("%02X", it) }}"
-                    }
-                    val logMsg = buildString {
-                        append("addr=$deviceAddress")
-                        if (deviceName.isNotBlank()) append(", name='$deviceName'")
-                        if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
-                        if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
-                        isConnectable?.let { append(", connectable=$it") }
-                    }
-                    LiveEventLogger.log(LogType.ADV, logMsg)
 
                     if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
                         val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }

@@ -392,7 +392,11 @@ class BleRuntime(
                                 } else {
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
-                                    scanner.scanForMac(mac, scanMode).first()
+                                    // 재연결 대기는 latency가 중요하지 않다(차가 다시 켜져야 광고가
+                                    // 뜨는데, 그건 초 단위가 아니라 분·시간 단위로 벌어지는 일).
+                                    // 사용자가 실시간 스캔용으로 고른 scanMode(BALANCED/LOW_LATENCY)를
+                                    // 그대로 쓰면 주차 내내 그 듀티사이클로 스캔이 돌아 배터리를 갉아먹는다.
+                                    scanner.scanForMac(mac, BleScanModeOption.LOW_POWER).first()
                                 }
                             }, autoReconnect = autoReconnect).collect { reading ->
                                 onReading(reading)
@@ -420,7 +424,8 @@ class BleRuntime(
                                 } else {
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
-                                    scanner.scanForMac(mac, scanMode).first()
+                                    // 위 GATT notify 경로와 같은 이유로 재연결 대기는 LOW_POWER 고정.
+                                    scanner.scanForMac(mac, BleScanModeOption.LOW_POWER).first()
                                 }
                             }, autoReconnect = autoReconnect).collect { reading ->
                                 onReading(reading)
@@ -467,19 +472,23 @@ class BleRuntime(
             Source.obd, Source.gatt_notify -> LogType.NOTIF
             else -> LogType.ADV
         }
-        val info = buildString {
-            append("device=${d.id}")
-            r.macAddress?.let { append(", mac=$it") }
-            r.deviceName?.let { append(", name=$it") }
-            if (d.source == Source.advertisement) {
-                r.manufacturerHex?.let { append(", mfg=$it") }
-                r.serviceDataHex?.let { append(", svc=$it") }
-                r.isConnectable?.let { append(", connectable=$it") }
-            } else {
-                append(", raw=${r.rawHex}")
+        // ADV 타입은 includeAdvLogs가 꺼져 있으면(기본값) log()가 버리므로, 버릴 문자열을
+        // 광고 패킷마다(주행 중엔 초당 수십 건) 조립하는 비용부터 건너뛴다.
+        if (logType != LogType.ADV || LiveEventLogger.includeAdvLogs) {
+            val info = buildString {
+                append("device=${d.id}")
+                r.macAddress?.let { append(", mac=$it") }
+                r.deviceName?.let { append(", name=$it") }
+                if (d.source == Source.advertisement) {
+                    r.manufacturerHex?.let { append(", mfg=$it") }
+                    r.serviceDataHex?.let { append(", svc=$it") }
+                    r.isConnectable?.let { append(", connectable=$it") }
+                } else {
+                    append(", raw=${r.rawHex}")
+                }
             }
+            LiveEventLogger.log(logType, info)
         }
-        LiveEventLogger.log(logType, info)
 
         val out = mutableListOf<Pair<String, Any>>()
 

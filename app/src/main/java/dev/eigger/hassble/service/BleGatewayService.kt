@@ -65,6 +65,9 @@ class BleGatewayService : Service() {
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
     @Volatile private var pendingEntityCleanupDeviceIds: Set<String> = emptySet()
+    // link_status는 폴링마다(초 단위) onLinkStatus가 여러 번 호출되지만 값은 대부분 "on"으로
+    // 동일하다. 실제로 값이 바뀔 때만 WS로 보내 불필요한 프레임 전송을 없앤다.
+    private val lastSentLinkConnected = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     override fun onCreate() {
         super.onCreate()
@@ -311,9 +314,12 @@ class BleGatewayService : Service() {
                     ws?.let { client ->
                         if (client.connectionState.value == ConnectionState.Connected) {
                             val isConnected = status.state == dev.eigger.hassble.ble.DeviceLinkState.Connected || status.state == dev.eigger.hassble.ble.DeviceLinkState.Polling
-                            client.sendStates(listOf(
-                                "${status.profileId}_link_status" to if (isConnected) "on" else "off",
-                            ))
+                            val previous = lastSentLinkConnected.put(status.profileId, isConnected)
+                            if (previous != isConnected) {
+                                client.sendStates(listOf(
+                                    "${status.profileId}_link_status" to if (isConnected) "on" else "off",
+                                ))
+                            }
                         }
                     }
                 }
@@ -432,6 +438,7 @@ class BleGatewayService : Service() {
         runtime = null
         ws = null
         pendingEntityCleanupDeviceIds = emptySet()
+        lastSentLinkConnected.clear()
         _isServiceRunning.value = false
         _serviceConnectionState.value = ConnectionState.Disconnected
         _connectionIssue.value = ConnectionIssue.None

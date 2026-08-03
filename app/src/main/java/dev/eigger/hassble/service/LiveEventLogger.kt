@@ -61,7 +61,9 @@ object LiveEventLogger {
     private val _logFlow = MutableSharedFlow<LogEntry>(extraBufferCapacity = BUFFER_LIMIT_OPTIONS.max())
     val logFlow = _logFlow.asSharedFlow()
 
-    private val _logs = mutableListOf<LogEntry>()
+    // ArrayList.removeAt(0)은 O(n) 시프트라 로그가 잦을 때(WS/OBD TX·RX 등) 누적 비용이 커진다.
+    // ArrayDeque는 removeAt(0)/removeFirst()가 O(1)이라 같은 링버퍼 용도에 더 저렴하다.
+    private val _logs = ArrayDeque<LogEntry>()
     val logs: List<LogEntry>
         get() = synchronized(_logs) { ArrayList(_logs) }
 
