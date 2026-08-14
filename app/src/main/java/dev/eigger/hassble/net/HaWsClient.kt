@@ -19,9 +19,12 @@ import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -149,7 +152,7 @@ class HaWsClient(
         enqueueOrSend(json.encodeToString(EntityMsg.serializer(), msg.copy(id = idGen.getAndIncrement())))
     }
 
-    fun sendStates(states: List<Pair<String, Any>>) {
+    fun sendStates(states: List<Pair<String, Any?>>) {
         if (states.isEmpty()) return
         enqueueOrSend(buildJsonObject {
             put("id", idGen.getAndIncrement())
@@ -157,15 +160,28 @@ class HaWsClient(
             put("states", buildJsonArray {
                 for ((uid, v) in states) add(buildJsonObject {
                     put("unique_id", uid)
-                    when (v) {
-                        is Number -> put("value", v)
-                        is Boolean -> put("value", v)
-                        else -> put("value", v.toString())
-                    }
+                    put("value", toJsonElement(v))
                 })
             })
             put("ts", System.currentTimeMillis() / 1000)
         }.toString())
+    }
+
+    private fun toJsonElement(v: Any?): JsonElement = when (v) {
+        null -> JsonNull
+        is JsonElement -> v
+        is Number -> JsonPrimitive(v)
+        is Boolean -> JsonPrimitive(v)
+        is String -> JsonPrimitive(v)
+        is Map<*, *> -> buildJsonObject {
+            for ((k, value) in v) {
+                if (k != null) put(k.toString(), toJsonElement(value))
+            }
+        }
+        is Iterable<*> -> buildJsonArray {
+            for (item in v) add(toJsonElement(item))
+        }
+        else -> JsonPrimitive(v.toString())
     }
 
     fun sendInitialStates(uids: List<String>) {
@@ -192,15 +208,40 @@ class HaWsClient(
         }.toString())
     }
 
-    suspend fun removeDevice(deviceId: String, mode: HaRemoveMode = HaRemoveMode.EXACT) {
-        if (_connectionState.value != ConnectionState.Connected) return
+    suspend fun removeDevice(deviceId: String, mode: HaRemoveMode = HaRemoveMode.EXACT): JsonObject? {
+        if (_connectionState.value != ConnectionState.Connected) return null
         // ws_bridge/remove 를 사용해야 ws_bridge 내부의 _created set도 함께 정리됨.
         // native config/entity_registry/remove 는 HA 레지스트리만 삭제하고 _created는 그대로 남아
         // 이후 redeclare 시 _create()가 skip되어 엔티티가 재등록되지 않는 버그 발생.
-        sendRequest("$WS_DOMAIN/remove") {
+        return sendRequest("$WS_DOMAIN/remove") {
             put("device_id", deviceId)
             if (mode != HaRemoveMode.EXACT) put("mode", mode.wireName)
         }
+    }
+
+    suspend fun removeEntity(uniqueId: String, mode: HaRemoveMode = HaRemoveMode.EXACT): JsonObject? {
+        if (_connectionState.value != ConnectionState.Connected) return null
+        return sendRequest("$WS_DOMAIN/remove") {
+            put("unique_id", uniqueId)
+            if (mode != HaRemoveMode.EXACT) put("mode", mode.wireName)
+        }
+    }
+
+    suspend fun removeGateway(): JsonObject? {
+        if (_connectionState.value != ConnectionState.Connected) return null
+        return sendRequest("$WS_DOMAIN/remove")
+    }
+
+    suspend fun syncEntities(uniqueIds: List<String>): List<String>? {
+        if (_connectionState.value != ConnectionState.Connected || uniqueIds.isEmpty()) return null
+        val response = sendRequest("$WS_DOMAIN/sync") {
+            put("unique_ids", buildJsonArray {
+                for (uid in uniqueIds) add(uid)
+            })
+        }
+        val result = response?.get("result")?.jsonObject
+        val removed = result?.get("removed")?.jsonArray
+        return removed?.mapNotNull { it.jsonPrimitive.contentOrNull }
     }
 
     private suspend fun sendRequest(type: String, build: JsonObjectBuilder.() -> Unit = {}): JsonObject? {
@@ -238,7 +279,10 @@ class HaWsClient(
             put("type", "$WS_DOMAIN/connect")
             put("gateway_id", gatewayId)
             put("name", gatewayName)
-            put("app_version", BuildConfig.VERSION_NAME)
+            put("sw_version", BuildConfig.VERSION_NAME)
+            put("manufacturer", android.os.Build.MANUFACTURER)
+            put("model", android.os.Build.MODEL)
+            put("hw_version", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
         }.toString())
         startBridgeTimeout()
     }

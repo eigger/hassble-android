@@ -1,6 +1,6 @@
 # 앱 ↔ HA 프로토콜 (WebSocket) — 앱 측 뷰
 
-> **정본**은 컴포넌트 리포 [hass-ws-bridge/PROTOCOL.md](https://github.com/eigger/hass-ws-bridge/blob/main/PROTOCOL.md)
+> **정본**은 컴포넌트 리포 [hass-ws-bridge/PROTOCOL.md](https://github.com/eigger/hass-ws-bridge/blob/main/docs/PROTOCOL.md)
 > 에 있다. 이 문서는 BLE 게이트웨이 앱 관점의 동일 계약이다 (드리프트 시 정본 우선).
 
 앱(스마트, Companion 앱과 유사)과 HA 커스텀 컴포넌트(`ws_bridge`, **범용 브릿지/엔티티
@@ -14,21 +14,39 @@
 
 - **앱**: git 설정 로드 → BLE 디코딩 → 사용자가 켠 센서만 필터링 → 엔티티 **선언** +
   **상태** push. (HA Companion 앱의 sensor register/update와 같은 패턴)
-- **HA 컴포넌트**: 받은 선언으로 엔티티 **생성**, 상태로 **갱신**. 제어(switch/number)는
+- **HA 컴포넌트**: 받은 선언으로 엔티티 **생성**, 상태로 **갱신**. 제어(switch/number/select/button)는
   의도를 앱에 **중계**만. 디코딩/설정 지식 없음.
 
 ## 연결/인증
 
 1. 앱이 `wss://<HA>/api/websocket` 접속
-2. 표준 auth 핸드셰이크: `{type:"auth", access_token:"..."}` → `auth_ok`
-3. 앱이 구독: `{id, type:"ws_bridge/connect", gateway_id, name}`
+2. 표준 auth 핸드셰이크:
+   - HA 수신: `{"type": "auth_required", "ha_version": "..."}`
+   - 앱 전송: `{"type": "auth", "access_token": "..."}`
+   - HA 수신: `{"type": "auth_ok", "ha_version": "..."}`
+3. 앱이 구독:
+   ```jsonc
+   {
+     "id": <n>,
+     "type": "ws_bridge/connect",
+     "gateway_id": "<ANDROID_ID>",
+     "name": "<게이트웨이_표시_이름>",
+     "sw_version": "1.0.0",
+     "manufacturer": "Samsung",
+     "model": "SM-S908N",
+     "hw_version": "Android 14 (API 34)"
+   }
+   ```
    - `gateway_id`: 이 게이트웨이(폰)의 고유 ID (예: ANDROID_ID). HA에 **게이트웨이
      디바이스**로 등록되고, 이후 모든 entity/state/availability가 이 게이트웨이에 귀속.
-   - `name`: 게이트웨이 표시 이름(예: 폰 모델).
+   - `name`: 게이트웨이 표시 이름 (통합 설정 화면 및 디바이스 이름으로 사용).
+   - `sw_version`: 앱 버전 (`BuildConfig.VERSION_NAME`).
+   - `manufacturer`, `model`, `hw_version`: 폰 하드웨어 정보.
+   - `keep_last_state_on_disconnect` (선택, 기본값 `false`): `true` 시 연결 종료나 HA 재시작 시에도 엔티티가 `unavailable`로 바뀌지 않고 마지막 상태를 유지.
    - 컴포넌트가 이 connection↔gateway_id를 바인딩 → **command를 이 게이트웨이에만 push**
 4. 앱이 엔티티들을 선언하고 상태를 흘려보냄
 
-> 재연결 시 앱이 엔티티 선언을 **재전송**(idempotent) → HA가 기존 엔티티 복원/갱신.
+> **재연결**: 재연결 시 앱이 엔티티 선언을 **재전송**(idempotent) → HA가 기존 엔티티 복원/갱신.
 
 ### 디바이스 계층 (그룹화)
 HA는 unique_id/디바이스를 `gateway_id`로 네임스페이스해 게이트웨이가 여럿이어도
@@ -44,18 +62,21 @@ HA는 unique_id/디바이스를 `gateway_id`로 네임스페이스해 게이트�
 앱은 원래 unique_id(`<device_id>_<key>`)만 쓰고, 네임스페이스는 컴포넌트가 처리한다.
 `command`도 컴포넌트가 원래 unique_id로 되돌려 보낸다.
 
+---
+
 ## 메시지 (⬇️ HA→앱, ⬆️ 앱→HA)
 
 ### ⬆️ `entity` — 엔티티 선언 (생성/메타 갱신, idempotent)
 ```jsonc
 { "id": <n>, "type": "ws_bridge/entity",
   "unique_id": "colorado_rpm",
-  "platform": "sensor",            // sensor|binary_sensor|switch|number|select|button
+  "platform": "sensor",            // sensor|binary_sensor|text_sensor|switch|number|select|button
   "name": "RPM",
   "device": { "id": "colorado", "name": "콜로라도" },
-  "device_class": "speed",          // 선택 (sensor/binary_sensor)
+  "device_class": "speed",          // 선택 (sensor/binary_sensor/switch/number/button)
   "unit_of_measurement": "rpm",     // 선택 (sensor/number)
   "state_class": "measurement",     // 선택 (sensor)
+  "suggested_display_precision": 0, // 선택 (sensor 소수점 자리수)
   "icon": "mdi:gauge",              // 선택
   "entity_category": "diagnostic",  // 선택 (config|diagnostic)
   "options": ["low","high"],        // select 전용
@@ -63,16 +84,19 @@ HA는 unique_id/디바이스를 `gateway_id`로 네임스페이스해 게이트�
 }
 ```
 
-**플랫폼별 state/명령**
+**앱에서 사용하는 플랫폼별 state/명령**
 
-| platform | 방향 | state 값 | 명령 action |
-|----------|------|---------|------------|
-| `sensor` | 읽기 | 숫자/문자 | — |
-| `binary_sensor` | 읽기 | 불리언(또는 0/1) | — |
-| `switch` | 제어 | 불리언 | turn_on / turn_off |
-| `number` | 제어 | 숫자 | set_value(value) |
-| `select` | 제어 | 현재 옵션(문자) | select_option(value=옵션) |
-| `button` | 제어 | — | press |
+| platform | 방향 | state 값 | 명령 action | 비고 |
+|----------|:---:|---------|------------|------|
+| `sensor` | 읽기 | 숫자/문자열 | — | `device_class`, `unit_of_measurement`, `state_class`, `suggested_display_precision` 지원 |
+| `binary_sensor` | 읽기 | 불리언 (또는 "on"/"off") | — | `device_class` 지원 |
+| `text_sensor` | 읽기 | 문자열 | — | HA 내부적으로 `sensor` 엔티티로 등록 (문자열 상태값) |
+| `switch` | 제어 | 불리언 (또는 "on"/"off") | `turn_on` / `turn_off` | BLE 제어(GATT Write / OBD) |
+| `number` | 제어 | 숫자 | `set_value` (`value` 숫자) | `min`, `max`, `step` 범위 설정 |
+| `select` | 제어 | 문자열 (현재 옵션) | `select_option` (`value` 옵션명) | `options` 목록 필수 |
+| `button` | 제어 | — | `press` | 트리거성 버튼 |
+
+---
 
 ### ⬆️ `state` — 상태 갱신 (앱이 필터링 후 통과분만; 배치 가능)
 ```jsonc
@@ -81,35 +105,43 @@ HA는 unique_id/디바이스를 `gateway_id`로 네임스페이스해 게이트�
               { "unique_id": "colorado_coolant_temp", "value": 50.0 } ],
   "ts": 1719000000 }
 ```
-값 기반 필터(on_change/min_interval/deadband)는 **앱이 디코딩 값으로** 적용하므로
-HA는 받은 것을 그대로 반영만 한다.
+- 값 기반 필터(on_change/min_interval/deadband)는 **앱이 디코딩 값으로** 적용하므로 HA는 받은 것을 그대로 반영만 한다.
+- 문자열 `"unknown"`을 전달하면 HA에서 사용 불가(`None`) 상태로 처리된다.
 
-### ⬆️ `availability` — 기기/게이트웨이 연결 상태
+---
+
+### ⬆️ `availability` — 기기/하위 장치 연결 상태
 ```jsonc
 { "id": <n>, "type": "ws_bridge/availability",
   "device_id": "colorado", "online": false }
 ```
-`device_id`에 속한 엔티티들을 unavailable 처리.
+`device_id`에 속한 모든 엔티티들을 일괄 available/unavailable 처리.
 
-### ⬇️ `command` — 제어 의도 (HA→앱)
+---
+
+### ⬇️ `command` — 제어 의도 수신 (HA→앱)
 ```jsonc
 { "type": "event", "event": {
   "kind": "command",
   "unique_id": "custom_meter_relay",
   "action": "turn_on",             // turn_on|turn_off|set_value|select_option|press
-  "value": 42                       // set_value(숫자) / select_option(옵션 문자)
+  "value": 42,                      // 단일 인자 액션의 값 (숫자, 문자열 등)
+  "params": { ... }                 // 다중 인자 액션의 파라미터 객체 (선택)
 } }
 ```
 앱이 config의 control 매핑으로 변환해 BLE write에 전송 (switch on→`A10100`, select
 옵션→hex, number template `A1{value:02X}`, button press→hex). hex 매핑은 **앱**이,
 HA는 의도만 전달. unique_id는 컴포넌트가 원래 값(클라이언트 네임스페이스 제거)으로 보냄.
 
-### ⬆️ `remove` — 엔티티/디바이스 삭제
+---
+
+### ⬆️ `remove` — 엔티티/디바이스/게이트웨이 삭제
 ```jsonc
 { "id": <n>, "type": "ws_bridge/remove", "device_id": "jaalee_jht" }
 ```
-`unique_id`만 지정해 단일 엔티티를 지울 수도 있다. `device_id`는 해당 클라이언트
-디바이스와 그 하위 엔티티를 제거한다.
+- `unique_id` 지정 시: 해당 엔티티 1개만 삭제
+- `device_id` 지정 시: 해당 하위 장치 및 소속 엔티티 일괄 삭제
+- 둘 다 생략 시: 현재 게이트웨이 디바이스 및 전체 엔티티 삭제
 
 **삭제 범위 (`mode`, 선택)**
 
@@ -122,13 +154,17 @@ MAC별 `device.id`를 쓰는 advertisement 프로필(`instance_mode: mac`, 고�
 앱에서 삭제할 때는 `mode: "prefix"`를 보낸다. 예: 프로필 `jaalee_jht` 삭제 시
 `jaalee_jht_AABBCCDDEEFF` 인스턴스 디바이스·엔티티까지 함께 제거.
 
-```jsonc
-{ "id": <n>, "type": "ws_bridge/remove",
-  "device_id": "jaalee_jht",
-  "mode": "prefix" }
-```
+---
 
-> 상세 스키마·응답은 [hass-ws-bridge PROTOCOL.md §3.4](https://github.com/eigger/hass-ws-bridge/blob/main/docs/PROTOCOL.md) 참고.
+### ⬆️ `sync` — 엔티티 목록 동기화 (§3.5)
+```jsonc
+{ "id": <n>, "type": "ws_bridge/sync",
+  "unique_ids": ["colorado_rpm", "colorado_speed", "switch_01"] }
+```
+- 앱이 현재 유지하고 있는 활성 `unique_id` 전체 목록을 전송하면, HA에 등록되어 있으나 이 목록에 **포함되지 않은** 엔티티를 자동으로 정리/삭제한다.
+- 빈 목록(`[]`)은 전달할 수 없다.
+
+---
 
 ## 비고
 
