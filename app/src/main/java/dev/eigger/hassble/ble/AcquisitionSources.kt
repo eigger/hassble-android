@@ -115,7 +115,7 @@ interface BleAdvertiser {
         counterSeed: Int,
         onCounter: (Int) -> Unit = {},
         onStopped: (AdvertiseStopReason) -> Unit = {},
-    )
+    ): Boolean
     fun stop(deviceId: String, reason: AdvertiseStopReason = AdvertiseStopReason.Manual)
     fun stopAll()
     fun isAdvertising(deviceId: String): Boolean

@@ -161,4 +161,17 @@ class AdvertiseConfigTest {
         val warn = issues.firstOrNull { it.level == ValidationLevel.WARNING && it.message.contains("no control with action: advertise") }
         assertNotNull(warn)
     }
+
+    @Test
+    fun testHasDeviceError() {
+        val device = DeviceConfig(
+            id = "test",
+            name = "Test",
+            source = Source.advertisement,
+            advertise = AdvertiseConfig(manufacturerId = 861, payload = "INVALID_HEX_ZZ"),
+        )
+        val issues = ConfigValidator.validate(GatewayConfig(devices = listOf(device)))
+        assertTrue(ConfigValidator.hasDeviceError(issues, "test"))
+        assertFalse(ConfigValidator.hasDeviceError(issues, "other_device"))
+    }
 }

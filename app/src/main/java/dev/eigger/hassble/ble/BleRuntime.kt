@@ -683,10 +683,10 @@ class BleRuntime(
 
     private fun startAdvertise(d: DeviceConfig) {
         val advConfig = d.advertise ?: return
-        val errKeys = ConfigValidator.errorKeys(validationIssues, d.id)
-        if (d.id in errKeys) return
-        val seed = advCounters[d.id] ?: 0
-        advertiser?.start(
+        if (ConfigValidator.hasDeviceError(validationIssues, d.id)) return
+        val currentCounter = advCounters[d.id]
+        val seed = if (currentCounter != null) AdvertisePayload.nextCounter(currentCounter) else 0
+        val started = advertiser?.start(
             deviceId = d.id,
             config = advConfig,
             counterSeed = seed,
@@ -697,14 +697,21 @@ class BleRuntime(
             onStopped = { _ ->
                 publishAdvertisingState(d, false)
             },
-        )
-        publishAdvertisingState(d, true)
+        ) ?: false
+        if (started) {
+            publishAdvertisingState(d, true)
+        }
     }
 
     private fun publishAdvertisingState(d: DeviceConfig, isAdvertising: Boolean) {
         onAdvertisingChanged(d.id, isAdvertising)
         val stateStr = if (isAdvertising) "on" else "off"
-        ws.sendStates(listOf("${d.id}_advertising" to stateStr))
+        val targetInstanceIds = if (isDynamicAdvertisement(d)) {
+            declaredAdvInstances.filter { it == d.id || it.startsWith("${d.id}_") }.ifEmpty { listOf(d.id) }
+        } else {
+            listOf(d.id)
+        }
+        ws.sendStates(targetInstanceIds.map { "${it}_advertising" to stateStr })
     }
 
     /** 게이트웨이 실행 중 특정 기기의 BLE 광고 송신을 시작. */

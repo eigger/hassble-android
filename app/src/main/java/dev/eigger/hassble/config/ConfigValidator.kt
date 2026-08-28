@@ -217,6 +217,10 @@ object ConfigValidator {
         issues.filter { it.level == ValidationLevel.ERROR && it.deviceId == deviceId && it.sensorKey != null }
             .mapNotNull { it.sensorKey }.toSet()
 
+    /** 기기 수준(sensorKey == null)의 ERROR 이슈 존재 여부. */
+    fun hasDeviceError(issues: List<ValidationIssue>, deviceId: String): Boolean =
+        issues.any { it.level == ValidationLevel.ERROR && it.deviceId == deviceId && it.sensorKey == null }
+
     /**
      * 센서/컨트롤의 구조적 변경(platform/type 변경, 항목 삭제) 여부 반환.
      * HA 엔티티 타입 불일치가 예상될 때 true → 기존 HA 엔티티를 삭제하고 재선언해야 함.

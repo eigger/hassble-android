@@ -67,9 +67,6 @@ class AndroidBleAdvertiser(
         return adapter.bluetoothLeAdvertiser
     }
 
-    // Permission check has already been performed in hasAdvertisePermission() before calling
-    // BluetoothLeAdvertiser methods. Any runtime revocation surfaces as SecurityException and is
-    // caught cleanly.
     @SuppressLint("MissingPermission")
     override fun start(
         deviceId: String,
@@ -77,19 +74,17 @@ class AndroidBleAdvertiser(
         counterSeed: Int,
         onCounter: (Int) -> Unit,
         onStopped: (AdvertiseStopReason) -> Unit,
-    ) {
+    ): Boolean {
         // If already advertising for this device, stop existing session first
         if (sessions.containsKey(deviceId)) {
             stop(deviceId, AdvertiseStopReason.Manual)
         }
 
         if (!hasAdvertisePermission()) {
-            LiveEventLogger.log(
-                LogType.TX,
-                "BLE Advertise failed: BLUETOOTH_ADVERTISE permission not granted (device=$deviceId)",
-            )
+            val msg = "${context.getString(R.string.log_advertise_no_permission)} (device=$deviceId)"
+            LiveEventLogger.log(LogType.TX, msg)
             onStopped(AdvertiseStopReason.Error)
-            return
+            return false
         }
 
         val advertiser = getBluetoothAdvertiser()
@@ -98,11 +93,11 @@ class AndroidBleAdvertiser(
             val adapter = manager?.adapter
             val reason = when {
                 adapter == null || !adapter.isEnabled -> "Bluetooth is disabled"
-                else -> "BLE advertisement not supported on this device"
+                else -> context.getString(R.string.log_advertise_unsupported)
             }
             LiveEventLogger.log(LogType.TX, "BLE Advertise failed: $reason (device=$deviceId)")
             onStopped(AdvertiseStopReason.Error)
-            return
+            return false
         }
 
         val initialData = buildAdvertiseData(config, counterSeed)
@@ -112,7 +107,7 @@ class AndroidBleAdvertiser(
                 "BLE Advertise failed: invalid payload template '${config.payload}' (device=$deviceId)",
             )
             onStopped(AdvertiseStopReason.Error)
-            return
+            return false
         }
 
         val parameters = AdvertisingSetParameters.Builder()
@@ -184,18 +179,7 @@ class AndroidBleAdvertiser(
         )
         sessionRef = session
         sessions[deviceId] = session
-
-        try {
-            advertiser.startAdvertisingSet(parameters, initialData, null, null, null, callback)
-        } catch (e: Exception) {
-            LiveEventLogger.log(
-                LogType.TX,
-                "BLE Advertise start exception: device=$deviceId, error=${e.message}",
-            )
-            sessions.remove(deviceId)
-            onStopped(AdvertiseStopReason.Error)
-            return
-        }
+        session.onCounter(session.counter)
 
         session.job = scope.launch {
             val timeoutMs = parseDurationMs(config.timeout, 15_000)
@@ -205,6 +189,7 @@ class AndroidBleAdvertiser(
                 if (repeatMs != null) {
                     while (isActive) {
                         delay(repeatMs)
+                        if (sessions[deviceId] !== session) return@withTimeoutOrNull true
                         session.counter = AdvertisePayload.nextCounter(session.counter)
                         session.onCounter(session.counter)
                         val updatedData = buildAdvertiseData(config, session.counter)
@@ -227,6 +212,19 @@ class AndroidBleAdvertiser(
                 stop(deviceId, AdvertiseStopReason.Timeout)
             }
         }
+
+        try {
+            advertiser.startAdvertisingSet(parameters, initialData, null, null, null, callback)
+        } catch (e: Exception) {
+            LiveEventLogger.log(
+                LogType.TX,
+                "BLE Advertise start exception: device=$deviceId, error=${e.message}",
+            )
+            stop(deviceId, AdvertiseStopReason.Error)
+            return false
+        }
+
+        return true
     }
 
     // Permission check has already been performed before session creation. Any security exception

@@ -585,6 +585,7 @@ class BleGatewayService : Service() {
         private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"
         private const val EXTRA_AUTO_CONNECT = "auto_connect"
         private const val ACTION_CONNECT_DEVICE = "dev.eigger.hassble.CONNECT_DEVICE"
+        private const val ACTION_DISCONNECT_DEVICE = "dev.eigger.hassble.DISCONNECT_DEVICE"
         private const val ACTION_TRIGGER_ADVERTISE = "dev.eigger.hassble.TRIGGER_ADVERTISE"
         private const val ACTION_STOP_ADVERTISE = "dev.eigger.hassble.STOP_ADVERTISE"
 
