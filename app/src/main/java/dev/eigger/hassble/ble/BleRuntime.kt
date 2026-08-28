@@ -716,10 +716,8 @@ class BleRuntime(
 
     /** 게이트웨이 실행 중 특정 기기의 BLE 광고 송신을 시작. */
     fun triggerAdvertise(deviceId: String) {
-        val d = devices[deviceId]
-            ?: if (::config.isInitialized) config.devices.firstOrNull { it.id == deviceId } else null
-            ?: lastConfig?.devices?.firstOrNull { it.id == deviceId }
-            ?: return
+        if (!::config.isInitialized) return
+        val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return
         startAdvertise(d)
     }
 

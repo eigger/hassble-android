@@ -13,6 +13,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import dev.eigger.hassble.R
 import dev.eigger.hassble.config.AdvertiseConfig
 import dev.eigger.hassble.config.AdvertiseModeOption
 import dev.eigger.hassble.config.AdvertiseTxPowerOption
