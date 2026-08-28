@@ -21,7 +21,9 @@ import dev.eigger.hassble.config.parseDurationMs
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -34,6 +36,8 @@ class AndroidBleAdvertiser(
     private val scope: CoroutineScope,
 ) : BleAdvertiser {
 
+    private val advertiserScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private class Session(
         val config: AdvertiseConfig,
         val callback: AdvertisingSetCallback,
@@ -44,6 +48,7 @@ class AndroidBleAdvertiser(
         val onCounter: (Int) -> Unit,
         val onStopped: (AdvertiseStopReason) -> Unit,
         @Volatile var isStarted: Boolean = false,
+        @Volatile var stopRequested: Boolean = false,
     )
 
     private val sessions = ConcurrentHashMap<String, Session>()
@@ -145,9 +150,9 @@ class AndroidBleAdvertiser(
                 status: Int,
             ) {
                 val currentSession = sessionRef ?: return
-                if (sessions[deviceId] !== currentSession) {
+                if (sessions[deviceId] !== currentSession || currentSession.stopRequested) {
                     // Session was cancelled or replaced before start callback arrived.
-                    // Stop newly started hardware advertising set to prevent orphaned transmission.
+                    // Stop newly started hardware advertising set while the callback wrapper mapping is intact.
                     if (status == ADVERTISE_SUCCESS) {
                         val advertiser = getBluetoothAdvertiser()
                         runCatching { advertiser?.stopAdvertisingSet(this) }
@@ -279,11 +284,12 @@ class AndroidBleAdvertiser(
     @SuppressLint("MissingPermission")
     override fun stop(deviceId: String, reason: AdvertiseStopReason) {
         val session = sessions.remove(deviceId) ?: return
+        session.stopRequested = true
         session.job?.cancel()
         session.job = null
 
         val advertiser = getBluetoothAdvertiser()
-        if (advertiser != null) {
+        if (advertiser != null && session.isStarted) {
             runCatching { advertiser.stopAdvertisingSet(session.callback) }
         }
 
@@ -293,7 +299,13 @@ class AndroidBleAdvertiser(
             val wl = session.wakeLock
             session.wakeLock = null
             if (wl != null && wl.isHeld) {
-                runCatching { wl.release() }
+                // Keep wakeLock held briefly on dedicated advertiserScope so background network flush (OkHttp WS) can complete
+                advertiserScope.launch {
+                    delay(500)
+                    if (wl.isHeld) {
+                        runCatching { wl.release() }
+                    }
+                }
             }
         }
     }
