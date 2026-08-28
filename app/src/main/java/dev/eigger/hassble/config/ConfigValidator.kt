@@ -157,6 +157,13 @@ object ConfigValidator {
                     devicePath(id, "advertise.payload")
                 )
             }
+            if (device.advertise.counterStart !in 0..255) {
+                issues += ValidationIssue(
+                    ValidationLevel.ERROR, id, null,
+                    "counter_start must be between 0 and 255 (got ${device.advertise.counterStart})",
+                    devicePath(id, "advertise.counter_start")
+                )
+            }
             if (device.instanceMode == AdvertisementInstanceMode.mac && device.match?.mac.isNullOrBlank()) {
                 issues += ValidationIssue(
                     ValidationLevel.WARNING, id, null,

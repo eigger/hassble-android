@@ -197,4 +197,27 @@ class AdvertiseConfigTest {
         assertTrue(ConfigValidator.hasDeviceError(issues, "test"))
         assertFalse(ConfigValidator.hasDeviceError(issues, "other_device"))
     }
+
+    @Test
+    fun testCounterStartOutOfRange() {
+        val deviceNegative = DeviceConfig(
+            id = "test_neg",
+            name = "Test",
+            source = Source.advertisement,
+            advertise = AdvertiseConfig(manufacturerId = 861, payload = "05CB34", counterStart = -1),
+        )
+        val issuesNeg = ConfigValidator.validate(GatewayConfig(devices = listOf(deviceNegative)))
+        val errNeg = issuesNeg.firstOrNull { it.level == ValidationLevel.ERROR && it.message.contains("counter_start must be between 0 and 255") }
+        assertNotNull(errNeg)
+
+        val deviceTooLarge = DeviceConfig(
+            id = "test_large",
+            name = "Test",
+            source = Source.advertisement,
+            advertise = AdvertiseConfig(manufacturerId = 861, payload = "05CB34", counterStart = 256),
+        )
+        val issuesLarge = ConfigValidator.validate(GatewayConfig(devices = listOf(deviceTooLarge)))
+        val errLarge = issuesLarge.firstOrNull { it.level == ValidationLevel.ERROR && it.message.contains("counter_start must be between 0 and 255") }
+        assertNotNull(errLarge)
+    }
 }

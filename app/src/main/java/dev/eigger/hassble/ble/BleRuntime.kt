@@ -715,9 +715,8 @@ class BleRuntime(
         onAdvertisingChanged(d.id, isAdvertising)
         val stateStr = if (isAdvertising) "on" else "off"
         val targetInstanceIds = if (isDynamicAdvertisement(d)) {
-            val macRegex = Regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
             declaredAdvInstances.filter {
-                it == d.id || (it.startsWith("${d.id}_") && macRegex.matches(it.substring(d.id.length + 1)))
+                it == d.id || (it.startsWith("${d.id}_") && NORMALIZED_MAC_REGEX.matches(it.substring(d.id.length + 1)))
             }.ifEmpty { listOf(d.id) }
         } else {
             listOf(d.id)
@@ -873,4 +872,8 @@ class BleRuntime(
             val fmt = m.groupValues[1]
             if (fmt.isEmpty()) value.toInt().toString() else String.format("%$fmt", value.toInt())
         }
+
+    companion object {
+        private val NORMALIZED_MAC_REGEX = Regex("^[0-9A-F]{12}$", RegexOption.IGNORE_CASE)
+    }
 }
