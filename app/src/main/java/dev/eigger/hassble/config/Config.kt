@@ -143,6 +143,7 @@ data class ControlConfig(
 
 enum class ControlType { switch, number, select, button }
 enum class ControlAction { advertise, stop_advertise }
+enum class AdvertiseCounterMode { reset, persist }
 
 /**
  * 광고 송신(TX) 설정. advertisement 소스 전용.
@@ -152,6 +153,8 @@ enum class ControlAction { advertise, stop_advertise }
 data class AdvertiseConfig(
     @SerialName("manufacturer_id") val manufacturerId: Int,
     val payload: String,
+    @SerialName("counter_mode") val counterMode: AdvertiseCounterMode = AdvertiseCounterMode.reset,
+    @SerialName("counter_start") val counterStart: Int = 0,
     val mode: AdvertiseModeOption = AdvertiseModeOption.balanced,
     @SerialName("tx_power") val txPower: AdvertiseTxPowerOption = AdvertiseTxPowerOption.high,
     val timeout: String = "15s",

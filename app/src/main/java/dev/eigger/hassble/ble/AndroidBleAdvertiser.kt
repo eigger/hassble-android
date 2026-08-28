@@ -2,7 +2,6 @@ package dev.eigger.hassble.ble
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertisingSet
@@ -68,6 +67,9 @@ class AndroidBleAdvertiser(
         return adapter.bluetoothLeAdvertiser
     }
 
+    // Permission check has already been performed in hasAdvertisePermission() before calling
+    // BluetoothLeAdvertiser methods. Any runtime revocation surfaces as SecurityException and is
+    // caught cleanly.
     @SuppressLint("MissingPermission")
     override fun start(
         deviceId: String,

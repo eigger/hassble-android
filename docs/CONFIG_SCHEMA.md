@@ -92,6 +92,8 @@ devices: [ ... ]                    # 아래 참조
   advertise:
     manufacturer_id: 861
     payload: "05CB34447B91F8C69BBE41157C70BB631C40{counter:02X}"
+    counter_mode: reset              # reset(기본) | persist
+    counter_start: 0                 # reset 모드일 때 매 요청 시작값 (기본 0)
     mode: balanced                   # low_power | balanced | low_latency
     tx_power: high                   # ultra_low | low | medium | high
     timeout: 15s                     # 이 시간 지나면 자동 송신 중단
@@ -111,6 +113,8 @@ devices: [ ... ]                    # 아래 참조
 |------|------|--------|------|
 | `manufacturer_id` | ✅ | | BLE Company Identifier (10진수). 예: 861 (=0x035D) |
 | `payload` | ✅ | | Manufacturer Data payload hex (Company ID 2바이트 제외). `{counter}` (10진수), `{counter:02X}` (2자리 hex) 토큰 사용 가능. Legacy 광고 제한으로 최대 24바이트 |
+| `counter_mode` | | `reset` | 카운터 동작 방식: `reset` (버튼 누를 때마다 `counter_start`부터 시작, 버스트 내에서만 증가, DataStore 미사용) \| `persist` (앱 재시작 후에도 DataStore에 누적 저장되어 이어짐) |
+| `counter_start` | | `0` | 카운터 시작값 (0~255). `reset` 모드 시 매 요청 시작값 |
 | `mode` | | `balanced` | 광고 주기: `low_power` (~1s) \| `balanced` (~250ms) \| `low_latency` (~100ms) |
 | `tx_power` | | `high` | 송신 출력: `ultra_low` \| `low` \| `medium` \| `high` |
 | `timeout` | | `15s` | 광고 송신 최대 지속 시간 (지나면 자동 중단) |

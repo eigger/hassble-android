@@ -75,6 +75,8 @@ devices:
   #   advertise:
   #     manufacturer_id: 861
   #     payload: "05<본인_16BYTE_UUID_HEX>40{counter:02X}"
+  #     counter_mode: reset              # reset(기본) | persist
+  #     counter_start: 0                 # reset 모드 시작값 (기본 0)
   #     mode: balanced                   # low_power | balanced | low_latency
   #     tx_power: high                   # ultra_low | low | medium | high
   #     timeout: 15s                     # 이 시간 지나면 자동 송신 중단

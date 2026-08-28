@@ -63,6 +63,8 @@ class AdvertiseConfigTest {
         assertNotNull(adv)
         assertEquals(861, adv!!.manufacturerId)
         assertEquals("05CB34447B91F8C69BBE41157C70BB631C40{counter:02X}", adv.payload)
+        assertEquals(AdvertiseCounterMode.reset, adv.counterMode)
+        assertEquals(0, adv.counterStart)
         assertEquals(AdvertiseModeOption.balanced, adv.mode)
         assertEquals(AdvertiseTxPowerOption.high, adv.txPower)
         assertEquals("15s", adv.timeout)
@@ -79,6 +81,27 @@ class AdvertiseConfigTest {
 
         val issues = ConfigValidator.validate(config)
         assertTrue("Expected no ERROR issues, but got: $issues", issues.none { it.level == ValidationLevel.ERROR })
+    }
+
+    @Test
+    fun testParseAdvertisePersistMode() {
+        val yaml = """
+        devices:
+          - id: mytown_parking
+            name: "마이타운 주차위치"
+            source: advertisement
+            advertise:
+              manufacturer_id: 861
+              payload: "05CB34447B91F8C69BBE41157C70BB631C40{counter:02X}"
+              counter_mode: persist
+              counter_start: 5
+        """.trimIndent()
+
+        val config = Yaml.default.decodeFromString(GatewayConfig.serializer(), yaml)
+        val adv = config.devices[0].advertise
+        assertNotNull(adv)
+        assertEquals(AdvertiseCounterMode.persist, adv!!.counterMode)
+        assertEquals(5, adv.counterStart)
     }
 
     @Test

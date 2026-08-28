@@ -1,6 +1,7 @@
 package dev.eigger.hassble.ble
 
 import dev.eigger.hassble.service.BleGatewayService
+import dev.eigger.hassble.config.AdvertiseCounterMode
 import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.effectiveStateClass
 import dev.eigger.hassble.config.BleScanModeOption
@@ -684,15 +685,22 @@ class BleRuntime(
     private fun startAdvertise(d: DeviceConfig) {
         val advConfig = d.advertise ?: return
         if (ConfigValidator.hasDeviceError(validationIssues, d.id)) return
-        val currentCounter = advCounters[d.id]
-        val seed = if (currentCounter != null) AdvertisePayload.nextCounter(currentCounter) else 0
+        val seed = when (advConfig.counterMode) {
+            AdvertiseCounterMode.reset -> advConfig.counterStart and 0xFF
+            AdvertiseCounterMode.persist -> {
+                val current = advCounters[d.id]
+                if (current != null) AdvertisePayload.nextCounter(current) else (advConfig.counterStart and 0xFF)
+            }
+        }
         val started = advertiser?.start(
             deviceId = d.id,
             config = advConfig,
             counterSeed = seed,
             onCounter = { newCounter ->
-                advCounters = advCounters + (d.id to newCounter)
-                onAdvCounterChanged(d.id, newCounter)
+                if (advConfig.counterMode == AdvertiseCounterMode.persist) {
+                    advCounters = advCounters + (d.id to newCounter)
+                    onAdvCounterChanged(d.id, newCounter)
+                }
             },
             onStopped = { _ ->
                 publishAdvertisingState(d, false)
@@ -707,7 +715,10 @@ class BleRuntime(
         onAdvertisingChanged(d.id, isAdvertising)
         val stateStr = if (isAdvertising) "on" else "off"
         val targetInstanceIds = if (isDynamicAdvertisement(d)) {
-            declaredAdvInstances.filter { it == d.id || it.startsWith("${d.id}_") }.ifEmpty { listOf(d.id) }
+            val macRegex = Regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+            declaredAdvInstances.filter {
+                it == d.id || (it.startsWith("${d.id}_") && macRegex.matches(it.substring(d.id.length + 1)))
+            }.ifEmpty { listOf(d.id) }
         } else {
             listOf(d.id)
         }
