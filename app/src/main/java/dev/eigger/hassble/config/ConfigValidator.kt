@@ -178,6 +178,13 @@ object ConfigValidator {
                     devicePath(id, "advertise")
                 )
             }
+            if (device.advertise.includeDeviceName) {
+                issues += ValidationIssue(
+                    ValidationLevel.WARNING, id, null,
+                    "include_device_name: true includes device name in advertising data, which may exceed the 31-byte legacy BLE limit",
+                    devicePath(id, "advertise.include_device_name")
+                )
+            }
         }
 
         // ── 컨트롤 검증 ────────────────────────────────────────────────────────

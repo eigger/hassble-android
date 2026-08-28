@@ -220,4 +220,19 @@ class AdvertiseConfigTest {
         val errLarge = issuesLarge.firstOrNull { it.level == ValidationLevel.ERROR && it.message.contains("counter_start must be between 0 and 255") }
         assertNotNull(errLarge)
     }
+
+    @Test
+    fun testIncludeDeviceNameWarning() {
+        val device = DeviceConfig(
+            id = "test",
+            name = "Test",
+            source = Source.advertisement,
+            instanceMode = AdvertisementInstanceMode.shared,
+            advertise = AdvertiseConfig(manufacturerId = 861, payload = "05CB34", includeDeviceName = true),
+            controls = listOf(ControlConfig(key = "req", type = ControlType.button, action = ControlAction.advertise)),
+        )
+        val issues = ConfigValidator.validate(GatewayConfig(devices = listOf(device)))
+        val warn = issues.firstOrNull { it.level == ValidationLevel.WARNING && it.message.contains("include_device_name: true") }
+        assertNotNull(warn)
+    }
 }
