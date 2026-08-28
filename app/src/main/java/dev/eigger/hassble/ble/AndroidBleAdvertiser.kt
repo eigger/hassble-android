@@ -11,6 +11,7 @@ import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.config.AdvertiseConfig
@@ -20,7 +21,9 @@ import dev.eigger.hassble.config.parseDurationMs
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -33,15 +36,19 @@ class AndroidBleAdvertiser(
     private val scope: CoroutineScope,
 ) : BleAdvertiser {
 
+    private val advertiserScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private class Session(
         val config: AdvertiseConfig,
         val callback: AdvertisingSetCallback,
         var advertisingSet: AdvertisingSet? = null,
         var job: Job? = null,
+        var wakeLock: PowerManager.WakeLock? = null,
         var counter: Int,
         val onCounter: (Int) -> Unit,
         val onStopped: (AdvertiseStopReason) -> Unit,
         @Volatile var isStarted: Boolean = false,
+        @Volatile var stopRequested: Boolean = false,
     )
 
     private val sessions = ConcurrentHashMap<String, Session>()
@@ -143,6 +150,16 @@ class AndroidBleAdvertiser(
                 status: Int,
             ) {
                 val currentSession = sessionRef ?: return
+                if (sessions[deviceId] !== currentSession || currentSession.stopRequested) {
+                    // Session was cancelled or replaced before start callback arrived.
+                    // Stop newly started hardware advertising set while the callback wrapper mapping is intact.
+                    if (status == ADVERTISE_SUCCESS) {
+                        val advertiser = getBluetoothAdvertiser()
+                        runCatching { advertiser?.stopAdvertisingSet(this) }
+                    }
+                    return
+                }
+
                 if (status == ADVERTISE_SUCCESS) {
                     currentSession.advertisingSet = advertisingSet
                     currentSession.isStarted = true
@@ -168,6 +185,25 @@ class AndroidBleAdvertiser(
                 }
             }
 
+            override fun onAdvertisingEnabled(
+                advertisingSet: AdvertisingSet?,
+                enable: Boolean,
+                status: Int,
+            ) {
+                val currentSession = sessionRef ?: return
+                if (sessions[deviceId] !== currentSession) return
+                if (!enable) {
+                    val isConnectable = config.connectable
+                    val msg = if (isConnectable) {
+                        "BLE Advertise disabled (duration ended or peer connected): device=$deviceId, status=$status"
+                    } else {
+                        "BLE Advertise hardware duration ended: device=$deviceId, status=$status"
+                    }
+                    LiveEventLogger.log(LogType.TX, msg)
+                    stop(deviceId, AdvertiseStopReason.Timeout)
+                }
+            }
+
             override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?) {
                 LiveEventLogger.log(LogType.TX, "BLE Advertise stopped: device=$deviceId")
             }
@@ -184,8 +220,17 @@ class AndroidBleAdvertiser(
         sessions[deviceId] = session
         session.onCounter(session.counter)
 
+        val timeoutMs = parseDurationMs(config.timeout, 15_000)
+        val pm = context.getSystemService(PowerManager::class.java)
+        val wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hassble:ble_advertise_$deviceId")?.apply {
+            setReferenceCounted(false)
+        }
+        runCatching {
+            wakeLock?.acquire(timeoutMs + 2_000L)
+        }
+        session.wakeLock = wakeLock
+
         session.job = scope.launch {
-            val timeoutMs = parseDurationMs(config.timeout, 15_000)
             val repeatMs = config.repeatInterval?.let { parseDurationMs(it, 0) }?.takeIf { it > 0 }
 
             val completedNormally = withTimeoutOrNull(timeoutMs) {
@@ -217,7 +262,11 @@ class AndroidBleAdvertiser(
         }
 
         try {
-            advertiser.startAdvertisingSet(parameters, initialData, null, null, null, callback)
+            // duration is in units of 10ms (1 to 65535, 0 = unlimited).
+            // If timeout exceeds hardware limit (~655.35s), pass 0 (unlimited) and rely on the coroutine timer.
+            val rawUnits = (timeoutMs + 9) / 10
+            val durationUnits = if (rawUnits in 1..65535) rawUnits.toInt() else 0
+            advertiser.startAdvertisingSet(parameters, initialData, null, null, null, durationUnits, 0, callback)
         } catch (e: Exception) {
             LiveEventLogger.log(
                 LogType.TX,
@@ -235,14 +284,30 @@ class AndroidBleAdvertiser(
     @SuppressLint("MissingPermission")
     override fun stop(deviceId: String, reason: AdvertiseStopReason) {
         val session = sessions.remove(deviceId) ?: return
+        session.stopRequested = true
         session.job?.cancel()
         session.job = null
 
         val advertiser = getBluetoothAdvertiser()
-        if (advertiser != null && (session.advertisingSet != null || session.isStarted)) {
+        if (advertiser != null && session.isStarted) {
             runCatching { advertiser.stopAdvertisingSet(session.callback) }
         }
-        session.onStopped(reason)
+
+        try {
+            session.onStopped(reason)
+        } finally {
+            val wl = session.wakeLock
+            session.wakeLock = null
+            if (wl != null && wl.isHeld) {
+                // Keep wakeLock held briefly on dedicated advertiserScope so background network flush (OkHttp WS) can complete
+                advertiserScope.launch {
+                    delay(500)
+                    if (wl.isHeld) {
+                        runCatching { wl.release() }
+                    }
+                }
+            }
+        }
     }
 
     override fun stopAll() {
