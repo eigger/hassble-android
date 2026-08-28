@@ -41,8 +41,9 @@ devices: [ ... ]                    # 아래 참조
 | `name` | ✅ | HA 표시 이름 |
 | `source` | ✅ | `advertisement` \| `gatt_notify` \| `obd` |
 | `instance_mode` | | advertisement 전용. `mac`(기본)=MAC별 엔티티, `shared`=프로필 ID 하나로 덮어쓰기 |
+| `advertise` | | advertisement 전용. 앱에서 BLE 광고(TX)를 송신하기 위한 설정 |
 | `sensors` | △ | 센서 목록 (읽기) |
-| `controls` | | 제어 목록 (HA→BLE, gatt_notify/obd) |
+| `controls` | | 제어 목록 (HA→BLE 또는 앱 동작 제어) |
 
 예시: [config.example.yaml](../config.example.yaml)
 ## source: advertisement
@@ -75,6 +76,56 @@ devices: [ ... ]                    # 아래 참조
 | `mac` (기본) | `match.mac` 없으면 스캔된 MAC마다 `{id}_{MAC}` 엔티티 생성. `match.mac` 있으면 단일 기기로 `{id}` 사용 |
 | `shared` | 항상 `{id}` 하나. 여러 기기가 같은 프로필에 매칭되면 **마지막 광고 값**으로 덮어씀. 게이트웨이 시작 시 엔티티 선언 |
 
+### 광고 송신 (advertise)
+
+지하주차장 주차위치 비콘 요청 등 앱에서 BLE Manufacturer Data 광고를 송신(TX)해야 하는 경우 사용합니다.
+
+```yaml
+- id: mytown_parking
+  name: "마이타운 주차위치"
+  source: advertisement
+  instance_mode: shared              # 기둥 MAC이 매번 달라도 엔티티 1벌 유지
+  match:
+    manufacturer_id: 861             # 0x035D — kaml 파싱을 위해 10진수(decimal) 사용 권장
+    manufacturer_hex_prefix: "06CB34..."
+    manufacturer_min_length: 20
+  advertise:
+    manufacturer_id: 861
+    payload: "05CB34447B91F8C69BBE41157C70BB631C40{counter:02X}"
+    counter_mode: reset              # reset(기본) | persist
+    counter_start: 0                 # reset 모드일 때 매 요청 시작값 (기본 0)
+    mode: balanced                   # low_power | balanced | low_latency
+    tx_power: high                   # ultra_low | low | medium | high
+    timeout: 15s                     # 이 시간 지나면 자동 송신 중단
+    repeat_interval: 1s              # (선택) 이 주기로 payload 갱신 = counter 증가
+    stop_on_response: true           # 이 프로필 광고(match)를 수신하면 즉시 송신 중단
+    connectable: false
+    scannable: true
+  controls:
+    - key: request_location
+      type: button
+      name: "주차위치 요청"
+      action: advertise              # command 대신 앱 내부 광고 송신 동작 실행
+      icon: mdi:car-search
+```
+
+| 필드 | 필수 | 기본값 | 설명 |
+|------|------|--------|------|
+| `manufacturer_id` | ✅ | | BLE Company Identifier (10진수). 예: 861 (=0x035D) |
+| `payload` | ✅ | | Manufacturer Data payload hex (Company ID 2바이트 제외). `{counter}` (10진수), `{counter:02X}` (2자리 hex) 토큰 사용 가능. Legacy 광고 제한으로 최대 24바이트 |
+| `counter_mode` | | `reset` | 카운터 동작 방식: `reset` (버튼 누를 때마다 `counter_start`부터 시작, 버스트 내에서만 증가, DataStore 미사용) \| `persist` (앱 재시작 후에도 DataStore에 누적 저장되어 이어짐) |
+| `counter_start` | | `0` | 카운터 시작값 (0~255). `reset` 모드 시 매 요청 시작값, `persist` 모드 시 최초 영속 전 초기 시드값 |
+| `mode` | | `balanced` | 광고 주기: `low_power` (~1s) \| `balanced` (~250ms) \| `low_latency` (~100ms) |
+| `tx_power` | | `high` | 송신 출력: `ultra_low` \| `low` \| `medium` \| `high` |
+| `timeout` | | `15s` | 광고 송신 최대 지속 시간 (지나면 자동 중단) |
+| `repeat_interval` | | `null` | 지정 시 해당 주기마다 counter를 증가시키며 payload 갱신 (생략 시 1회 세팅 후 대기) |
+| `stop_on_response` | | `true` | 이 프로필의 `match` 조건을 만족하는 광고 패킷 수신 시 즉시 광고 송신 중단 |
+| `connectable` | | `false` | BLE 연결 가능 여부 |
+| `scannable` | | `true` | Scannable 광고 여부 |
+| `include_device_name` | | `false` | 광고 패킷에 기기 이름 포함 여부 (31바이트 예산 절약을 위해 기본 false) |
+
+> **알림:** `advertise` 블록이 설정된 기기는 HA에 `{id}_advertising` 진단 바이너리 센서(`binary_sensor`)가 자동으로 생성되어 현재 광고 송신 진행 여부를 보고합니다.
+
 ## source: gatt_notify
 
 ```yaml
@@ -93,8 +144,12 @@ devices: [ ... ]                    # 아래 참조
   controls:
     - key: relay
       type: switch              # switch | number | select | button
-      command: { on: "A10100", off: "A10000" }   # write_char로 전송할 hex
+      command: { on: "A10100", off: "A10000" }   # write_char로 전송할 hex (또는 action 필드 사용)
 ```
+
+컨트롤 필드 `action`:
+- `advertise`: HA button press/switch turn_on 시 `advertise` 블록의 광고 송신을 시작합니다.
+- `stop_advertise`: 광고 송신을 중단합니다.
 
 ## source: obd (ELM327)
 
@@ -149,7 +204,7 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 | 필드 | 설명 |
 |------|------|
 | `offset` | 시작 바이트 |
-| `length` | 길이 |
+| `length` | 길이 (`string` 타입에서 `0` 또는 생략 시 payload 끝까지) |
 | `type` | int8/uint8/int16/uint16/int32/uint32/float32/**timestamp**/**string** |
 | `endian` | big / little (기본 big) |
 | `bitmask` | 비트 추출 (선택) |
@@ -165,7 +220,7 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 
 `timestamp` 타입: `offset`부터 4바이트를 **월·일·시·분**(uint8)으로 읽어 ISO 8601 문자열 반환 (예: `2026-06-22T14:30:00`). 연도는 디코딩 시점의 현재 연도. `device_class: timestamp`와 함께 사용.
 
-`string` 타입: `offset`부터 `length`바이트를 ASCII 문자로 연결. `platform: text_sensor`와 함께 사용 (예: 주차 위치 코드 2자).
+`string` 타입: `offset`부터 `length`바이트를 ASCII 문자로 연결 (`length: 0`이면 끝까지 읽음). 뒤쪽 공백 및 null 패딩은 자동으로 제거됩니다. `platform: text_sensor`와 함께 사용 (예: 주차 위치 코드 "B32").
 
 ## publish 억제 (통신 완화, 값 기반 — 앱)
 

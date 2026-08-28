@@ -46,6 +46,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_PENDING_HA_REMOVAL_MODES = stringPreferencesKey("pending_ha_removal_modes")
         private val KEY_EXCLUDED_DEVICES = stringPreferencesKey("excluded_devices")
         private val KEY_LOG_BUFFER_LIMIT = intPreferencesKey("log_buffer_limit")
+        private val KEY_ADV_COUNTERS = stringPreferencesKey("adv_counters")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -84,6 +85,13 @@ class HassSettingsRepository(private val context: Context) {
         val jsonStr = prefs[KEY_BOUND_DEVICES] ?: return@map emptyMap()
         runCatching {
             json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), jsonStr)
+        }.getOrDefault(emptyMap())
+    }
+
+    val advCounters: Flow<Map<String, Int>> = context.dataStore.data.map { prefs ->
+        val jsonStr = prefs[KEY_ADV_COUNTERS] ?: return@map emptyMap()
+        runCatching {
+            json.decodeFromString(MapSerializer(String.serializer(), Int.serializer()), jsonStr)
         }.getOrDefault(emptyMap())
     }
 
@@ -459,6 +467,14 @@ class HassSettingsRepository(private val context: Context) {
                 }
             }
 
+            prefs[KEY_ADV_COUNTERS]?.let { raw ->
+                val map = runCatching { json.decodeFromString(MapSerializer(String.serializer(), Int.serializer()), raw) }
+                    .getOrDefault(emptyMap()).toMutableMap()
+                if (map.remove(deviceId) != null) {
+                    prefs[KEY_ADV_COUNTERS] = json.encodeToString(MapSerializer(String.serializer(), Int.serializer()), map)
+                }
+            }
+
             prefs[KEY_ENTITY_FINGERPRINTS]?.let { raw ->
                 val map = runCatching { json.decodeFromString(stringMap, raw) }
                     .getOrDefault(emptyMap()).toMutableMap()
@@ -535,6 +551,19 @@ class HassSettingsRepository(private val context: Context) {
             currentMap.remove(deviceId)
             val newJson = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), currentMap)
             prefs[KEY_BOUND_DEVICES] = newJson
+        }
+    }
+
+    suspend fun saveAdvCounter(deviceId: String, value: Int) {
+        context.dataStore.edit { prefs ->
+            val currentJson = prefs[KEY_ADV_COUNTERS] ?: "{}"
+            val currentMap = runCatching {
+                json.decodeFromString(MapSerializer(String.serializer(), Int.serializer()), currentJson)
+            }.getOrDefault(emptyMap()).toMutableMap()
+
+            currentMap[deviceId] = value
+            val newJson = json.encodeToString(MapSerializer(String.serializer(), Int.serializer()), currentMap)
+            prefs[KEY_ADV_COUNTERS] = newJson
         }
     }
 

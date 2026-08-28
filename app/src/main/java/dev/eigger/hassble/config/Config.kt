@@ -32,6 +32,7 @@ data class DeviceConfig(
     val source: Source,
     val match: MatchConfig? = null,
     @SerialName("instance_mode") val instanceMode: AdvertisementInstanceMode = AdvertisementInstanceMode.mac,
+    val advertise: AdvertiseConfig? = null,
     val gatt: GattConfig? = null,
     val obd: ObdConfig? = null,
     val sensors: List<SensorConfig> = emptyList(),
@@ -128,6 +129,8 @@ data class ControlConfig(
     val name: String? = null,
     val icon: String? = null,
     @SerialName("entity_category") val entityCategory: String? = null,
+    /** 지정하면 command(hex write) 대신 앱 내부 동작을 수행한다. */
+    val action: ControlAction? = null,
     // command 매핑:
     //  switch → {on, off} hex / number → {template} ("A1{value:02X}")
     //  select → {<option>: hex, ...} / button → {press: hex}
@@ -139,6 +142,33 @@ data class ControlConfig(
 )
 
 enum class ControlType { switch, number, select, button }
+enum class ControlAction { advertise, stop_advertise }
+enum class AdvertiseCounterMode { reset, persist }
+
+/**
+ * 광고 송신(TX) 설정. advertisement 소스 전용.
+ * payload는 manufacturer payload(company ID 제외) hex이며 {counter} / {counter:02X} 토큰을 쓸 수 있다.
+ */
+@Serializable
+data class AdvertiseConfig(
+    @SerialName("manufacturer_id") val manufacturerId: Int,
+    val payload: String,
+    @SerialName("counter_mode") val counterMode: AdvertiseCounterMode = AdvertiseCounterMode.reset,
+    @SerialName("counter_start") val counterStart: Int = 0,
+    val mode: AdvertiseModeOption = AdvertiseModeOption.balanced,
+    @SerialName("tx_power") val txPower: AdvertiseTxPowerOption = AdvertiseTxPowerOption.high,
+    val timeout: String = "15s",
+    /** 지정하면 이 주기마다 payload를 갱신(=counter 증가). 생략하면 누름당 1회만 세팅. */
+    @SerialName("repeat_interval") val repeatInterval: String? = null,
+    /** 이 device의 match에 걸리는 광고를 수신하면 즉시 송신 중단. */
+    @SerialName("stop_on_response") val stopOnResponse: Boolean = true,
+    val connectable: Boolean = false,
+    val scannable: Boolean = true,
+    @SerialName("include_device_name") val includeDeviceName: Boolean = false,
+)
+
+enum class AdvertiseModeOption { low_power, balanced, low_latency }
+enum class AdvertiseTxPowerOption { ultra_low, low, medium, high }
 
 enum class BleScanModeOption(val label: String) {
     LOW_POWER("Low Power"),

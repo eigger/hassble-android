@@ -1,10 +1,12 @@
 package dev.eigger.hassble.ble
 
 import dev.eigger.hassble.service.BleGatewayService
+import dev.eigger.hassble.config.AdvertiseCounterMode
 import dev.eigger.hassble.config.AdvertisementInstanceMode
 import dev.eigger.hassble.config.effectiveStateClass
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.config.ConfigValidator
+import dev.eigger.hassble.config.ControlAction
 import dev.eigger.hassble.config.ControlConfig
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
@@ -50,10 +52,13 @@ class BleRuntime(
     private val scanner: AdvertisementScanner,
     private val gatt: GattNotifySource,
     private val obd: Elm327Source,
+    private val advertiser: BleAdvertiser? = null,
     private val onDiscoveredAdvChanged: (List<DiscoveredAdvInstance>) -> Unit = {},
     private val onSensorValuesChanged: (List<SensorLastValue>) -> Unit = {},
     private val onLinkDataReceived: (String, Long) -> Unit = { _, _ -> },
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
+    private val onAdvCounterChanged: (String, Int) -> Unit = { _, _ -> },
+    private val onAdvertisingChanged: (String, Boolean) -> Unit = { _, _ -> },
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private var scanJob: Job? = null
@@ -65,6 +70,7 @@ class BleRuntime(
     private var scanMode: BleScanModeOption = BleScanModeOption.BALANCED
     private var autoConnectDisabledIds: Set<String> = emptySet()
     private var unfilteredScan: Boolean = false
+    private var advCounters: Map<String, Int> = emptyMap()
 
     // Cached states for change tracking between apply() calls
     private var lastConfig: GatewayConfig? = null
@@ -120,7 +126,8 @@ class BleRuntime(
         boundDevices: Map<String, String>,
         scanMode: BleScanModeOption = BleScanModeOption.BALANCED,
         autoConnectDisabledIds: Set<String> = emptySet(),
-        unfilteredScan: Boolean = false
+        unfilteredScan: Boolean = false,
+        advCounters: Map<String, Int> = emptyMap(),
     ) {
         val oldConfig = this.lastConfig
         val oldEnabled = this.lastEnabled
@@ -137,6 +144,7 @@ class BleRuntime(
         this.scanMode = scanMode
         this.autoConnectDisabledIds = autoConnectDisabledIds
         this.unfilteredScan = unfilteredScan
+        this.advCounters = advCounters
 
         if (oldConfig == null) {
             // First run: complete initialization
@@ -273,6 +281,16 @@ class BleRuntime(
             ws.sendStates(listOf("${instanceId}_link_status" to if (isConnected) "on" else "off"))
         }
 
+        if (d.advertise != null) {
+            ws.declareEntity(EntityMsg(
+                id = 0, uniqueId = "${instanceId}_advertising", platform = "binary_sensor",
+                name = "Advertising", device = ref,
+                entityCategory = "diagnostic",
+            ))
+            val isAdv = advertiser?.isAdvertising(d.id) == true
+            ws.sendStates(listOf("${instanceId}_advertising" to if (isAdv) "on" else "off"))
+        }
+
         val errorKeys = ConfigValidator.errorKeys(validationIssues, d.id)
         for (s in d.sensors) {
             if (!isEnabled(d.id, s.key)) continue
@@ -320,6 +338,7 @@ class BleRuntime(
     private fun stopDevice(deviceId: String) {
         deviceConnectionJobs[deviceId]?.cancel()
         deviceConnectionJobs.remove(deviceId)
+        advertiser?.stop(deviceId, AdvertiseStopReason.Shutdown)
 
         val d = devices[deviceId]
         if (d != null) {
@@ -495,6 +514,9 @@ class BleRuntime(
         when (d.source) {
             Source.advertisement -> {
                 val mac = r.macAddress ?: return
+                if (d.advertise?.stopOnResponse == true && advertiser?.isAdvertising(d.id) == true) {
+                    advertiser.stop(d.id, AdvertiseStopReason.ResponseReceived)
+                }
                 if (isDynamicAdvertisement(d)) {
                     ensureAdvertisementInstance(d, mac, r.deviceName)
                 }
@@ -587,6 +609,20 @@ class BleRuntime(
         if (event["kind"]?.jsonPrimitive?.content != "command") return
         val cmd = json.decodeFromJsonElement(CommandPayload.serializer(), event)
         val (d, c) = controls[cmd.uniqueId] ?: return
+        when (c.action) {
+            ControlAction.advertise -> {
+                when (cmd.action) {
+                    "press", "turn_on" -> startAdvertise(d)
+                    "turn_off" -> stopAdvertise(d.id)
+                }
+                return
+            }
+            ControlAction.stop_advertise -> {
+                stopAdvertise(d.id)
+                return
+            }
+            null -> {}
+        }
         val prim = cmd.value as? JsonPrimitive
         val hex = when (cmd.action) {
             "turn_on" -> c.command["on"]
@@ -646,6 +682,62 @@ class BleRuntime(
         onLinkStatus(DeviceLinkStatus(deviceId, DeviceLinkState.Disconnected, mac))
     }
 
+    private fun startAdvertise(d: DeviceConfig) {
+        val advConfig = d.advertise ?: return
+        if (ConfigValidator.hasDeviceError(validationIssues, d.id)) return
+        val seed = when (advConfig.counterMode) {
+            AdvertiseCounterMode.reset -> advConfig.counterStart and 0xFF
+            AdvertiseCounterMode.persist -> {
+                val current = advCounters[d.id]
+                if (current != null) AdvertisePayload.nextCounter(current) else (advConfig.counterStart and 0xFF)
+            }
+        }
+        val started = advertiser?.start(
+            deviceId = d.id,
+            config = advConfig,
+            counterSeed = seed,
+            onCounter = { newCounter ->
+                if (advConfig.counterMode == AdvertiseCounterMode.persist) {
+                    advCounters = advCounters + (d.id to newCounter)
+                    onAdvCounterChanged(d.id, newCounter)
+                }
+            },
+            onStopped = { _ ->
+                publishAdvertisingState(d, false)
+            },
+        ) ?: false
+        if (started) {
+            publishAdvertisingState(d, true)
+        }
+    }
+
+    private fun publishAdvertisingState(d: DeviceConfig, isAdvertising: Boolean) {
+        onAdvertisingChanged(d.id, isAdvertising)
+        val stateStr = if (isAdvertising) "on" else "off"
+        val targetInstanceIds = if (isDynamicAdvertisement(d)) {
+            declaredAdvInstances.filter {
+                it == d.id || (it.startsWith("${d.id}_") && NORMALIZED_MAC_REGEX.matches(it.substring(d.id.length + 1)))
+            }.ifEmpty { listOf(d.id) }
+        } else {
+            listOf(d.id)
+        }
+        ws.sendStates(targetInstanceIds.map { "${it}_advertising" to stateStr })
+    }
+
+    /** 게이트웨이 실행 중 특정 기기의 BLE 광고 송신을 시작. */
+    fun triggerAdvertise(deviceId: String) {
+        if (!::config.isInitialized) return
+        val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return
+        startAdvertise(d)
+    }
+
+    /** 게이트웨이 실행 중 특정 기기의 BLE 광고 송신을 중단. */
+    fun stopAdvertise(deviceId: String) {
+        advertiser?.stop(deviceId, AdvertiseStopReason.Manual)
+    }
+
+    fun isAdvertising(deviceId: String): Boolean = advertiser?.isAdvertising(deviceId) == true
+
     fun stop() {
         scanJob?.cancel()
         scanJob = null
@@ -663,6 +755,7 @@ class BleRuntime(
         }
 
         scanner.stop()
+        advertiser?.stopAll()
         discoveredAdvInstances.clear()
         publishDiscoveredAdv()
         lastSensorValues.clear()
@@ -779,4 +872,8 @@ class BleRuntime(
             val fmt = m.groupValues[1]
             if (fmt.isEmpty()) value.toInt().toString() else String.format("%$fmt", value.toInt())
         }
+
+    companion object {
+        private val NORMALIZED_MAC_REGEX = Regex("^[0-9A-F]{12}$", RegexOption.IGNORE_CASE)
+    }
 }

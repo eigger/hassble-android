@@ -13,6 +13,8 @@
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
         tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"
+        tools:targetApi="s" />
 
     <!-- BLE 스캔에는 모든 Android 버전에서 위치 권한이 필요 (Android 12+ 포함, neverForLocation 미사용) -->
     <uses-permission android:name="android.permission.BLUETOOTH"
