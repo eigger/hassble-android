@@ -145,6 +145,16 @@ class AndroidBleAdvertiser(
                 status: Int,
             ) {
                 val currentSession = sessionRef ?: return
+                if (sessions[deviceId] !== currentSession) {
+                    // Session was cancelled or replaced before start callback arrived.
+                    // Stop newly started hardware advertising set to prevent orphaned transmission.
+                    if (status == ADVERTISE_SUCCESS) {
+                        val advertiser = getBluetoothAdvertiser()
+                        runCatching { advertiser?.stopAdvertisingSet(this) }
+                    }
+                    return
+                }
+
                 if (status == ADVERTISE_SUCCESS) {
                     currentSession.advertisingSet = advertisingSet
                     currentSession.isStarted = true
@@ -273,7 +283,7 @@ class AndroidBleAdvertiser(
         session.job = null
 
         val advertiser = getBluetoothAdvertiser()
-        if (advertiser != null && (session.advertisingSet != null || session.isStarted)) {
+        if (advertiser != null) {
             runCatching { advertiser.stopAdvertisingSet(session.callback) }
         }
 
@@ -283,13 +293,7 @@ class AndroidBleAdvertiser(
             val wl = session.wakeLock
             session.wakeLock = null
             if (wl != null && wl.isHeld) {
-                // Keep wakeLock held briefly so background network flush (OkHttp WebSocket frame) can complete
-                scope.launch {
-                    delay(500)
-                    if (wl.isHeld) {
-                        runCatching { wl.release() }
-                    }
-                }
+                runCatching { wl.release() }
             }
         }
     }
