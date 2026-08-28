@@ -61,3 +61,43 @@ devices:
           offset: 23
           length: 1
           type: uint8
+
+  # 지하주차장 위치 요청 비콘 (BLE 광고 송신 및 수신 예제)
+  # UUID는 본인의 HCI 패킷 캡처에서 추출한 고유값으로 교체하세요.
+  # - id: mytown_parking
+  #   name: "마이타운 주차위치"
+  #   source: advertisement
+  #   instance_mode: shared              # 기둥 MAC이 매번 달라도 엔티티 1벌 유지
+  #   match:
+  #     manufacturer_id: 861             # 0x035D — kaml 파싱을 위해 10진수(decimal) 사용 권장
+  #     manufacturer_hex_prefix: "06<본인_16BYTE_UUID_HEX>"
+  #     manufacturer_min_length: 20
+  #   advertise:
+  #     manufacturer_id: 861
+  #     payload: "05<본인_16BYTE_UUID_HEX>40{counter:02X}"
+  #     mode: balanced                   # low_power | balanced | low_latency
+  #     tx_power: high                   # ultra_low | low | medium | high
+  #     timeout: 15s                     # 이 시간 지나면 자동 송신 중단
+  #     repeat_interval: 1s              # (선택) 이 주기로 payload 갱신 = counter 증가
+  #     stop_on_response: true           # 06 응답 수신 시 즉시 송신 중단
+  #     connectable: false
+  #     scannable: true
+  #   controls:
+  #     - key: request_location
+  #       type: button
+  #       name: "주차위치 요청"
+  #       action: advertise
+  #       icon: mdi:car-search
+  #   sensors:
+  #     - key: floor
+  #       icon: mdi:layers-outline
+  #       source_field: manufacturer_data
+  #       min_length: 18
+  #       decode: { offset: 17, length: 1, type: int8 }
+  #     - key: location
+  #       platform: text_sensor
+  #       icon: mdi:map-marker-outline
+  #       source_field: manufacturer_data
+  #       min_length: 19
+  #       decode: { offset: 18, length: 0, type: string }
+

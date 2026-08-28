@@ -358,6 +358,7 @@ private fun HomeScreen() {
     val logBufferLimit by repository.logBufferLimit.collectAsState(initial = LiveEventLogger.DEFAULT_MAX_LOGS)
     val discoveredAdv by BleGatewayService.discoveredAdvInstances.collectAsState()
     val sensorLastValues by BleGatewayService.sensorLastValues.collectAsState()
+    val advertisingDeviceIds by BleGatewayService.advertisingDeviceIds.collectAsState()
 
     LaunchedEffect(logBufferLimit) {
         LiveEventLogger.setMaxLogs(logBufferLimit)
@@ -465,6 +466,7 @@ private fun HomeScreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_CONNECT)
+            add(Manifest.permission.BLUETOOTH_ADVERTISE)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
@@ -638,6 +640,7 @@ private fun HomeScreen() {
                     discoveredAdv = discoveredAdv,
                     sensorLastValues = sensorLastValues,
                     deviceLinkStatuses = deviceLinkStatuses,
+                    advertisingDeviceIds = advertisingDeviceIds,
                     gitRepoInput = gitRepoInput,
                     gitBranchInput = gitBranchInput,
                     gitTokenInput = gitTokenInput,
@@ -685,6 +688,8 @@ private fun HomeScreen() {
                     onSetAutoConnect = { deviceId, enabled -> BleGatewayService.setAutoConnect(context, deviceId, enabled) },
                     onConnectDevice = { deviceId -> BleGatewayService.connectDevice(context, deviceId) },
                     onDisconnectDevice = { deviceId -> BleGatewayService.disconnectDevice(context, deviceId) },
+                    onTriggerAdvertise = { deviceId -> BleGatewayService.triggerAdvertise(context, deviceId) },
+                    onStopAdvertise = { deviceId -> BleGatewayService.stopAdvertise(context, deviceId) },
                 )
                 2 -> LogsTabContent(
                     isRunning = isRunning,
@@ -1414,6 +1419,7 @@ private fun SensorsTabContent(
     discoveredAdv: List<DiscoveredAdvInstance>,
     sensorLastValues: List<SensorLastValue>,
     deviceLinkStatuses: List<DeviceLinkStatus>,
+    advertisingDeviceIds: Set<String> = emptySet(),
     gitRepoInput: String,
     gitBranchInput: String,
     gitTokenInput: String,
@@ -1440,6 +1446,8 @@ private fun SensorsTabContent(
     onSetAutoConnect: (String, Boolean) -> Unit,
     onConnectDevice: (String) -> Unit = {},
     onDisconnectDevice: (String) -> Unit = {},
+    onTriggerAdvertise: (String) -> Unit = {},
+    onStopAdvertise: (String) -> Unit = {},
 ) {
     val filteredDevices = remember(loadedConfig, boundDevices, discoveredAdv, deviceSearchText) {
         val devices = loadedConfig?.devices ?: emptyList()
@@ -1687,6 +1695,9 @@ private fun SensorsTabContent(
                     onSetAutoConnect = { enabled -> onSetAutoConnect(device.id, enabled) },
                     onConnectDevice = { onConnectDevice(device.id) },
                     onDisconnectDevice = { onDisconnectDevice(device.id) },
+                    isAdvertising = device.id in advertisingDeviceIds,
+                    onTriggerAdvertise = { onTriggerAdvertise(device.id) },
+                    onStopAdvertise = { onStopAdvertise(device.id) },
                 )
             }
         }
@@ -1754,6 +1765,9 @@ private fun DeviceConfigCard(
     onSetAutoConnect: (Boolean) -> Unit,
     onConnectDevice: () -> Unit = {},
     onDisconnectDevice: () -> Unit = {},
+    isAdvertising: Boolean = false,
+    onTriggerAdvertise: () -> Unit = {},
+    onStopAdvertise: () -> Unit = {},
 ) {
     val deviceSensorKeys = remember(device.id, device.sensors) {
         device.sensors.map { "${device.id}/${it.key}" }
@@ -2194,6 +2208,45 @@ private fun DeviceConfigCard(
                     val isActive = isConnected ||
                             linkStatus?.state == DeviceLinkState.Connecting ||
                             linkStatus?.state == DeviceLinkState.Scanning
+
+                    if (isRunning && device.advertise != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Start,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (isAdvertising) {
+                                HassDangerOutlinedButton(
+                                    text = stringResource(R.string.device_advertise_stop_btn),
+                                    onClick = onStopAdvertise,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = {},
+                                    enabled = false,
+                                    border = BorderStroke(1.dp, Color.Gray),
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color.Gray,
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = stringResource(R.string.device_advertising_btn),
+                                        fontSize = 13.sp,
+                                        color = Color.Gray,
+                                    )
+                                }
+                            } else {
+                                HassAccentButton(
+                                    text = stringResource(R.string.device_advertise_btn),
+                                    onClick = onTriggerAdvertise,
+                                )
+                            }
+                        }
+                    }
 
                     if (isRunning && (device.source == Source.gatt_notify || device.source == Source.obd)) {
                         val hasMac = if (device.source == Source.gatt_notify) !device.gatt?.mac.isNullOrBlank() else !device.obd?.mac.isNullOrBlank()

@@ -1,5 +1,7 @@
 package dev.eigger.hassble.config
 
+import dev.eigger.hassble.ble.AdvertisePayload
+
 enum class ValidationLevel { WARNING, ERROR }
 
 data class ValidationIssue(
@@ -22,6 +24,11 @@ object ConfigValidator {
 
     private fun controlPath(deviceId: String, controlKey: String, field: String? = null): String {
         val base = "devices[$deviceId].controls[$controlKey]"
+        return if (field != null) "$base.$field" else base
+    }
+
+    private fun devicePath(deviceId: String, field: String? = null): String {
+        val base = "devices[$deviceId]"
         return if (field != null) "$base.$field" else base
     }
 
@@ -132,30 +139,74 @@ object ConfigValidator {
                     sensorPath(id, key, "decode"))
         }
 
+        // ── advertise 검증 ────────────────────────────────────────────────────────
+        if (device.advertise != null) {
+            val id = device.id
+            if (device.source != Source.advertisement) {
+                issues += ValidationIssue(
+                    ValidationLevel.ERROR, id, null,
+                    "'advertise' is only supported for source: advertisement",
+                    devicePath(id, "advertise")
+                )
+            }
+            val payloadErr = AdvertisePayload.validationError(device.advertise.payload)
+            if (payloadErr != null) {
+                issues += ValidationIssue(
+                    ValidationLevel.ERROR, id, null,
+                    payloadErr,
+                    devicePath(id, "advertise.payload")
+                )
+            }
+            if (device.instanceMode == AdvertisementInstanceMode.mac && device.match?.mac.isNullOrBlank()) {
+                issues += ValidationIssue(
+                    ValidationLevel.WARNING, id, null,
+                    "advertise with instance_mode: mac creates one button per discovered MAC — use instance_mode: shared",
+                    devicePath(id, "instance_mode")
+                )
+            }
+            if (device.controls.none { it.action == ControlAction.advertise }) {
+                issues += ValidationIssue(
+                    ValidationLevel.WARNING, id, null,
+                    "'advertise' block has no control with action: advertise — it can only be triggered from the app",
+                    devicePath(id, "advertise")
+                )
+            }
+        }
+
         // ── 컨트롤 검증 ────────────────────────────────────────────────────────
         for (c in device.controls) {
             val id = device.id
             val key = c.key
-            if (device.source == Source.gatt_notify && device.gatt?.writeCharUuid.isNullOrBlank())
-                issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                    "control requires write_char_uuid in gatt config — control will be skipped",
-                    controlPath(id, key, "command"))
-            if (device.source == Source.obd && device.obd?.txCharUuid.isNullOrBlank())
-                issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                    "control requires tx_char_uuid in obd config — control will be skipped",
-                    controlPath(id, key, "command"))
+            if (c.action != null) {
+                if (device.advertise == null) {
+                    issues += ValidationIssue(
+                        ValidationLevel.ERROR, id, key,
+                        "control action '${c.action}' requires an 'advertise' block on the device",
+                        controlPath(id, key, "action")
+                    )
+                }
+            } else {
+                if (device.source == Source.gatt_notify && device.gatt?.writeCharUuid.isNullOrBlank())
+                    issues += ValidationIssue(ValidationLevel.ERROR, id, key,
+                        "control requires write_char_uuid in gatt config — control will be skipped",
+                        controlPath(id, key, "command"))
+                if (device.source == Source.obd && device.obd?.txCharUuid.isNullOrBlank())
+                    issues += ValidationIssue(ValidationLevel.ERROR, id, key,
+                        "control requires tx_char_uuid in obd config — control will be skipped",
+                        controlPath(id, key, "command"))
 
-            // 컨트롤 타입별 필수 command 키 검증
-            val missingKeys = when (c.type) {
-                ControlType.switch -> listOf("on", "off").filter { it !in c.command }
-                ControlType.button -> listOf("press").filter { it !in c.command }
-                ControlType.number -> listOf("template").filter { it !in c.command }
-                ControlType.select -> c.options.filter { it !in c.command }
+                // 컨트롤 타입별 필수 command 키 검증
+                val missingKeys = when (c.type) {
+                    ControlType.switch -> listOf("on", "off").filter { it !in c.command }
+                    ControlType.button -> listOf("press").filter { it !in c.command }
+                    ControlType.number -> listOf("template").filter { it !in c.command }
+                    ControlType.select -> c.options.filter { it !in c.command }
+                }
+                if (missingKeys.isNotEmpty())
+                    issues += ValidationIssue(ValidationLevel.ERROR, id, key,
+                        "control type '${c.type}' missing command key(s): $missingKeys — control will not work",
+                        controlPath(id, key, "command"))
             }
-            if (missingKeys.isNotEmpty())
-                issues += ValidationIssue(ValidationLevel.ERROR, id, key,
-                    "control type '${c.type}' missing command key(s): $missingKeys — control will not work",
-                    controlPath(id, key, "command"))
         }
 
         return issues
@@ -178,7 +229,7 @@ object ConfigValidator {
         val oldControls = oldD.controls.associateBy { it.key }
         val newControls = newD.controls.associateBy { it.key }
         if ((oldControls.keys - newControls.keys).isNotEmpty()) return true
-        if (newControls.any { (key, c) -> oldControls[key]?.type != c.type }) return true
+        if (newControls.any { (key, c) -> oldControls[key]?.type != c.type || oldControls[key]?.action != c.action }) return true
         return false
     }
 
@@ -206,7 +257,7 @@ object ConfigValidator {
         }
         for (c in d.controls) {
             if (c.key in errKeys) continue
-            sb.append("C|${c.key}|${c.type}\n")
+            sb.append("C|${c.key}|${c.type}|${c.action}\n")
         }
         return sb.toString()
     }

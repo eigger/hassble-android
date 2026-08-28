@@ -15,12 +15,16 @@ import java.util.Calendar
 object Decoder {
 
     fun decodeStructured(bytes: ByteArray, c: DecodeConfig): Any? {
-        if (c.offset + c.length > bytes.size) return null
         if (c.type == DataType.timestamp) return decodeTimestamp(bytes, c.offset)
         if (c.type == DataType.string) {
-            val slice = bytes.copyOfRange(c.offset, c.offset + c.length)
-            return slice.map { (it.toInt() and 0xFF).toChar() }.joinToString("")
+            val end = if (c.length <= 0) bytes.size else minOf(c.offset + c.length, bytes.size)
+            if (c.offset >= end) return null
+            return bytes.copyOfRange(c.offset, end)
+                .map { (it.toInt() and 0xFF).toChar() }
+                .joinToString("")
+                .trimEnd(' ', '\u0000')
         }
+        if (c.offset + c.length > bytes.size) return null
         val slice = bytes.copyOfRange(c.offset, c.offset + c.length)
         var raw = toLong(slice, c.type, c.endian)
         c.bitmask?.let { raw = raw and it }

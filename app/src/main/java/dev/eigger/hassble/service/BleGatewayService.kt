@@ -49,6 +49,7 @@ private data class SettingsSnapshot(
     val scanMode: dev.eigger.hassble.config.BleScanModeOption,
     val autoConnectDisabled: Set<String>,
     val unfilteredScan: Boolean,
+    val advCounters: Map<String, Int> = emptyMap(),
 )
 
 class BleGatewayService : Service() {
@@ -116,6 +117,18 @@ class BleGatewayService : Service() {
         if (intent?.action == ACTION_DISCONNECT_DEVICE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             runtime?.disconnectDevice(deviceId)
+            return START_STICKY
+        }
+
+        if (intent?.action == ACTION_TRIGGER_ADVERTISE) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            runtime?.triggerAdvertise(deviceId)
+            return START_STICKY
+        }
+
+        if (intent?.action == ACTION_STOP_ADVERTISE) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            runtime?.stopAdvertise(deviceId)
             return START_STICKY
         }
 
@@ -330,12 +343,14 @@ class BleGatewayService : Service() {
                 val obdSource = dev.eigger.hassble.ble.NordicElm327Source(
                     this@BleGatewayService, onLinkStatus,
                 )
+                val advertiser = dev.eigger.hassble.ble.AndroidBleAdvertiser(this@BleGatewayService, scope)
                 runtime = BleRuntime(
                     scope,
                     ws!!,
                     scanner,
                     gattSource,
                     obdSource,
+                    advertiser = advertiser,
                     onDiscoveredAdvChanged = { _discoveredAdvInstances.value = it },
                     onSensorValuesChanged = { _sensorLastValues.value = it },
                     onLinkDataReceived = { profileId, ts ->
@@ -345,17 +360,27 @@ class BleGatewayService : Service() {
                         }
                     },
                     onLinkStatus = onLinkStatus,
+                    onAdvCounterChanged = { id, value ->
+                        scope.launch { repository.saveAdvCounter(id, value) }
+                    },
+                    onAdvertisingChanged = { id, isAdv ->
+                        val cur = _advertisingDeviceIds.value
+                        _advertisingDeviceIds.value = if (isAdv) cur + id else cur - id
+                    },
                 ).also { it.start() }
             }
 
             settingsJob = scope.launch {
                 combine(
-                    repository.boundDevices,
-                    repository.enabledSensors,
-                    repository.enabledSensorsInitialized,
-                    repository.scanMode,
-                    repository.autoConnectDisabled,
-                    LiveEventLogger.includeAdvLogsFlow,
+                    listOf(
+                        repository.boundDevices,
+                        repository.enabledSensors,
+                        repository.enabledSensorsInitialized,
+                        repository.scanMode,
+                        repository.autoConnectDisabled,
+                        LiveEventLogger.includeAdvLogsFlow,
+                        repository.advCounters,
+                    )
                 ) { args ->
                     val boundMap = args[0] as Map<*, *>
                     val enabledSensors = args[1] as Set<*>
@@ -363,6 +388,7 @@ class BleGatewayService : Service() {
                     val scanMode = args[3] as dev.eigger.hassble.config.BleScanModeOption
                     val autoConnectDisabled = args[4] as Set<*>
                     val unfilteredScan = args[5] as Boolean
+                    val advCounters = args[6] as Map<*, *>
                     val effectiveEnabled = if (!initialized) defaultEnabled else enabledSensors.filterIsInstance<String>().toSet()
                     SettingsSnapshot(
                         boundMap = boundMap.entries.associate { it.key.toString() to it.value.toString() },
@@ -370,6 +396,7 @@ class BleGatewayService : Service() {
                         scanMode = scanMode,
                         autoConnectDisabled = autoConnectDisabled.filterIsInstance<String>().toSet(),
                         unfilteredScan = unfilteredScan,
+                        advCounters = advCounters.entries.associate { it.key.toString() to ((it.value as? Number)?.toInt() ?: 0) },
                     )
                 }.collect { snapshot ->
                     runtime?.apply(
@@ -379,6 +406,7 @@ class BleGatewayService : Service() {
                         snapshot.scanMode,
                         snapshot.autoConnectDisabled,
                         snapshot.unfilteredScan,
+                        snapshot.advCounters,
                     )
                 }
             }
@@ -445,6 +473,7 @@ class BleGatewayService : Service() {
         _discoveredAdvInstances.value = emptyList()
         _sensorLastValues.value = emptyList()
         _deviceLinkStatuses.value = emptyList()
+        _advertisingDeviceIds.value = emptySet()
         _serviceError.value = null
         _usingCachedConfig.value = false
         scope.cancel()
@@ -556,7 +585,8 @@ class BleGatewayService : Service() {
         private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"
         private const val EXTRA_AUTO_CONNECT = "auto_connect"
         private const val ACTION_CONNECT_DEVICE = "dev.eigger.hassble.CONNECT_DEVICE"
-        private const val ACTION_DISCONNECT_DEVICE = "dev.eigger.hassble.DISCONNECT_DEVICE"
+        private const val ACTION_TRIGGER_ADVERTISE = "dev.eigger.hassble.TRIGGER_ADVERTISE"
+        private const val ACTION_STOP_ADVERTISE = "dev.eigger.hassble.STOP_ADVERTISE"
 
         private val _serviceConnectionState = MutableStateFlow(ConnectionState.Disconnected)
         val serviceConnectionState: StateFlow<ConnectionState> = _serviceConnectionState.asStateFlow()
@@ -575,6 +605,9 @@ class BleGatewayService : Service() {
 
         private val _deviceLinkStatuses = MutableStateFlow<List<DeviceLinkStatus>>(emptyList())
         val deviceLinkStatuses: StateFlow<List<DeviceLinkStatus>> = _deviceLinkStatuses.asStateFlow()
+
+        private val _advertisingDeviceIds = MutableStateFlow<Set<String>>(emptySet())
+        val advertisingDeviceIds: StateFlow<Set<String>> = _advertisingDeviceIds.asStateFlow()
 
         private val _serviceError = MutableStateFlow<String?>(null)
         val serviceError: StateFlow<String?> = _serviceError.asStateFlow()
@@ -625,6 +658,18 @@ class BleGatewayService : Service() {
         fun disconnectDevice(context: Context, deviceId: String) {
             context.startService(Intent(context, BleGatewayService::class.java)
                 .setAction(ACTION_DISCONNECT_DEVICE)
+                .putExtra(EXTRA_DEVICE_ID, deviceId))
+        }
+
+        fun triggerAdvertise(context: Context, deviceId: String) {
+            context.startService(Intent(context, BleGatewayService::class.java)
+                .setAction(ACTION_TRIGGER_ADVERTISE)
+                .putExtra(EXTRA_DEVICE_ID, deviceId))
+        }
+
+        fun stopAdvertise(context: Context, deviceId: String) {
+            context.startService(Intent(context, BleGatewayService::class.java)
+                .setAction(ACTION_STOP_ADVERTISE)
                 .putExtra(EXTRA_DEVICE_ID, deviceId))
         }
     }

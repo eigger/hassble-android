@@ -1,5 +1,6 @@
 package dev.eigger.hassble.ble
 
+import dev.eigger.hassble.config.AdvertiseConfig
 import dev.eigger.hassble.config.BleScanModeOption
 import dev.eigger.hassble.config.DeviceConfig
 import kotlinx.coroutines.flow.Flow
@@ -99,3 +100,25 @@ interface Elm327Source {
         }
     }
 }
+
+/** 경로 D: 광고 송신(TX). config의 hex payload를 BLE manufacturer data로 브로드캐스트. */
+interface BleAdvertiser {
+    /**
+     * [counterSeed]부터 시작해 광고를 켠다. 이미 켜져 있으면 재시작한다.
+     * timeout / repeat_interval 스케줄링은 구현체가 담당한다.
+     * [onCounter]는 counter가 바뀔 때마다(영속 저장용), [onStopped]는 어떤 이유로든
+     * 송신이 끝났을 때 호출된다.
+     */
+    fun start(
+        deviceId: String,
+        config: AdvertiseConfig,
+        counterSeed: Int,
+        onCounter: (Int) -> Unit = {},
+        onStopped: (AdvertiseStopReason) -> Unit = {},
+    )
+    fun stop(deviceId: String, reason: AdvertiseStopReason = AdvertiseStopReason.Manual)
+    fun stopAll()
+    fun isAdvertising(deviceId: String): Boolean
+}
+
+enum class AdvertiseStopReason { Manual, Timeout, ResponseReceived, Error, Shutdown }
