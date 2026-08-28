@@ -175,11 +175,16 @@ class AndroidBleAdvertiser(
                 enable: Boolean,
                 status: Int,
             ) {
+                val currentSession = sessionRef ?: return
+                if (sessions[deviceId] !== currentSession) return
                 if (!enable) {
-                    LiveEventLogger.log(
-                        LogType.TX,
-                        "BLE Advertise hardware duration ended: device=$deviceId, status=$status",
-                    )
+                    val isConnectable = config.connectable
+                    val msg = if (isConnectable) {
+                        "BLE Advertise disabled (duration ended or peer connected): device=$deviceId, status=$status"
+                    } else {
+                        "BLE Advertise hardware duration ended: device=$deviceId, status=$status"
+                    }
+                    LiveEventLogger.log(LogType.TX, msg)
                     stop(deviceId, AdvertiseStopReason.Timeout)
                 }
             }
@@ -243,8 +248,9 @@ class AndroidBleAdvertiser(
 
         try {
             // duration is in units of 10ms (1 to 65535, 0 = unlimited).
-            // Pass hardware duration to ensure the BLE controller stops advertising even if the CPU is sleeping.
-            val durationUnits = ((timeoutMs + 9) / 10).coerceIn(1, 65535).toInt()
+            // If timeout exceeds hardware limit (~655.35s), pass 0 (unlimited) and rely on the coroutine timer.
+            val rawUnits = (timeoutMs + 9) / 10
+            val durationUnits = if (rawUnits in 1..65535) rawUnits.toInt() else 0
             advertiser.startAdvertisingSet(parameters, initialData, null, null, null, durationUnits, 0, callback)
         } catch (e: Exception) {
             LiveEventLogger.log(
@@ -266,18 +272,26 @@ class AndroidBleAdvertiser(
         session.job?.cancel()
         session.job = null
 
-        session.wakeLock?.let { wl ->
-            if (wl.isHeld) {
-                runCatching { wl.release() }
-            }
-        }
-        session.wakeLock = null
-
         val advertiser = getBluetoothAdvertiser()
         if (advertiser != null && (session.advertisingSet != null || session.isStarted)) {
             runCatching { advertiser.stopAdvertisingSet(session.callback) }
         }
-        session.onStopped(reason)
+
+        try {
+            session.onStopped(reason)
+        } finally {
+            val wl = session.wakeLock
+            session.wakeLock = null
+            if (wl != null && wl.isHeld) {
+                // Keep wakeLock held briefly so background network flush (OkHttp WebSocket frame) can complete
+                scope.launch {
+                    delay(500)
+                    if (wl.isHeld) {
+                        runCatching { wl.release() }
+                    }
+                }
+            }
+        }
     }
 
     override fun stopAll() {
