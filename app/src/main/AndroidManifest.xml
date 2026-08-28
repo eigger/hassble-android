@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- BLE (Android 12+)
          neverForLocation은 의도적으로 쓰지 않음: 이 앱은 사용자가 임의의 BLE 기기를 등록하는

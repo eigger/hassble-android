@@ -13,8 +13,8 @@ android {
         applicationId = "dev.eigger.hassble"
         minSdk = 26
         targetSdk = 35
-        versionCode = 65
-        versionName = "1.3.0"
+        versionCode = 66
+        versionName = "1.3.1"
     }
 
     signingConfigs {

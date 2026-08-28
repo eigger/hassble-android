@@ -11,6 +11,7 @@ import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.config.AdvertiseConfig
@@ -38,6 +39,7 @@ class AndroidBleAdvertiser(
         val callback: AdvertisingSetCallback,
         var advertisingSet: AdvertisingSet? = null,
         var job: Job? = null,
+        var wakeLock: PowerManager.WakeLock? = null,
         var counter: Int,
         val onCounter: (Int) -> Unit,
         val onStopped: (AdvertiseStopReason) -> Unit,
@@ -168,6 +170,20 @@ class AndroidBleAdvertiser(
                 }
             }
 
+            override fun onAdvertisingEnabled(
+                advertisingSet: AdvertisingSet?,
+                enable: Boolean,
+                status: Int,
+            ) {
+                if (!enable) {
+                    LiveEventLogger.log(
+                        LogType.TX,
+                        "BLE Advertise hardware duration ended: device=$deviceId, status=$status",
+                    )
+                    stop(deviceId, AdvertiseStopReason.Timeout)
+                }
+            }
+
             override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?) {
                 LiveEventLogger.log(LogType.TX, "BLE Advertise stopped: device=$deviceId")
             }
@@ -184,8 +200,17 @@ class AndroidBleAdvertiser(
         sessions[deviceId] = session
         session.onCounter(session.counter)
 
+        val timeoutMs = parseDurationMs(config.timeout, 15_000)
+        val pm = context.getSystemService(PowerManager::class.java)
+        val wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hassble:ble_advertise_$deviceId")?.apply {
+            setReferenceCounted(false)
+        }
+        runCatching {
+            wakeLock?.acquire(timeoutMs + 2_000L)
+        }
+        session.wakeLock = wakeLock
+
         session.job = scope.launch {
-            val timeoutMs = parseDurationMs(config.timeout, 15_000)
             val repeatMs = config.repeatInterval?.let { parseDurationMs(it, 0) }?.takeIf { it > 0 }
 
             val completedNormally = withTimeoutOrNull(timeoutMs) {
@@ -217,7 +242,10 @@ class AndroidBleAdvertiser(
         }
 
         try {
-            advertiser.startAdvertisingSet(parameters, initialData, null, null, null, callback)
+            // duration is in units of 10ms (1 to 65535, 0 = unlimited).
+            // Pass hardware duration to ensure the BLE controller stops advertising even if the CPU is sleeping.
+            val durationUnits = ((timeoutMs + 9) / 10).coerceIn(1, 65535).toInt()
+            advertiser.startAdvertisingSet(parameters, initialData, null, null, null, durationUnits, 0, callback)
         } catch (e: Exception) {
             LiveEventLogger.log(
                 LogType.TX,
@@ -237,6 +265,13 @@ class AndroidBleAdvertiser(
         val session = sessions.remove(deviceId) ?: return
         session.job?.cancel()
         session.job = null
+
+        session.wakeLock?.let { wl ->
+            if (wl.isHeld) {
+                runCatching { wl.release() }
+            }
+        }
+        session.wakeLock = null
 
         val advertiser = getBluetoothAdvertiser()
         if (advertiser != null && (session.advertisingSet != null || session.isStarted)) {

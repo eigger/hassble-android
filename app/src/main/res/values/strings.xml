@@ -149,6 +149,7 @@
     <!-- Controls -->
     <string name="ha_controls">Home Assistant controls</string>
     <string name="controls_ha_only_hint">Controlled from Home Assistant (%1$s)</string>
+    <string name="controls_app_and_ha_hint">Controlled from App &amp; Home Assistant (%1$s)</string>
     <string name="control_type_switch">switch</string>
     <string name="control_type_number">number</string>
     <string name="control_type_select">select</string>
@@ -336,6 +337,7 @@
     <string name="device_connecting_btn">Connecting…</string>
     <string name="device_disconnect_btn">Disconnect</string>
     <string name="device_advertise_btn">Request</string>
+    <string name="device_advertise_btn_stopped">Request (Gateway stopped)</string>
     <string name="device_advertise_stop_btn">Stop</string>
     <string name="device_advertising_btn">Advertising…</string>
     <string name="log_advertise_no_permission">BLE advertise failed: BLUETOOTH_ADVERTISE permission not granted</string>

@@ -143,6 +143,7 @@
     <string name="bind_locked_running">기기 바인딩을 변경하려면 게이트웨이를 먼저 정지하세요.</string>
     <string name="ha_controls">Home Assistant 제어</string>
     <string name="controls_ha_only_hint">Home Assistant에서 제어 (%1$s)</string>
+    <string name="controls_app_and_ha_hint">앱 및 Home Assistant에서 제어 (%1$s)</string>
     <string name="control_type_switch">스위치</string>
     <string name="control_type_number">숫자</string>
     <string name="control_type_select">선택</string>
@@ -329,6 +330,7 @@
     <string name="device_connecting_btn">연결 중…</string>
     <string name="device_disconnect_btn">연결 해제</string>
     <string name="device_advertise_btn">요청</string>
+    <string name="device_advertise_btn_stopped">요청 (게이트웨이 정지됨)</string>
     <string name="device_advertise_stop_btn">중단</string>
     <string name="device_advertising_btn">송신 중…</string>
     <string name="log_advertise_no_permission">BLE 광고 실패: BLUETOOTH_ADVERTISE 권한이 허용되지 않았습니다</string>

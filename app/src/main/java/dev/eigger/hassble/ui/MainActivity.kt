@@ -138,6 +138,7 @@ import dev.eigger.hassble.config.ConfigTemplates
 import dev.eigger.hassble.config.ConfigTemplatesLoader
 import dev.eigger.hassble.config.ConfigMerger
 import dev.eigger.hassble.config.ConfigValidator
+import dev.eigger.hassble.config.ControlAction
 import dev.eigger.hassble.config.DeviceConfig
 import dev.eigger.hassble.config.GatewayConfig
 import dev.eigger.hassble.config.HassBleDefaults
@@ -2029,8 +2030,13 @@ private fun DeviceConfigCard(
                                 color = Color.White,
                                 fontSize = 12.sp,
                             )
+                            val hintRes = if (control.action == ControlAction.advertise || control.action == ControlAction.stop_advertise) {
+                                R.string.controls_app_and_ha_hint
+                            } else {
+                                R.string.controls_ha_only_hint
+                            }
                             Text(
-                                text = stringResource(R.string.controls_ha_only_hint, controlTypeLabel(control.type)),
+                                text = stringResource(hintRes, controlTypeLabel(control.type)),
                                 color = Color.Gray,
                                 fontSize = 10.sp,
                                 modifier = Modifier.padding(bottom = 4.dp),
@@ -2209,41 +2215,55 @@ private fun DeviceConfigCard(
                             linkStatus?.state == DeviceLinkState.Connecting ||
                             linkStatus?.state == DeviceLinkState.Scanning
 
-                    if (isRunning && device.advertise != null) {
+                    if (device.advertise != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.Start,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            if (isAdvertising) {
-                                HassDangerOutlinedButton(
-                                    text = stringResource(R.string.device_advertise_stop_btn),
-                                    onClick = onStopAdvertise,
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
+                            if (isRunning) {
+                                if (isAdvertising) {
+                                    HassDangerOutlinedButton(
+                                        text = stringResource(R.string.device_advertise_stop_btn),
+                                        onClick = onStopAdvertise,
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    OutlinedButton(
+                                        onClick = {},
+                                        enabled = false,
+                                        border = BorderStroke(1.dp, Color.Gray),
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color.Gray,
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = stringResource(R.string.device_advertising_btn),
+                                            fontSize = 13.sp,
+                                            color = Color.Gray,
+                                        )
+                                    }
+                                } else {
+                                    HassAccentButton(
+                                        text = stringResource(R.string.device_advertise_btn),
+                                        onClick = onTriggerAdvertise,
+                                    )
+                                }
+                            } else {
                                 OutlinedButton(
                                     onClick = {},
                                     enabled = false,
-                                    border = BorderStroke(1.dp, Color.Gray),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
                                 ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp,
-                                        color = Color.Gray,
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = stringResource(R.string.device_advertising_btn),
+                                        text = stringResource(R.string.device_advertise_btn_stopped),
                                         fontSize = 13.sp,
                                         color = Color.Gray,
                                     )
                                 }
-                            } else {
-                                HassAccentButton(
-                                    text = stringResource(R.string.device_advertise_btn),
-                                    onClick = onTriggerAdvertise,
-                                )
                             }
                         }
                     }
