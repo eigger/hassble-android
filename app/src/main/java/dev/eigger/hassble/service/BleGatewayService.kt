@@ -11,6 +11,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.ble.BleRuntime
+import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
 import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.ble.haRemoveModeForDevice
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
@@ -75,6 +76,7 @@ class BleGatewayService : Service() {
         _isServiceRunning.value = true
         registerNetworkCallback()
         startForeground(NOTIF_ID, buildNotification())
+        BluetoothAdapterNameGuard.resetToInitial(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

@@ -110,6 +110,13 @@ class AdvertisePayloadTest {
     }
 
     @Test
+    fun testEstimatedLegacyAdvSizeWithAptSmartKey() {
+        assertEquals(27, AdvertisePayload.estimatedLegacyAdvSize(6, "APT SmartKey"))
+        assertEquals(13, AdvertisePayload.estimatedLegacyAdvSize(6, null))
+        assertEquals(6, AdvertisePayload.maxRenderedPayloadBytes("02050064{state:02X}{counter:02X}"))
+    }
+
+    @Test
     fun testValidationErrorWithStateToken() {
         assertNull(AdvertisePayload.validationError("02050064{state:02X}{counter:02X}"))
     }

@@ -332,4 +332,58 @@ class AdvertiseConfigTest {
         val err = issues.firstOrNull { it.level == ValidationLevel.ERROR && it.message.contains("duration") }
         assertNotNull(err)
     }
+
+    @Test
+    fun testParseLocalNameYaml() {
+        val yaml = """
+        devices:
+          - id: parking_beacon
+            name: "Parking Beacon"
+            source: advertisement
+            advertise:
+              manufacturer_id: 861
+              payload: "02050064{state:02X}{counter:02X}"
+              local_name: "APT SmartKey"
+              payload_phases:
+                - state: 65
+                  duration: 200ms
+                - state: 64
+                  duration: 3s
+            controls:
+              - key: request_location
+                type: button
+                action: advertise
+        """.trimIndent()
+
+        val config = Yaml.default.decodeFromString(GatewayConfig.serializer(), yaml)
+        val adv = config.devices[0].advertise
+        assertNotNull(adv)
+        assertEquals("APT SmartKey", adv!!.localName)
+        assertEquals("APT SmartKey", adv.resolvedLocalName())
+        assertTrue(adv.includeNameInAdvertiseData())
+
+        val issues = ConfigValidator.validate(config)
+        assertTrue("Expected no ERROR issues, but got: $issues", issues.none { it.level == ValidationLevel.ERROR })
+        val warn = issues.firstOrNull { it.level == ValidationLevel.WARNING && it.message.contains("local_name resets") }
+        assertNotNull(warn)
+    }
+
+    @Test
+    fun testLocalNameTooLongForLegacyAdv() {
+        val device = DeviceConfig(
+            id = "test",
+            name = "Test",
+            source = Source.advertisement,
+            instanceMode = AdvertisementInstanceMode.shared,
+            advertise = AdvertiseConfig(
+                manufacturerId = 861,
+                payload = "020500640000",
+                localName = "THIS NAME IS WAY TOO LONG FOR BLE",
+            ),
+            controls = listOf(ControlConfig(key = "req", type = ControlType.button, action = ControlAction.advertise)),
+        )
+        val issues = ConfigValidator.validate(GatewayConfig(devices = listOf(device)))
+        val err = issues.firstOrNull { it.level == ValidationLevel.ERROR && it.message.contains("31-byte legacy BLE limit") }
+        assertNotNull(err)
+    }
 }

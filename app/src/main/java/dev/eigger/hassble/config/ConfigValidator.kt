@@ -178,14 +178,58 @@ object ConfigValidator {
                     devicePath(id, "advertise")
                 )
             }
-            if (device.advertise.includeDeviceName) {
+            val phases = device.advertise.payloadPhases
+            val localName = device.advertise.resolvedLocalName()
+            if (device.advertise.localName != null && localName == null) {
+                issues += ValidationIssue(
+                    ValidationLevel.WARNING, id, null,
+                    "local_name is empty after trim — ignored",
+                    devicePath(id, "advertise.local_name")
+                )
+            }
+            if (localName != null) {
+                val nameBytes = AdvertisePayload.localNameUtf8Size(localName)
+                if (nameBytes > AdvertisePayload.MAX_ADAPTER_NAME_UTF8) {
+                    issues += ValidationIssue(
+                        ValidationLevel.ERROR, id, null,
+                        "local_name UTF-8 size ($nameBytes bytes) exceeds Bluetooth name limit (${AdvertisePayload.MAX_ADAPTER_NAME_UTF8})",
+                        devicePath(id, "advertise.local_name")
+                    )
+                }
+                val templates = if (phases.isEmpty()) {
+                    listOf(device.advertise.payload)
+                } else {
+                    phases.map { AdvertisePayload.phaseTemplate(device.advertise.payload, it) }
+                }
+                for ((index, template) in templates.withIndex()) {
+                    val payloadBytes = AdvertisePayload.maxRenderedPayloadBytes(template) ?: continue
+                    val total = AdvertisePayload.estimatedLegacyAdvSize(payloadBytes, localName)
+                    if (total > AdvertisePayload.LEGACY_ADV_MAX) {
+                        val path = if (phases.isEmpty()) {
+                            devicePath(id, "advertise.local_name")
+                        } else {
+                            devicePath(id, "advertise.payload_phases[$index]")
+                        }
+                        issues += ValidationIssue(
+                            ValidationLevel.ERROR, id, null,
+                            "local_name '$localName' plus payload would be $total bytes, exceeding the ${AdvertisePayload.LEGACY_ADV_MAX}-byte legacy BLE limit",
+                            path
+                        )
+                    }
+                }
+                issues += ValidationIssue(
+                    ValidationLevel.WARNING, id, null,
+                    "local_name resets the phone Bluetooth name after advertising (and again on next app start if the process was killed)",
+                    devicePath(id, "advertise.local_name")
+                )
+            }
+            if (device.advertise.includeDeviceName && localName == null) {
                 issues += ValidationIssue(
                     ValidationLevel.WARNING, id, null,
                     "include_device_name: true includes device name in advertising data, which may exceed the 31-byte legacy BLE limit",
                     devicePath(id, "advertise.include_device_name")
                 )
             }
-            val phases = device.advertise.payloadPhases
             if (AdvertisePayload.hasStateToken(device.advertise.payload) && phases.isEmpty()) {
                 issues += ValidationIssue(
                     ValidationLevel.ERROR, id, null,

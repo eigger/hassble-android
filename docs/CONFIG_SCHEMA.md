@@ -106,6 +106,8 @@ devices: [ ... ]                    # 아래 참조
     stop_on_response: true           # 이 프로필 광고(match)를 수신하면 즉시 송신 중단
     connectable: false
     scannable: true
+    # local_name: "APT SmartKey"     # Complete Local Name. 송신 중 이 이름으로 바꾸고, 종료·재시작 때 초기값으로 되돌림
+    # include_device_name: false     # local_name이 있으면 자동으로 이름 AD를 포함
   controls:
     - key: request_location
       type: button
@@ -128,7 +130,8 @@ devices: [ ... ]                    # 아래 참조
 | `stop_on_response` | | `true` | 이 프로필의 `match` 조건을 만족하는 광고 패킷 수신 시 즉시 광고 송신 중단 |
 | `connectable` | | `false` | BLE 연결 가능 여부 |
 | `scannable` | | `true` | Scannable 광고 여부 |
-| `include_device_name` | | `false` | 광고 패킷에 기기 이름 포함 여부 (31바이트 예산 절약을 위해 기본 false) |
+| `include_device_name` | | `false` | 광고 패킷에 현재 폰 Bluetooth 이름 포함. `local_name`이 있으면 자동으로 포함되므로 따로 켤 필요 없음 |
+| `local_name` | | `null` | Complete Local Name (예: `APT SmartKey`). Android는 광고에 임의 이름을 넣는 API가 없어, 송신 중에 폰 Bluetooth 이름을 이 값으로 바꾼다. 바꾸기 전 이름을 디스크에 초기값으로 남기고, 송신 종료나 앱 재시작(강제종료 포함) 때 그 값으로 초기화한다. 31바이트 legacy 한도를 넘으면 오류 |
 
 > **알림:** `advertise` 블록이 설정된 기기는 HA에 `{id}_advertising` 진단 바이너리 센서(`binary_sensor`)가 자동으로 생성되어 현재 광고 송신 진행 여부를 보고합니다.
 
