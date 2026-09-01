@@ -97,7 +97,12 @@ devices: [ ... ]                    # 아래 참조
     mode: balanced                   # low_power | balanced | low_latency
     tx_power: high                   # ultra_low | low | medium | high
     timeout: 15s                     # 이 시간 지나면 자동 송신 중단
-    repeat_interval: 1s              # (선택) 이 주기로 payload 갱신 = counter 증가
+    repeat_interval: 1s              # (선택) 이 주기로 payload 갱신 = counter 증가. payload_phases가 있으면 무시
+    # payload_phases:                # (선택) 같은 카운터로 {state}만 바꿔 가며 송신. 마지막 단계 후 중단
+    #   - state: 65                  # 0x41 — kaml hex 리터럴은 불안정하므로 10진수
+    #     duration: 200ms
+    #   - state: 64                  # 0x40
+    #     duration: 3s
     stop_on_response: true           # 이 프로필 광고(match)를 수신하면 즉시 송신 중단
     connectable: false
     scannable: true
@@ -112,13 +117,14 @@ devices: [ ... ]                    # 아래 참조
 | 필드 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `manufacturer_id` | ✅ | | BLE Company Identifier (10진수). 예: 861 (=0x035D) |
-| `payload` | ✅ | | Manufacturer Data payload hex (Company ID 2바이트 제외). `{counter}` (10진수), `{counter:02X}` (2자리 hex) 토큰 사용 가능. Legacy 광고 제한으로 최대 24바이트 |
-| `counter_mode` | | `reset` | 카운터 동작 방식: `reset` (버튼 누를 때마다 `counter_start`부터 시작, 버스트 내에서만 증가, DataStore 미사용) \| `persist` (앱 재시작 후에도 DataStore에 누적 저장되어 이어짐) |
+| `payload` | ✅ | | Manufacturer Data payload hex (Company ID 2바이트 제외). `{counter}` / `{counter:02X}`, `{state}` / `{state:02X}` 토큰 사용 가능. Legacy 광고 제한으로 최대 24바이트 |
+| `counter_mode` | | `reset` | 카운터 동작 방식: `reset` (버튼 누를 때마다 `counter_start`부터 시작, DataStore 미사용) \| `persist` (앱 재시작 후에도 DataStore에 누적 저장되어 이어짐). 0xFF 다음은 0 |
 | `counter_start` | | `0` | 카운터 시작값 (0~255). `reset` 모드 시 매 요청 시작값, `persist` 모드 시 최초 영속 전 초기 시드값 |
 | `mode` | | `balanced` | 광고 주기: `low_power` (~1s) \| `balanced` (~250ms) \| `low_latency` (~100ms) |
 | `tx_power` | | `high` | 송신 출력: `ultra_low` \| `low` \| `medium` \| `high` |
-| `timeout` | | `15s` | 광고 송신 최대 지속 시간 (지나면 자동 중단) |
-| `repeat_interval` | | `null` | 지정 시 해당 주기마다 counter를 증가시키며 payload 갱신 (생략 시 1회 세팅 후 대기) |
+| `timeout` | | `15s` | 광고 송신 최대 지속 시간 (지나면 자동 중단). `payload_phases`가 있으면 전체 상한 |
+| `repeat_interval` | | `null` | 지정 시 해당 주기마다 counter를 증가시키며 payload 갱신 (생략 시 1회 세팅 후 대기). `payload_phases`가 있으면 무시 |
+| `payload_phases` | | `[]` | 같은 카운터로 `{state}`/payload만 바꿔 가며 송신. 마지막 단계 duration이 끝나면 중단. 각 항목: `state`(0~255, 10진수), `duration`, 선택 `payload` |
 | `stop_on_response` | | `true` | 이 프로필의 `match` 조건을 만족하는 광고 패킷 수신 시 즉시 광고 송신 중단 |
 | `connectable` | | `false` | BLE 연결 가능 여부 |
 | `scannable` | | `true` | Scannable 광고 여부 |

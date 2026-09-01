@@ -185,6 +185,64 @@ object ConfigValidator {
                     devicePath(id, "advertise.include_device_name")
                 )
             }
+            val phases = device.advertise.payloadPhases
+            if (AdvertisePayload.hasStateToken(device.advertise.payload) && phases.isEmpty()) {
+                issues += ValidationIssue(
+                    ValidationLevel.ERROR, id, null,
+                    "payload contains {state} but advertise.payload_phases is empty",
+                    devicePath(id, "advertise.payload")
+                )
+            }
+            if (phases.isNotEmpty() && !device.advertise.repeatInterval.isNullOrBlank()) {
+                issues += ValidationIssue(
+                    ValidationLevel.WARNING, id, null,
+                    "repeat_interval is ignored when payload_phases is set — counter stays fixed across phases",
+                    devicePath(id, "advertise.repeat_interval")
+                )
+            }
+            for ((index, phase) in phases.withIndex()) {
+                val phasePath = devicePath(id, "advertise.payload_phases[$index]")
+                if (parseDurationMs(phase.duration, 0) <= 0) {
+                    issues += ValidationIssue(
+                        ValidationLevel.ERROR, id, null,
+                        "payload_phases[$index].duration '${phase.duration}' must be a positive duration",
+                        "$phasePath.duration"
+                    )
+                }
+                if (phase.state != null && phase.state !in 0..255) {
+                    issues += ValidationIssue(
+                        ValidationLevel.ERROR, id, null,
+                        "payload_phases[$index].state must be between 0 and 255 (got ${phase.state})",
+                        "$phasePath.state"
+                    )
+                }
+                val template = AdvertisePayload.phaseTemplate(device.advertise.payload, phase)
+                if (AdvertisePayload.hasStateToken(template) && phase.state == null) {
+                    issues += ValidationIssue(
+                        ValidationLevel.ERROR, id, null,
+                        "payload_phases[$index] has a {state} token but no state value",
+                        "$phasePath.state"
+                    )
+                }
+                if (phase.state != null && !AdvertisePayload.hasStateToken(template)) {
+                    issues += ValidationIssue(
+                        ValidationLevel.WARNING, id, null,
+                        "payload_phases[$index].state is set but payload has no {state} token",
+                        "$phasePath.state"
+                    )
+                }
+                val phasePayloadErr = AdvertisePayload.validationError(
+                    template,
+                    states = listOf(phase.state ?: 0, 255),
+                )
+                if (phasePayloadErr != null) {
+                    issues += ValidationIssue(
+                        ValidationLevel.ERROR, id, null,
+                        "payload_phases[$index]: $phasePayloadErr",
+                        phasePath
+                    )
+                }
+            }
         }
 
         // ── 컨트롤 검증 ────────────────────────────────────────────────────────

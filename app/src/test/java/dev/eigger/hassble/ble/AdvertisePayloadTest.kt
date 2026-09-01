@@ -1,9 +1,12 @@
 package dev.eigger.hassble.ble
 
+import dev.eigger.hassble.config.AdvertisePayloadPhase
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AdvertisePayloadTest {
@@ -81,5 +84,33 @@ class AdvertisePayloadTest {
         // "05{counter}" when counter=0 gives "050" (odd length -> invalid hex)
         val invalidDecimal = "05{counter}"
         assertNotNull(AdvertisePayload.validationError(invalidDecimal))
+    }
+
+    @Test
+    fun testRenderStateTokenHexFormat() {
+        val template = "02050064{state:02X}{counter:02X}"
+        assertEquals("020500644100", AdvertisePayload.render(template, 0, 0x41))
+        assertEquals("020500644004", AdvertisePayload.render(template, 4, 0x40))
+        assertEquals("02050064FF0A", AdvertisePayload.render(template, 10, 255))
+    }
+
+    @Test
+    fun testRenderPhaseKeepsCounter() {
+        val base = "02050064{state:02X}{counter:02X}"
+        val press = AdvertisePayloadPhase(state = 0x41, duration = "200ms")
+        val hold = AdvertisePayloadPhase(state = 0x40, duration = "3s")
+        assertEquals("020500644104", AdvertisePayload.renderPhase(base, 4, press))
+        assertEquals("020500644004", AdvertisePayload.renderPhase(base, 4, hold))
+    }
+
+    @Test
+    fun testHasStateToken() {
+        assertTrue(AdvertisePayload.hasStateToken("02050064{state:02X}{counter:02X}"))
+        assertFalse(AdvertisePayload.hasStateToken("0205006441{counter:02X}"))
+    }
+
+    @Test
+    fun testValidationErrorWithStateToken() {
+        assertNull(AdvertisePayload.validationError("02050064{state:02X}{counter:02X}"))
     }
 }

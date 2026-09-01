@@ -80,7 +80,7 @@ devices:
   #     mode: balanced                   # low_power | balanced | low_latency
   #     tx_power: high                   # ultra_low | low | medium | high
   #     timeout: 15s                     # 이 시간 지나면 자동 송신 중단
-  #     repeat_interval: 1s              # (선택) 이 주기로 payload 갱신 = counter 증가
+  #     repeat_interval: 1s              # (선택) 이 주기로 payload 갱신 = counter 증가. payload_phases가 있으면 무시
   #     stop_on_response: true           # 06 응답 수신 시 즉시 송신 중단
   #     connectable: false
   #     scannable: true
