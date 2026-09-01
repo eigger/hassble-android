@@ -243,6 +243,12 @@ class AndroidBleAdvertiser(
             val completedNormally = withTimeoutOrNull(timeoutMs) {
                 when {
                     phases.isNotEmpty() -> {
+                        while (sessions[deviceId] === session && isActive && !session.isStarted) {
+                            delay(20)
+                        }
+                        if (sessions[deviceId] !== session || !session.isStarted) {
+                            return@withTimeoutOrNull true
+                        }
                         for ((index, phase) in phases.withIndex()) {
                             if (sessions[deviceId] !== session) return@withTimeoutOrNull true
                             if (index > 0) {
@@ -332,6 +338,14 @@ class AndroidBleAdvertiser(
 
     private fun updateAdvertisingData(session: Session, deviceId: String, phase: AdvertisePayloadPhase?) {
         val updatedData = buildAdvertiseData(session.config, session.counter, phase) ?: return
+        val advertisingSet = session.advertisingSet
+        if (advertisingSet == null) {
+            LiveEventLogger.log(
+                LogType.TX,
+                "BLE Advertise update skipped: device=$deviceId, advertising set not ready",
+            )
+            return
+        }
         val hex = AdvertisePayload.renderPhase(session.config.payload, session.counter, phase)
         val stateNote = phase?.state?.let { ", state=$it" } ?: ""
         LiveEventLogger.log(
@@ -339,7 +353,7 @@ class AndroidBleAdvertiser(
             "BLE Advertise updated: device=$deviceId, counter=${session.counter}$stateNote, hex=$hex",
         )
         runCatching {
-            session.advertisingSet?.setAdvertisingData(updatedData)
+            advertisingSet.setAdvertisingData(updatedData)
         }
     }
 
