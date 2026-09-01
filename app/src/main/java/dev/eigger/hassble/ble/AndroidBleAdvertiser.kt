@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.config.AdvertiseConfig
 import dev.eigger.hassble.config.AdvertiseModeOption
+import dev.eigger.hassble.config.AdvertisePayloadPhase
 import dev.eigger.hassble.config.AdvertiseTxPowerOption
 import dev.eigger.hassble.config.parseDurationMs
 import dev.eigger.hassble.service.LiveEventLogger
@@ -110,7 +111,9 @@ class AndroidBleAdvertiser(
             return false
         }
 
-        val initialData = buildAdvertiseData(config, counterSeed)
+        val phases = config.payloadPhases
+        val initialPhase = phases.firstOrNull()
+        val initialData = buildAdvertiseData(config, counterSeed, initialPhase)
         if (initialData == null) {
             LiveEventLogger.log(
                 LogType.TX,
@@ -163,7 +166,7 @@ class AndroidBleAdvertiser(
                 if (status == ADVERTISE_SUCCESS) {
                     currentSession.advertisingSet = advertisingSet
                     currentSession.isStarted = true
-                    val hex = AdvertisePayload.render(config.payload, currentSession.counter)
+                    val hex = AdvertisePayload.renderPhase(config.payload, currentSession.counter, initialPhase)
                     LiveEventLogger.log(
                         LogType.TX,
                         "BLE Advertise started: device=$deviceId, txPower=$txPower, hex=$hex",
@@ -231,32 +234,44 @@ class AndroidBleAdvertiser(
         session.wakeLock = wakeLock
 
         session.job = scope.launch {
-            val repeatMs = config.repeatInterval?.let { parseDurationMs(it, 0) }?.takeIf { it > 0 }
+            val repeatMs = if (phases.isEmpty()) {
+                config.repeatInterval?.let { parseDurationMs(it, 0) }?.takeIf { it > 0 }
+            } else {
+                null
+            }
 
             val completedNormally = withTimeoutOrNull(timeoutMs) {
-                if (repeatMs != null) {
-                    while (isActive) {
-                        delay(repeatMs)
-                        if (sessions[deviceId] !== session) return@withTimeoutOrNull true
-                        session.counter = AdvertisePayload.nextCounter(session.counter)
-                        session.onCounter(session.counter)
-                        val updatedData = buildAdvertiseData(config, session.counter)
-                        if (updatedData != null) {
-                            val hex = AdvertisePayload.render(config.payload, session.counter)
-                            LiveEventLogger.log(
-                                LogType.TX,
-                                "BLE Advertise updated: device=$deviceId, counter=${session.counter}, hex=$hex",
-                            )
-                            runCatching {
-                                session.advertisingSet?.setAdvertisingData(updatedData)
+                when {
+                    phases.isNotEmpty() -> {
+                        while (sessions[deviceId] === session && isActive && !session.isStarted) {
+                            delay(20)
+                        }
+                        if (sessions[deviceId] !== session || !session.isStarted) {
+                            return@withTimeoutOrNull true
+                        }
+                        for ((index, phase) in phases.withIndex()) {
+                            if (sessions[deviceId] !== session) return@withTimeoutOrNull true
+                            if (index > 0) {
+                                updateAdvertisingData(session, deviceId, phase)
                             }
+                            val phaseMs = parseDurationMs(phase.duration, 0).takeIf { it > 0 } ?: continue
+                            delay(phaseMs)
                         }
                     }
-                } else {
-                    awaitCancellation()
+                    repeatMs != null -> {
+                        while (isActive) {
+                            delay(repeatMs)
+                            if (sessions[deviceId] !== session) return@withTimeoutOrNull true
+                            session.counter = AdvertisePayload.nextCounter(session.counter)
+                            session.onCounter(session.counter)
+                            updateAdvertisingData(session, deviceId, phase = null)
+                        }
+                    }
+                    else -> awaitCancellation()
                 }
             }
-            if (completedNormally == null) {
+            if (sessions[deviceId] !== session) return@launch
+            if (completedNormally == null || phases.isNotEmpty()) {
                 stop(deviceId, AdvertiseStopReason.Timeout)
             }
         }
@@ -321,8 +336,34 @@ class AndroidBleAdvertiser(
         return sessions.containsKey(deviceId)
     }
 
-    private fun buildAdvertiseData(config: AdvertiseConfig, counter: Int): AdvertiseData? {
-        val renderedHex = AdvertisePayload.render(config.payload, counter)
+    @SuppressLint("MissingPermission")
+    private fun updateAdvertisingData(session: Session, deviceId: String, phase: AdvertisePayloadPhase?) {
+        val updatedData = buildAdvertiseData(session.config, session.counter, phase) ?: return
+        val advertisingSet = session.advertisingSet
+        if (advertisingSet == null) {
+            LiveEventLogger.log(
+                LogType.TX,
+                "BLE Advertise update skipped: device=$deviceId, advertising set not ready",
+            )
+            return
+        }
+        val hex = AdvertisePayload.renderPhase(session.config.payload, session.counter, phase)
+        val stateNote = phase?.state?.let { ", state=$it" } ?: ""
+        LiveEventLogger.log(
+            LogType.TX,
+            "BLE Advertise updated: device=$deviceId, counter=${session.counter}$stateNote, hex=$hex",
+        )
+        runCatching {
+            advertisingSet.setAdvertisingData(updatedData)
+        }
+    }
+
+    private fun buildAdvertiseData(
+        config: AdvertiseConfig,
+        counter: Int,
+        phase: AdvertisePayloadPhase? = null,
+    ): AdvertiseData? {
+        val renderedHex = AdvertisePayload.renderPhase(config.payload, counter, phase)
         val bytes = AdvertisePayload.toBytes(renderedHex) ?: return null
         return AdvertiseData.Builder()
             .addManufacturerData(config.manufacturerId, bytes)

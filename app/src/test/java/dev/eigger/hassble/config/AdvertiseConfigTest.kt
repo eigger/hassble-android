@@ -235,4 +235,101 @@ class AdvertiseConfigTest {
         val warn = issues.firstOrNull { it.level == ValidationLevel.WARNING && it.message.contains("include_device_name: true") }
         assertNotNull(warn)
     }
+
+    @Test
+    fun testParsePayloadPhasesYaml() {
+        val yaml = """
+        devices:
+          - id: parking_beacon
+            name: "Parking Beacon"
+            source: advertisement
+            advertise:
+              manufacturer_id: 861
+              payload: "02050064{state:02X}{counter:02X}"
+              counter_mode: persist
+              payload_phases:
+                - state: 65
+                  duration: 200ms
+                - state: 64
+                  duration: 3s
+            controls:
+              - key: request_location
+                type: button
+                action: advertise
+        """.trimIndent()
+
+        val config = Yaml.default.decodeFromString(GatewayConfig.serializer(), yaml)
+        val adv = config.devices[0].advertise
+        assertNotNull(adv)
+        assertEquals(AdvertiseCounterMode.persist, adv!!.counterMode)
+        assertEquals(2, adv.payloadPhases.size)
+        assertEquals(65, adv.payloadPhases[0].state)
+        assertEquals("200ms", adv.payloadPhases[0].duration)
+        assertEquals(64, adv.payloadPhases[1].state)
+        assertEquals("3s", adv.payloadPhases[1].duration)
+
+        val issues = ConfigValidator.validate(config)
+        assertTrue("Expected no ERROR issues, but got: $issues", issues.none { it.level == ValidationLevel.ERROR })
+    }
+
+    @Test
+    fun testStateTokenWithoutPhasesIsError() {
+        val device = DeviceConfig(
+            id = "test",
+            name = "Test",
+            source = Source.advertisement,
+            instanceMode = AdvertisementInstanceMode.shared,
+            advertise = AdvertiseConfig(
+                manufacturerId = 861,
+                payload = "02050064{state:02X}{counter:02X}",
+            ),
+            controls = listOf(ControlConfig(key = "req", type = ControlType.button, action = ControlAction.advertise)),
+        )
+        val issues = ConfigValidator.validate(GatewayConfig(devices = listOf(device)))
+        val err = issues.firstOrNull { it.level == ValidationLevel.ERROR && it.message.contains("{state}") }
+        assertNotNull(err)
+    }
+
+    @Test
+    fun testPayloadPhasesIgnoresRepeatInterval() {
+        val device = DeviceConfig(
+            id = "test",
+            name = "Test",
+            source = Source.advertisement,
+            instanceMode = AdvertisementInstanceMode.shared,
+            advertise = AdvertiseConfig(
+                manufacturerId = 861,
+                payload = "02050064{state:02X}{counter:02X}",
+                repeatInterval = "1s",
+                payloadPhases = listOf(
+                    AdvertisePayloadPhase(state = 65, duration = "200ms"),
+                    AdvertisePayloadPhase(state = 64, duration = "3s"),
+                ),
+            ),
+            controls = listOf(ControlConfig(key = "req", type = ControlType.button, action = ControlAction.advertise)),
+        )
+        val issues = ConfigValidator.validate(GatewayConfig(devices = listOf(device)))
+        assertTrue(issues.none { it.level == ValidationLevel.ERROR })
+        val warn = issues.firstOrNull { it.level == ValidationLevel.WARNING && it.message.contains("repeat_interval is ignored") }
+        assertNotNull(warn)
+    }
+
+    @Test
+    fun testPayloadPhaseInvalidDuration() {
+        val device = DeviceConfig(
+            id = "test",
+            name = "Test",
+            source = Source.advertisement,
+            instanceMode = AdvertisementInstanceMode.shared,
+            advertise = AdvertiseConfig(
+                manufacturerId = 861,
+                payload = "02050064{state:02X}{counter:02X}",
+                payloadPhases = listOf(AdvertisePayloadPhase(state = 65, duration = "nope")),
+            ),
+            controls = listOf(ControlConfig(key = "req", type = ControlType.button, action = ControlAction.advertise)),
+        )
+        val issues = ConfigValidator.validate(GatewayConfig(devices = listOf(device)))
+        val err = issues.firstOrNull { it.level == ValidationLevel.ERROR && it.message.contains("duration") }
+        assertNotNull(err)
+    }
 }

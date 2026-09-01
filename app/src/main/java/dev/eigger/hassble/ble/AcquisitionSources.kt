@@ -105,7 +105,7 @@ interface Elm327Source {
 interface BleAdvertiser {
     /**
      * [counterSeed]부터 시작해 광고를 켠다. 이미 켜져 있으면 재시작한다.
-     * timeout / repeat_interval 스케줄링은 구현체가 담당한다.
+     * timeout / repeat_interval / payload_phases 스케줄링은 구현체가 담당한다.
      * [onCounter]는 counter가 바뀔 때마다(영속 저장용), [onStopped]는 어떤 이유로든
      * 송신이 끝났을 때 호출된다.
      */

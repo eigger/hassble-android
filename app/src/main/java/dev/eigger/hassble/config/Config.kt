@@ -147,7 +147,8 @@ enum class AdvertiseCounterMode { reset, persist }
 
 /**
  * 광고 송신(TX) 설정. advertisement 소스 전용.
- * payload는 manufacturer payload(company ID 제외) hex이며 {counter} / {counter:02X} 토큰을 쓸 수 있다.
+ * payload는 manufacturer payload(company ID 제외) hex이며
+ * {counter} / {counter:02X}, {state} / {state:02X} 토큰을 쓸 수 있다.
  */
 @Serializable
 data class AdvertiseConfig(
@@ -158,13 +159,29 @@ data class AdvertiseConfig(
     val mode: AdvertiseModeOption = AdvertiseModeOption.balanced,
     @SerialName("tx_power") val txPower: AdvertiseTxPowerOption = AdvertiseTxPowerOption.high,
     val timeout: String = "15s",
-    /** 지정하면 이 주기마다 payload를 갱신(=counter 증가). 생략하면 누름당 1회만 세팅. */
+    /** 지정하면 이 주기마다 payload를 갱신(=counter 증가). 생략하면 누름당 1회만 세팅. payload_phases가 있으면 무시. */
     @SerialName("repeat_interval") val repeatInterval: String? = null,
+    /**
+     * 같은 카운터로 payload/{state}만 바꿔 가며 송신. 마지막 단계가 끝나면 중단.
+     * timeout은 전체 최대 시간(페이즈 합보다 짧으면 timeout이 이김).
+     */
+    @SerialName("payload_phases") val payloadPhases: List<AdvertisePayloadPhase> = emptyList(),
     /** 이 device의 match에 걸리는 광고를 수신하면 즉시 송신 중단. */
     @SerialName("stop_on_response") val stopOnResponse: Boolean = true,
     val connectable: Boolean = false,
     val scannable: Boolean = true,
     @SerialName("include_device_name") val includeDeviceName: Boolean = false,
+)
+
+/** advertise.payload_phases 한 단계. 카운터는 올리지 않고 state/payload만 바꾼다. */
+@Serializable
+data class AdvertisePayloadPhase(
+    /** 0~255. payload 템플릿의 {state}/{state:02X}에 들어간다. kaml hex 리터럴은 불안정하므로 10진수 권장(0x41 → 65). */
+    val state: Int? = null,
+    /** 이 단계를 유지할 시간. 끝나면 다음 단계로 넘어가거나 송신을 중단한다. */
+    val duration: String,
+    /** 지정하면 기기 payload 대신 이 hex를 쓴다. {counter}/{state} 토큰 사용 가능. */
+    val payload: String? = null,
 )
 
 enum class AdvertiseModeOption { low_power, balanced, low_latency }
