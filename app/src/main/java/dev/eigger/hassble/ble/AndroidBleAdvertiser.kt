@@ -54,6 +54,10 @@ class AndroidBleAdvertiser(
 
     private val sessions = ConcurrentHashMap<String, Session>()
 
+    init {
+        BluetoothAdapterNameGuard.resetToInitial(context)
+    }
+
     private fun hasAdvertisePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
@@ -68,11 +72,35 @@ class AndroidBleAdvertiser(
         }
     }
 
+    private fun hasConnectPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT,
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_ADMIN,
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun bluetoothAdapter() = context.getSystemService(BluetoothManager::class.java)?.adapter
+
     private fun getBluetoothAdvertiser(): BluetoothLeAdvertiser? {
-        val manager = context.getSystemService(BluetoothManager::class.java) ?: return null
-        val adapter = manager.adapter ?: return null
+        val adapter = bluetoothAdapter() ?: return null
         if (!adapter.isEnabled) return null
         return adapter.bluetoothLeAdvertiser
+    }
+
+    private fun syncAdapterLocalName(): Boolean {
+        val desired = sessions.values.firstNotNullOfOrNull { it.config.resolvedLocalName() }
+        return if (desired != null) {
+            BluetoothAdapterNameGuard.applyOverride(context, desired)
+        } else {
+            BluetoothAdapterNameGuard.resetToInitial(context, force = true)
+        }
     }
 
     // Permission check has already been performed in hasAdvertisePermission() before calling
@@ -113,8 +141,7 @@ class AndroidBleAdvertiser(
 
         val phases = config.payloadPhases
         val initialPhase = phases.firstOrNull()
-        val initialData = buildAdvertiseData(config, counterSeed, initialPhase)
-        if (initialData == null) {
+        if (AdvertisePayload.toBytes(AdvertisePayload.renderPhase(config.payload, counterSeed, initialPhase)) == null) {
             LiveEventLogger.log(
                 LogType.TX,
                 "BLE Advertise failed: invalid payload template '${config.payload}' (device=$deviceId)",
@@ -167,9 +194,10 @@ class AndroidBleAdvertiser(
                     currentSession.advertisingSet = advertisingSet
                     currentSession.isStarted = true
                     val hex = AdvertisePayload.renderPhase(config.payload, currentSession.counter, initialPhase)
+                    val nameNote = config.resolvedLocalName()?.let { ", name='$it'" } ?: ""
                     LiveEventLogger.log(
                         LogType.TX,
-                        "BLE Advertise started: device=$deviceId, txPower=$txPower, hex=$hex",
+                        "BLE Advertise started: device=$deviceId, txPower=$txPower, hex=$hex$nameNote",
                     )
                 } else {
                     val statusText = when (status) {
@@ -222,6 +250,33 @@ class AndroidBleAdvertiser(
         sessionRef = session
         sessions[deviceId] = session
         session.onCounter(session.counter)
+
+        val localName = config.resolvedLocalName()
+        if (localName != null && !syncAdapterLocalName()) {
+            val reason = when {
+                !hasConnectPermission() -> context.getString(R.string.log_advertise_name_no_permission)
+                else -> "BluetoothAdapter.setName('$localName') failed"
+            }
+            LiveEventLogger.log(LogType.TX, "$reason (device=$deviceId)")
+            stop(deviceId, AdvertiseStopReason.Error)
+            return false
+        }
+        if (localName != null) {
+            LiveEventLogger.log(
+                LogType.TX,
+                "BLE Advertise local name: device=$deviceId, name='$localName'",
+            )
+        }
+
+        val initialData = buildAdvertiseData(config, counterSeed, initialPhase)
+        if (initialData == null) {
+            LiveEventLogger.log(
+                LogType.TX,
+                "BLE Advertise failed: invalid payload template '${config.payload}' (device=$deviceId)",
+            )
+            stop(deviceId, AdvertiseStopReason.Error)
+            return false
+        }
 
         val timeoutMs = parseDurationMs(config.timeout, 15_000)
         val pm = context.getSystemService(PowerManager::class.java)
@@ -311,6 +366,9 @@ class AndroidBleAdvertiser(
         try {
             session.onStopped(reason)
         } finally {
+            if (session.config.resolvedLocalName() != null) {
+                syncAdapterLocalName()
+            }
             val wl = session.wakeLock
             session.wakeLock = null
             if (wl != null && wl.isHeld) {
@@ -367,7 +425,7 @@ class AndroidBleAdvertiser(
         val bytes = AdvertisePayload.toBytes(renderedHex) ?: return null
         return AdvertiseData.Builder()
             .addManufacturerData(config.manufacturerId, bytes)
-            .setIncludeDeviceName(config.includeDeviceName)
+            .setIncludeDeviceName(config.includeNameInAdvertiseData())
             .setIncludeTxPowerLevel(false)
             .build()
     }

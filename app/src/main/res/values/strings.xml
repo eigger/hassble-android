@@ -341,6 +341,7 @@
     <string name="device_advertise_stop_btn">Stop</string>
     <string name="device_advertising_btn">Advertising…</string>
     <string name="log_advertise_no_permission">BLE advertise failed: BLUETOOTH_ADVERTISE permission not granted</string>
+    <string name="log_advertise_name_no_permission">BLE advertise failed: cannot set local_name without BLUETOOTH_CONNECT</string>
     <string name="log_advertise_unsupported">BLE advertise not supported on this device</string>
     <string name="github_error_401">Unauthorized: GitHub Token is invalid or missing permission.</string>
     <string name="github_error_404">Not Found: Repository or branch not found. Check repository path.</string>

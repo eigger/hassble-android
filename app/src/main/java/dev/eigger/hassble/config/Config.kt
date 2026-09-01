@@ -171,7 +171,17 @@ data class AdvertiseConfig(
     val connectable: Boolean = false,
     val scannable: Boolean = true,
     @SerialName("include_device_name") val includeDeviceName: Boolean = false,
-)
+    /**
+     * Complete Local Name. Android는 광고에 임의 이름을 넣는 API가 없어
+     * 송신 중에 폰 Bluetooth 이름을 이 값으로 바꾼다.
+     * 바꾸기 전 이름을 디스크에 초기값으로 남기고, 송신 종료·앱 재시작 때 그 값으로 초기화한다.
+     */
+    @SerialName("local_name") val localName: String? = null,
+) {
+    fun resolvedLocalName(): String? = localName?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun includeNameInAdvertiseData(): Boolean = includeDeviceName || resolvedLocalName() != null
+}
 
 /** advertise.payload_phases 한 단계. 카운터는 올리지 않고 state/payload만 바꾼다. */
 @Serializable

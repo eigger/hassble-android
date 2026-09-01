@@ -149,6 +149,7 @@ import dev.eigger.hassble.config.ValidationLevel
 import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
+import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
 import dev.eigger.hassble.ble.haRemoveModeForDevice
 import dev.eigger.hassble.net.ConnectionIssue
 import dev.eigger.hassble.net.ConnectionState
@@ -171,6 +172,7 @@ import androidx.lifecycle.lifecycleScope
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BluetoothAdapterNameGuard.resetToInitial(this)
         handleDeepLink(intent)
         setContent {
             MaterialTheme(
@@ -482,6 +484,7 @@ private fun HomeScreen() {
 
     val launcher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestMultiplePermissions()) {
         refreshPermissions()
+        BluetoothAdapterNameGuard.resetToInitial(context)
     }
     LaunchedEffect(Unit) {
         refreshPermissions()

@@ -5,6 +5,12 @@ import dev.eigger.hassble.config.AdvertisePayloadPhase
 object AdvertisePayload {
     /** legacy 광고 31바이트 - flags AD(3) - AD 헤더(2) - company ID(2) = 24바이트 */
     const val MAX_MANUFACTURER_PAYLOAD = 24
+    const val LEGACY_ADV_MAX = 31
+    const val LEGACY_FLAGS_SIZE = 3
+    const val LEGACY_MANUFACTURER_OVERHEAD = 4
+    const val LEGACY_NAME_OVERHEAD = 2
+    /** BluetoothAdapter.setName 상한 */
+    const val MAX_ADAPTER_NAME_UTF8 = 248
 
     private val TOKEN_REGEX = Regex("""\{(counter|state)(?::([^}]+))?\}""")
 
@@ -76,5 +82,28 @@ object AdvertisePayload {
             }
         }
         return null
+    }
+
+    fun localNameUtf8Size(name: String): Int = name.encodeToByteArray().size
+
+    fun maxRenderedPayloadBytes(template: String, states: List<Int> = listOf(0, 255)): Int? {
+        var max = 0
+        for (c in listOf(0, 255)) {
+            for (s in states) {
+                val bytes = toBytes(render(template, c, s)) ?: return null
+                if (bytes.size > max) max = bytes.size
+            }
+        }
+        return max
+    }
+
+    /** Flags + manufacturer AD + optional Complete Local Name. */
+    fun estimatedLegacyAdvSize(payloadBytes: Int, localName: String?): Int {
+        var size = LEGACY_FLAGS_SIZE + LEGACY_MANUFACTURER_OVERHEAD + payloadBytes
+        val name = localName?.trim().orEmpty()
+        if (name.isNotEmpty()) {
+            size += LEGACY_NAME_OVERHEAD + localNameUtf8Size(name)
+        }
+        return size
     }
 }
