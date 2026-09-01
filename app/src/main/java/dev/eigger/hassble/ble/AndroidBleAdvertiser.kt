@@ -336,6 +336,7 @@ class AndroidBleAdvertiser(
         return sessions.containsKey(deviceId)
     }
 
+    @SuppressLint("MissingPermission")
     private fun updateAdvertisingData(session: Session, deviceId: String, phase: AdvertisePayloadPhase?) {
         val updatedData = buildAdvertiseData(session.config, session.counter, phase) ?: return
         val advertisingSet = session.advertisingSet
