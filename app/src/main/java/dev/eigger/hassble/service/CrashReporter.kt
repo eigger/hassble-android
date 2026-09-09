@@ -14,8 +14,9 @@ import kotlin.system.exitProcess
  * 앱은 실행 로그를 메모리에만 들고 있어서(LiveEventLogger) 프로세스가 죽으면 같이 사라진다.
  * 크래시 원인을 알려면 PC에 물려 logcat/dropbox를 떠야 했다.
  *
- * 그래서 마지막 크래시의 스택을 파일 하나로 남기고, 다음 기동 때 읽어서 로그 탭에 올린다.
- * 로그 탭의 저장·공유·복사 버튼으로 그대로 내보낼 수 있다.
+ * 그래서 마지막 크래시의 스택을 파일 하나로 남긴다. 파일은 사용자가 배너에서 닫기 전까지
+ * 지우지 않는다. 읽자마자 지우면 게이트웨이가 뿜는 로그에 밀려 링버퍼에서 사라진 뒤
+ * 복구할 방법이 없다.
  */
 object CrashReporter {
     private const val DIR = "crash"
@@ -41,14 +42,21 @@ object CrashReporter {
         }
     }
 
-    /** 저장된 리포트를 읽고 파일은 지운다. 없으면 null. */
-    fun consumeLast(context: Context): String? {
+    /** 저장된 리포트를 읽는다(지우지 않는다). 없으면 null. */
+    fun peekLast(context: Context): String? {
         val file = file(context.applicationContext)
         if (!file.exists()) return null
-        val text = runCatching { file.readText() }.getOrNull()
-        runCatching { file.delete() }
-        return text?.takeIf { it.isNotBlank() }
+        return runCatching { file.readText() }.getOrNull()?.takeIf { it.isNotBlank() }
     }
+
+    /** 사용자가 확인한 리포트를 지운다. */
+    fun clear(context: Context) {
+        runCatching { file(context.applicationContext).delete() }
+    }
+
+    /** 공유용 파일 이름. 언제 난 크래시인지 파일명만 봐도 알 수 있게 시각을 넣는다. */
+    fun shareFileName(): String =
+        "hassble_crash_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.txt"
 
     private fun file(context: Context): File =
         File(File(context.filesDir, DIR).apply { mkdirs() }, FILE)

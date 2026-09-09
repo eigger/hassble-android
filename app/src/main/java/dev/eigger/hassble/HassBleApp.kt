@@ -10,7 +10,6 @@ import androidx.core.content.ContextCompat
 import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
 import dev.eigger.hassble.service.CrashReporter
 import dev.eigger.hassble.service.LiveEventLogger
-import dev.eigger.hassble.service.LogType
 
 class HassBleApp : Application() {
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
@@ -26,10 +25,6 @@ class HassBleApp : Application() {
         // 다른 초기화보다 먼저 걸어야 초기화 중에 난 크래시도 잡힌다.
         CrashReporter.install(this)
         LiveEventLogger.init(this)
-        // 직전 실행이 비정상 종료됐다면 그 스택을 로그 탭 맨 앞에 올려 둔다.
-        CrashReporter.consumeLast(this)?.let { report ->
-            LiveEventLogger.logRes(LogType.LINK, R.string.log_previous_crash, report)
-        }
         BluetoothAdapterNameGuard.resetToInitial(this)
         val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
         ContextCompat.registerReceiver(

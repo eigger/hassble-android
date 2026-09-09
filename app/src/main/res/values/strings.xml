@@ -173,6 +173,10 @@
     <string name="logs_clear_confirm_title">Clear all logs?</string>
     <string name="logs_clear_confirm_body">This will remove all currently buffered log entries. This cannot be undone.</string>
     <string name="logs_share">Share</string>
+    <string name="crash_banner_title">The app closed unexpectedly on the previous run. Share the report so the cause can be found.</string>
+    <string name="crash_banner_share">Share report</string>
+    <string name="crash_banner_dismiss">Dismiss</string>
+    <string name="crash_share_failed">Could not share the crash report: %1$s</string>
     <string name="logs_save">Save</string>
     <string name="logs_empty">No logs to share</string>
     <string name="logs_share_failed">Failed to share logs: %1$s</string>
@@ -196,8 +200,7 @@
     <string name="log_config_reload_deferred">Config reload deferred: WebSocket not ready yet</string>
     <string name="log_service_sticky_restart">Service was restarted by the system without settings — restoring from saved settings</string>
     <string name="log_service_sticky_restart_no_settings">Service was restarted by the system but no Home Assistant settings are saved — stopping</string>
-    <string name="log_previous_crash">[Crash] The app closed unexpectedly on the previous run:
-%1$s</string>
+    <string name="log_previous_crash">[Crash] The app closed unexpectedly on the previous run:\n%1$s</string>
     <string name="log_oauth_auth_failed_no_refresh">[OAuth] Auth failed: no refresh token. Manual token is invalid.</string>
     <string name="log_oauth_token_expired_refreshing">[OAuth] Access token expired, attempting automatic refresh.</string>
     <string name="log_oauth_refresh_success">[OAuth] Token refreshed successfully (extended by 30 minutes).</string>

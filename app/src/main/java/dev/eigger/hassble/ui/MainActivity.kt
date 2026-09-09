@@ -156,6 +156,7 @@ import dev.eigger.hassble.net.ConnectionState
 import dev.eigger.hassble.net.GitHubHelper
 import dev.eigger.hassble.net.HaConnectionTester
 import dev.eigger.hassble.service.BleGatewayService
+import dev.eigger.hassble.service.CrashReporter
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -372,6 +373,14 @@ private fun HomeScreen() {
     var configError by remember { mutableStateOf<String?>(null) }
     var isConfigLoading by remember { mutableStateOf(false) }
     var reloadTrigger by remember { mutableStateOf(0) }
+    // 직전 실행이 비정상 종료됐다면 배너로 알리고 리포트를 공유할 수 있게 한다.
+    // 파일은 사용자가 닫기 전까지 지우지 않는다.
+    var crashReport by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        crashReport = CrashReporter.peekLast(context)?.also { report ->
+            LiveEventLogger.logRes(LogType.LINK, R.string.log_previous_crash, report)
+        }
+    }
     var usingCachedConfig by remember { mutableStateOf(false) }
     var showOnboarding by remember { mutableStateOf(false) }
     var showTemplateDialog by remember { mutableStateOf(false) }
@@ -528,6 +537,16 @@ private fun HomeScreen() {
     }
 
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        crashReport?.let { report ->
+            CrashReportBanner(
+                onShare = { shareCrashReport(context, report) },
+                onDismiss = {
+                    CrashReporter.clear(context)
+                    crashReport = null
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
         if (missingPermCount > 0) {
             PermissionBanner(missingCount = missingPermCount)
         }
@@ -2629,6 +2648,34 @@ private fun StatusBadge(isRunning: Boolean, connState: ConnectionState, connecti
     }
 }
 
+/** 직전 실행이 크래시로 끝났을 때 뜨는 배너. 리포트를 공유하거나 닫을 수 있다. */
+@Composable
+private fun CrashReportBanner(onShare: () -> Unit, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.error
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.1f)),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.3f)),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 2.dp)) {
+            Text(
+                text = stringResource(R.string.crash_banner_title),
+                color = color,
+                fontSize = 12.sp,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                HassLinkButton(text = stringResource(R.string.crash_banner_share), onClick = onShare)
+                HassCancelButton(text = stringResource(R.string.crash_banner_dismiss), onClick = onDismiss)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LogsTabContent(
@@ -3220,6 +3267,38 @@ private fun writeLogCacheFile(context: Context, logString: String, fileName: Str
     val file = java.io.File(context.cacheDir, fileName)
     file.writeText(logString)
     return file
+}
+
+/** 크래시 리포트를 다른 앱으로 보낸다. 로그 공유와 같은 FileProvider(cacheDir) 경로를 쓴다. */
+private fun shareCrashReport(context: Context, report: String) {
+    try {
+        val fileName = CrashReporter.shareFileName()
+        val file = writeLogCacheFile(context, report, fileName)
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = context.contentResolver.getType(uri) ?: "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, fileName)
+            // 파일을 못 받는 앱(메신저 입력창 등)을 위해 본문에도 같은 내용을 싣는다.
+            putExtra(Intent.EXTRA_TEXT, report)
+            clipData = ClipData.newUri(context.contentResolver, fileName, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(sendIntent, context.getString(R.string.crash_banner_share)).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(chooser)
+    } catch (e: Exception) {
+        Toast.makeText(
+            context,
+            context.getString(R.string.crash_share_failed, e.message.orEmpty()),
+            Toast.LENGTH_LONG,
+        ).show()
+    }
 }
 
 private fun shareLogs(context: Context, logs: List<LogEntry>) {

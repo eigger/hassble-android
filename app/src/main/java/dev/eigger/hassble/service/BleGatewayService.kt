@@ -82,7 +82,7 @@ class BleGatewayService : Service() {
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
     @Volatile private var pendingEntityCleanupDeviceIds: Set<String> = emptySet()
-    @Volatile private var pipelineStarting = false
+    private val pipelineStarting = java.util.concurrent.atomic.AtomicBoolean(false)
     // link_status는 폴링마다(초 단위) onLinkStatus가 여러 번 호출되지만 값은 대부분 "on"으로
     // 동일하다. 실제로 값이 바뀔 때만 WS로 보내 불필요한 프레임 전송을 없앤다.
     private val lastSentLinkConnected = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
@@ -101,7 +101,7 @@ class BleGatewayService : Service() {
         // (그 상태에서 config reload가 들어오면 ws가 없어 게이트웨이가 뜨지 않는다.)
         if (intent == null) {
             LiveEventLogger.logRes(LogType.LINK, R.string.log_service_sticky_restart)
-            restoreFromSavedSettings()
+            restoreFromSavedSettings(startId)
             return START_STICKY
         }
 
@@ -112,7 +112,7 @@ class BleGatewayService : Service() {
             }
             // sticky 재시작 직후처럼 WS가 아직 없는 상태로 들어온 reload는 저장된 설정으로
             // 파이프라인부터 세운다. reload만 돌리면 WS 없이 runtime을 만들려다 실패한다.
-            if (ws == null) restoreFromSavedSettings() else reloadConfig()
+            if (ws == null) restoreFromSavedSettings(startId) else reloadConfig()
             return START_STICKY
         }
 
@@ -175,23 +175,24 @@ class BleGatewayService : Service() {
      * WS가 없으면 세운 뒤 config를 로드한다. 이미 있으면 config만 다시 읽는다.
      *
      * WS를 세우기 전 토큰 갱신에서 한 번 suspend하므로, 그 사이 들어온 두 번째 요청까지
-     * 통과시키면 HaWsClient가 둘 생기고 앞의 것은 닫히지 않은 채 남는다. 플래그로 막는다.
-     * (onStartCommand는 메인 스레드라 검사/설정이 직렬화된다.)
+     * 통과시키면 HaWsClient가 둘 생기고 앞의 것은 닫히지 않은 채 남는다.
+     *
+     * onStartCommand(메인 스레드)와 restoreFromSavedSettings(코루틴)가 둘 다 부르므로
+     * 검사와 설정이 한 번에 일어나야 한다. compareAndSet으로 먼저 잡은 쪽만 통과시킨다.
      */
     private fun startPipeline(haUrl: String, token: String, refreshToken: String?) {
         if (ws != null) {
             reloadConfig()
             return
         }
-        if (pipelineStarting) return
-        pipelineStarting = true
+        if (!pipelineStarting.compareAndSet(false, true)) return
         scope.launch {
             try {
                 val activeToken = maybeRefreshToken(haUrl, token, refreshToken)
                 setupWebSocket(haUrl, activeToken, refreshToken)
                 reloadConfig()
             } finally {
-                pipelineStarting = false
+                pipelineStarting.set(false)
             }
         }
     }
@@ -199,15 +200,18 @@ class BleGatewayService : Service() {
     /**
      * intent 없이 되살아난 서비스를 저장된 설정으로 복구한다.
      * 복구할 HA 접속 정보가 없으면 아무 일도 못 하는 알림만 남으므로 서비스를 내린다.
+     *
+     * DataStore를 읽는 동안 사용자가 스타트를 눌렀을 수 있다. stopSelf(startId)는 그보다
+     * 새 start 명령이 들어와 있으면 아무것도 하지 않으므로, 방금 요청된 시작을 죽이지 않는다.
      */
-    private fun restoreFromSavedSettings() {
+    private fun restoreFromSavedSettings(startId: Int) {
         scope.launch {
             val repository = HassSettingsRepository(applicationContext)
             val haUrl = repository.haUrl.first()
             val token = repository.haToken.first()
             if (haUrl.isBlank() || haUrl == "https://" || token.isBlank()) {
                 LiveEventLogger.logRes(LogType.LINK, R.string.log_service_sticky_restart_no_settings)
-                stopSelf()
+                stopSelf(startId)
                 return@launch
             }
             // reload intent가 실어 온 git 설정이 있으면 그쪽이 더 최신이다(UI의 미저장 입력 포함).
