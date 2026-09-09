@@ -193,6 +193,11 @@
     <string name="logs_type_filter">Type</string>
     <string name="log_ble_cache_expired">BLE cache cleared: %1$d device entries expired</string>
     <string name="log_config_removed_devices_cleanup">Config changed: cleaning up removed devices in HA (%1$s)</string>
+    <string name="log_config_reload_deferred">Config reload deferred: WebSocket not ready yet</string>
+    <string name="log_service_sticky_restart">Service was restarted by the system without settings — restoring from saved settings</string>
+    <string name="log_service_sticky_restart_no_settings">Service was restarted by the system but no Home Assistant settings are saved — stopping</string>
+    <string name="log_previous_crash">[Crash] The app closed unexpectedly on the previous run:
+%1$s</string>
     <string name="log_oauth_auth_failed_no_refresh">[OAuth] Auth failed: no refresh token. Manual token is invalid.</string>
     <string name="log_oauth_token_expired_refreshing">[OAuth] Access token expired, attempting automatic refresh.</string>
     <string name="log_oauth_refresh_success">[OAuth] Token refreshed successfully (extended by 30 minutes).</string>

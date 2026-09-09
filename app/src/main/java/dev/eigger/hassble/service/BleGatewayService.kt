@@ -30,6 +30,8 @@ import dev.eigger.hassble.net.HaAuthHelper
 import dev.eigger.hassble.net.HaRemoveMode
 import dev.eigger.hassble.net.HaWsClient
 import dev.eigger.hassble.ui.MainActivity
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +57,20 @@ private data class SettingsSnapshot(
 
 class BleGatewayService : Service() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // SupervisorJob은 형제 코루틴 취소만 막을 뿐 예외를 삼키지 않는다. 핸들러가 없으면
+    // 파이프라인 어디서든 터진 예외 하나가 기본 핸들러로 올라가 프로세스를 죽인다.
+    // 게이트웨이는 죽이지 말고 로그/서비스 오류로 표면화한다.
+    private val coroutineExceptionHandler = CoroutineExceptionHandler { _, e ->
+        if (e is CancellationException) return@CoroutineExceptionHandler
+        LiveEventLogger.log(
+            LogType.LINK,
+            "[Error] Gateway coroutine failed: ${e.stackTraceToString()}",
+        )
+        _serviceError.value = e.localizedMessage ?: e::class.java.simpleName
+        runCatching { updateNotification() }
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + coroutineExceptionHandler)
     private var ws: HaWsClient? = null
     private var runtime: BleRuntime? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
@@ -67,6 +82,7 @@ class BleGatewayService : Service() {
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
     @Volatile private var pendingEntityCleanupDeviceIds: Set<String> = emptySet()
+    @Volatile private var pipelineStarting = false
     // link_status는 폴링마다(초 단위) onLinkStatus가 여러 번 호출되지만 값은 대부분 "on"으로
     // 동일하다. 실제로 값이 바뀔 때만 WS로 보내 불필요한 프레임 전송을 없앤다.
     private val lastSentLinkConnected = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
@@ -80,16 +96,27 @@ class BleGatewayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_RELOAD_CONFIG) {
+        // 앱 업데이트·프로세스 종료로 서비스가 죽으면 START_STICKY 때문에 시스템이 intent 없이
+        // 서비스를 되살린다. 그대로 두면 알림만 떠 있고 ws/runtime은 null인 좀비가 된다.
+        // (그 상태에서 config reload가 들어오면 ws가 없어 게이트웨이가 뜨지 않는다.)
+        if (intent == null) {
+            LiveEventLogger.logRes(LogType.LINK, R.string.log_service_sticky_restart)
+            restoreFromSavedSettings()
+            return START_STICKY
+        }
+
+        if (intent.action == ACTION_RELOAD_CONFIG) {
             intent.getStringExtra(EXTRA_GIT_URL)?.let { currentGitUrl = it }
             if (intent.hasExtra(EXTRA_GIT_TOKEN)) {
                 currentGitToken = intent.getStringExtra(EXTRA_GIT_TOKEN)
             }
-            reloadConfig()
+            // sticky 재시작 직후처럼 WS가 아직 없는 상태로 들어온 reload는 저장된 설정으로
+            // 파이프라인부터 세운다. reload만 돌리면 WS 없이 runtime을 만들려다 실패한다.
+            if (ws == null) restoreFromSavedSettings() else reloadConfig()
             return START_STICKY
         }
 
-        if (intent?.action == ACTION_REMOVE_DEVICE) {
+        if (intent.action == ACTION_REMOVE_DEVICE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             val mode = haRemoveModeFor(deviceId)
             // config 재로드를 기다리지 않고 BLE 연결/스캔을 즉시 정리한다.
@@ -103,53 +130,93 @@ class BleGatewayService : Service() {
             return START_STICKY
         }
 
-        if (intent?.action == ACTION_SET_AUTO_CONNECT) {
+        if (intent.action == ACTION_SET_AUTO_CONNECT) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             val enabled = intent.getBooleanExtra(EXTRA_AUTO_CONNECT, true)
             scope.launch { HassSettingsRepository(this@BleGatewayService).setAutoConnectDisabled(deviceId, !enabled) }
             return START_STICKY
         }
 
-        if (intent?.action == ACTION_CONNECT_DEVICE) {
+        if (intent.action == ACTION_CONNECT_DEVICE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             runtime?.connectDevice(deviceId)
             return START_STICKY
         }
 
-        if (intent?.action == ACTION_DISCONNECT_DEVICE) {
+        if (intent.action == ACTION_DISCONNECT_DEVICE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             runtime?.disconnectDevice(deviceId)
             return START_STICKY
         }
 
-        if (intent?.action == ACTION_TRIGGER_ADVERTISE) {
+        if (intent.action == ACTION_TRIGGER_ADVERTISE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             runtime?.triggerAdvertise(deviceId)
             return START_STICKY
         }
 
-        if (intent?.action == ACTION_STOP_ADVERTISE) {
+        if (intent.action == ACTION_STOP_ADVERTISE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             runtime?.stopAdvertise(deviceId)
             return START_STICKY
         }
 
-        val haUrl = intent?.getStringExtra(EXTRA_HA_URL) ?: return START_NOT_STICKY
+        val haUrl = intent.getStringExtra(EXTRA_HA_URL) ?: return START_NOT_STICKY
         val token = intent.getStringExtra(EXTRA_TOKEN) ?: return START_NOT_STICKY
         val refreshToken = intent.getStringExtra(EXTRA_REFRESH_TOKEN)
         currentGitUrl = intent.getStringExtra(EXTRA_GIT_URL) ?: return START_NOT_STICKY
         currentGitToken = intent.getStringExtra(EXTRA_GIT_TOKEN)
- 
-        if (ws == null) {
-            scope.launch {
+
+        startPipeline(haUrl, token, refreshToken)
+        return START_STICKY
+    }
+
+    /**
+     * WS가 없으면 세운 뒤 config를 로드한다. 이미 있으면 config만 다시 읽는다.
+     *
+     * WS를 세우기 전 토큰 갱신에서 한 번 suspend하므로, 그 사이 들어온 두 번째 요청까지
+     * 통과시키면 HaWsClient가 둘 생기고 앞의 것은 닫히지 않은 채 남는다. 플래그로 막는다.
+     * (onStartCommand는 메인 스레드라 검사/설정이 직렬화된다.)
+     */
+    private fun startPipeline(haUrl: String, token: String, refreshToken: String?) {
+        if (ws != null) {
+            reloadConfig()
+            return
+        }
+        if (pipelineStarting) return
+        pipelineStarting = true
+        scope.launch {
+            try {
                 val activeToken = maybeRefreshToken(haUrl, token, refreshToken)
                 setupWebSocket(haUrl, activeToken, refreshToken)
                 reloadConfig()
+            } finally {
+                pipelineStarting = false
             }
-        } else {
-            reloadConfig()
         }
-        return START_STICKY
+    }
+
+    /**
+     * intent 없이 되살아난 서비스를 저장된 설정으로 복구한다.
+     * 복구할 HA 접속 정보가 없으면 아무 일도 못 하는 알림만 남으므로 서비스를 내린다.
+     */
+    private fun restoreFromSavedSettings() {
+        scope.launch {
+            val repository = HassSettingsRepository(applicationContext)
+            val haUrl = repository.haUrl.first()
+            val token = repository.haToken.first()
+            if (haUrl.isBlank() || haUrl == "https://" || token.isBlank()) {
+                LiveEventLogger.logRes(LogType.LINK, R.string.log_service_sticky_restart_no_settings)
+                stopSelf()
+                return@launch
+            }
+            // reload intent가 실어 온 git 설정이 있으면 그쪽이 더 최신이다(UI의 미저장 입력 포함).
+            if (currentGitUrl.isBlank()) {
+                currentGitUrl = repository.gitUrl.first()
+                currentGitToken = repository.gitToken.first()
+            }
+            startPipeline(haUrl, token, repository.haRefreshToken.first().ifBlank { null })
+        }
     }
 
     private suspend fun maybeRefreshToken(haUrl: String, token: String, refreshToken: String?): String {
@@ -322,6 +389,15 @@ class BleGatewayService : Service() {
             repository.initAutoConnectFromConfig(config.devices)
 
             if (runtime == null) {
+                // WS보다 config 로드가 먼저 끝나는 경우(sticky 재시작 직후의 reload 등)가 있다.
+                // 예전에는 여기서 ws!!로 NPE가 나 프로세스째 죽었다. WS가 준비되면
+                // setupWebSocket 다음의 reloadConfig가 다시 이 지점을 밟는다.
+                val client = ws
+                if (client == null) {
+                    LiveEventLogger.logRes(LogType.LINK, R.string.log_config_reload_deferred)
+                    updateNotification()
+                    return@launch
+                }
                 val onLinkStatus: (DeviceLinkStatus) -> Unit = { status ->
                     _deviceLinkStatuses.value = _deviceLinkStatuses.value
                         .filter { it.profileId != status.profileId } + status
@@ -348,7 +424,7 @@ class BleGatewayService : Service() {
                 val advertiser = dev.eigger.hassble.ble.AndroidBleAdvertiser(this@BleGatewayService, scope)
                 runtime = BleRuntime(
                     scope,
-                    ws!!,
+                    client,
                     scanner,
                     gattSource,
                     obdSource,
