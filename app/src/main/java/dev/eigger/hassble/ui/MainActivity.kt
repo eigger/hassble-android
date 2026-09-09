@@ -561,7 +561,9 @@ private fun HomeScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column {
+            // 배지가 붙으면 제목 줄이 길어져 오른쪽 StatusBadge를 밀어낸다.
+            // weight(fill = false)로 남는 폭만 차지하게 해 좁은 화면에서도 상태 표시가 살아 있게 한다.
+            Column(modifier = Modifier.weight(1f, fill = false)) {
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(6.dp))

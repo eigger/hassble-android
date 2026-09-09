@@ -33,13 +33,16 @@ object UpdateChecker {
         repository: HassSettingsRepository,
         nowMs: Long = System.currentTimeMillis(),
     ): Release? {
-        val cached = repository.loadLatestReleaseCache()
-        if (cached != null && nowMs - cached.checkedAtMs < CHECK_INTERVAL_MS) {
+        // 캐시 읽기/쓰기(DataStore)도 던질 수 있다. 배너 하나 때문에 앱이 죽으면 안 되므로
+        // 네트워크뿐 아니라 저장소 접근까지 전부 감싼다.
+        val cached = runCatching { repository.loadLatestReleaseCache() }.getOrNull()
+        // 기기 시계가 뒤로 가면 경과가 음수가 되어 캐시가 영영 신선해 보인다. 양쪽을 다 막는다.
+        if (cached != null && nowMs - cached.checkedAtMs in 0 until CHECK_INTERVAL_MS) {
             return Release(cached.version, cached.pageUrl)
         }
         val fetched = fetchLatest().getOrNull()
             ?: return cached?.let { Release(it.version, it.pageUrl) }
-        repository.saveLatestReleaseCache(fetched.version, fetched.pageUrl, nowMs)
+        runCatching { repository.saveLatestReleaseCache(fetched.version, fetched.pageUrl, nowMs) }
         return fetched
     }
 
