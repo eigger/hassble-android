@@ -78,7 +78,9 @@ data class ObdConfig(
 @Serializable
 data class SensorConfig(
     val key: String,
-    val platform: String = "sensor",       // sensor | binary_sensor | text_sensor
+    val platform: String = "sensor",       // sensor | binary_sensor | text_sensor | event
+    // platform: event 전용. HA가 허용하는 event_type 목록 — 여기 없는 값은 HA가 버린다.
+    @SerialName("event_types") val eventTypes: List<String> = emptyList(),
     @SerialName("device_class") val deviceClass: String? = null,
     val unit: String? = null,
     @SerialName("state_class") val stateClass: String? = null,

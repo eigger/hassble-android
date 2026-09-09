@@ -48,14 +48,18 @@ object ConfigValidator {
     fun validate(config: GatewayConfig): List<ValidationIssue> {
         val issues = mutableListOf<ValidationIssue>()
         for (device in config.devices) {
-            issues += validateDevice(device)
+            issues += validateDevice(device, config.defaults.publish)
         }
         return issues
     }
 
-    private fun validateDevice(device: DeviceConfig): List<ValidationIssue> {
+    private fun validateDevice(
+        device: DeviceConfig,
+        defaultPublish: PublishRule = PublishRule(),
+    ): List<ValidationIssue> {
         val issues = mutableListOf<ValidationIssue>()
         val isText = { s: SensorConfig -> s.platform == "text_sensor" }
+        val isEvent = { s: SensorConfig -> s.platform == "event" }
 
         // ── 센서 검증 ──────────────────────────────────────────────────────────
         for (s in device.sensors) {
@@ -84,8 +88,39 @@ object ConfigValidator {
                         sensorPath(id, key, "device_class"))
             }
 
+            // event 검증
+            if (isEvent(s)) {
+                if (s.eventTypes.isEmpty())
+                    issues += ValidationIssue(ValidationLevel.ERROR, id, key,
+                        "platform=event requires 'event_types' — HA rejects the declaration without it",
+                        sensorPath(id, key, "event_types"))
+                val undeclared = (s.decode?.map?.values ?: emptyList()).toSet() - s.eventTypes.toSet()
+                if (undeclared.isNotEmpty())
+                    issues += ValidationIssue(ValidationLevel.WARNING, id, key,
+                        "decode.map value(s) ${undeclared.sorted()} missing from event_types — HA drops those events",
+                        sensorPath(id, key, "event_types"))
+                if (s.decode != null && s.decode.map.isEmpty())
+                    issues += ValidationIssue(ValidationLevel.WARNING, id, key,
+                        "platform=event without decode.map — the raw decoded value becomes the event_type and will be dropped",
+                        sensorPath(id, key, "decode"))
+                if (s.unit != null || effStateClass != null || s.accuracyDecimals != null)
+                    issues += ValidationIssue(ValidationLevel.WARNING, id, key,
+                        "unit/state_class/accuracy_decimals are ignored for event",
+                        sensorPath(id, key, "unit"))
+                if (s.deviceClass in numericDeviceClasses)
+                    issues += ValidationIssue(ValidationLevel.WARNING, id, key,
+                        "device_class='${s.deviceClass}' is numeric but platform is event — HA event supports doorbell/button/motion",
+                        sensorPath(id, key, "device_class"))
+                // 같은 event_type이 반복될 때(문 통과처럼) on_change_only가 재발화를 막는다.
+                val rule = s.publish ?: device.publish ?: defaultPublish
+                if (rule.onChangeOnly && rule.heartbeat == null)
+                    issues += ValidationIssue(ValidationLevel.WARNING, id, key,
+                        "on_change_only suppresses repeats of the same event_type — set publish.heartbeat (or on_change_only: false) to fire on every occurrence",
+                        sensorPath(id, key, "publish"))
+            }
+
             // 숫자 센서 검증
-            if (!isText(s)) {
+            if (!isText(s) && !isEvent(s)) {
                 if (effStateClass != null && effStateClass !in validStatClasses)
                     issues += ValidationIssue(ValidationLevel.ERROR, id, key,
                         "invalid state_class='$effStateClass' — must be one of $validStatClasses",

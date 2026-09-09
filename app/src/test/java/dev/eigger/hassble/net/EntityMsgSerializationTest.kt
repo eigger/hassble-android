@@ -53,6 +53,31 @@ class EntityMsgSerializationTest {
     }
 
     @Test
+    fun `event entity message includes event_types`() {
+        val text = json.encodeToString(
+            EntityMsg.serializer(),
+            EntityMsg(
+                id = 3,
+                uniqueId = "apt_key_door_door_event",
+                platform = "event",
+                name = "Door Event",
+                eventTypes = listOf("entering", "exiting"),
+            ),
+        )
+        assertTrue(text.contains("\"platform\":\"event\""))
+        assertTrue(text.contains("\"event_types\":[\"entering\",\"exiting\"]"))
+    }
+
+    @Test
+    fun `non-event entity message omits event_types`() {
+        val text = json.encodeToString(
+            EntityMsg.serializer(),
+            EntityMsg(id = 4, uniqueId = "parking_floor", platform = "sensor", name = "Parking Floor"),
+        )
+        assertTrue(text, !text.contains("event_types"))
+    }
+
+    @Test
     fun `command payload deserialization with value`() {
         val jsonString = """{"kind":"command","unique_id":"switch_01","action":"set_value","value":25.5}"""
         val cmd = json.decodeFromString(CommandPayload.serializer(), jsonString)

@@ -297,16 +297,18 @@ class BleRuntime(
             if (s.key in errorKeys) continue
             val entityUid = uid(instanceId, s.key)
             filters[entityUid] = ValueFilter(resolveRule(d, s))
-            val isTextSensor = s.platform == "text_sensor"
+            // text_sensor·event는 문자열 상태라 숫자 메타(unit/state_class/precision)를 쓰지 않는다.
+            val isNumeric = s.platform != "text_sensor" && s.platform != "event"
             ws.declareEntity(EntityMsg(
                 id = 0, uniqueId = entityUid, platform = haPlatform(s),
                 name = title(s.key), device = ref,
                 deviceClass = s.deviceClass,
-                unit = if (isTextSensor) null else s.unit,
-                stateClass = if (isTextSensor) null else s.effectiveStateClass(),
-                suggestedDisplayPrecision = if (isTextSensor) null else s.accuracyDecimals,
+                unit = if (isNumeric) s.unit else null,
+                stateClass = if (isNumeric) s.effectiveStateClass() else null,
+                suggestedDisplayPrecision = if (isNumeric) s.accuracyDecimals else null,
                 icon = s.icon,
                 entityCategory = s.entityCategory,
+                eventTypes = s.eventTypes.ifEmpty { null },
             ))
         }
         for (c in d.controls) {
