@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">HassBle</string>
     <string name="app_sub_title">Home Assistant BLE Gateway</string>
+    <string name="update_available_badge">%1$s available</string>
     <string name="cd_status">Status</string>
     <string name="cd_error">Error</string>
     <string name="cd_search">Search</string>

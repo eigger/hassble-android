@@ -155,6 +155,7 @@ import dev.eigger.hassble.net.ConnectionIssue
 import dev.eigger.hassble.net.ConnectionState
 import dev.eigger.hassble.net.GitHubHelper
 import dev.eigger.hassble.net.HaConnectionTester
+import dev.eigger.hassble.net.UpdateChecker
 import dev.eigger.hassble.service.BleGatewayService
 import dev.eigger.hassble.service.CrashReporter
 import androidx.compose.material3.DropdownMenuItem
@@ -381,6 +382,11 @@ private fun HomeScreen() {
             LiveEventLogger.logRes(LogType.LINK, R.string.log_previous_crash, report)
         }
     }
+    // 새 릴리스가 있으면 버전 표기 옆에 배지로 알린다. 실패하면 조용히 아무것도 띄우지 않는다.
+    var availableUpdate by remember { mutableStateOf<UpdateChecker.Release?>(null) }
+    LaunchedEffect(Unit) {
+        availableUpdate = UpdateChecker.updateAvailable(UpdateChecker.latestRelease(repository))
+    }
     var usingCachedConfig by remember { mutableStateOf(false) }
     var showOnboarding by remember { mutableStateOf(false) }
     var showTemplateDialog by remember { mutableStateOf(false) }
@@ -555,11 +561,25 @@ private fun HomeScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column {
+            // 배지가 붙으면 제목 줄이 길어져 오른쪽 StatusBadge를 밀어낸다.
+            // weight(fill = false)로 남는 폭만 차지하게 해 좁은 화면에서도 상태 표시가 살아 있게 한다.
+            Column(modifier = Modifier.weight(1f, fill = false)) {
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(text = "v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(bottom = 4.dp))
+                    availableUpdate?.let { release ->
+                        Spacer(modifier = Modifier.width(6.dp))
+                        UpdateBadge(
+                            version = release.version,
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.pageUrl)))
+                                }
+                            },
+                            modifier = Modifier.padding(bottom = 3.dp),
+                        )
+                    }
                 }
                 Text(text = stringResource(R.string.app_sub_title), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
@@ -2673,6 +2693,35 @@ private fun CrashReportBanner(onShare: () -> Unit, onDismiss: () -> Unit, modifi
                 HassCancelButton(text = stringResource(R.string.crash_banner_dismiss), onClick = onDismiss)
             }
         }
+    }
+}
+
+/** 새 릴리스가 있을 때 버전 표기 옆에 붙는 배지. 누르면 릴리스 페이지를 연다. */
+@Composable
+private fun UpdateBadge(version: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.primary
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(color.copy(alpha = 0.15f))
+            .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Default.KeyboardArrowUp,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(modifier = Modifier.width(2.dp))
+        Text(
+            text = stringResource(R.string.update_available_badge, version),
+            color = color,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
