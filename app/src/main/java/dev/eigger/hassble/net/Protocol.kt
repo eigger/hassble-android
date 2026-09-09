@@ -31,6 +31,7 @@ data class EntityMsg(
     val icon: String? = null,
     @SerialName("entity_category") val entityCategory: String? = null,
     val options: List<String>? = null,    // select
+    @SerialName("event_types") val eventTypes: List<String>? = null,  // event (platform=event이면 필수)
     val min: Double? = null,              // number
     val max: Double? = null,
     val step: Double? = null,

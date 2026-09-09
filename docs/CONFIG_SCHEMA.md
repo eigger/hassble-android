@@ -195,7 +195,7 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 | 필드 | 설명 |
 |------|------|
 | `key` | 센서 키 |
-| `platform` | `sensor`(기본) \| `binary_sensor` \| `text_sensor` (읽기 전용 문자열, HA에는 `sensor`로 선언) |
+| `platform` | `sensor`(기본) \| `binary_sensor` \| `text_sensor` (읽기 전용 문자열, HA에는 `sensor`로 선언) \| `event` |
 | `preset` | 내장 preset 이름 (mode/pid/formula/unit 자동). `pid`와 배타 |
 | `mode` | `"01"`(표준) / `"22"`(UDS 확장). 기본 `01` |
 | `pid` | PID hex (mode 01: 2자리, mode 22: 4자리) |
@@ -230,6 +230,38 @@ ESPHome `ble_elm327`과 동일한 개념. `preset`만 적으면 mode/pid/formula
 `timestamp` 타입: `offset`부터 4바이트를 **월·일·시·분**(uint8)으로 읽어 ISO 8601 문자열 반환 (예: `2026-06-22T14:30:00`). 연도는 디코딩 시점의 현재 연도. `device_class: timestamp`와 함께 사용.
 
 `string` 타입: `offset`부터 `length`바이트를 ASCII 문자로 연결 (`length: 0`이면 끝까지 읽음). 뒤쪽 공백 및 null 패딩은 자동으로 제거됩니다. `platform: text_sensor`와 함께 사용 (예: 주차 위치 코드 "B32").
+
+## platform: event (사건 기록)
+
+값이 아니라 **사건이 일어난 시각**을 남기고 싶을 때 쓴다. HA `event` 엔티티는 상태 자체가 마지막 발생 시각이라
+같은 `event_type`이 반복돼도 매번 갱신된다 — 일반 센서는 값이 직전과 같으면 `last_changed`가 움직이지 않는다.
+
+```yaml
+- key: door_event
+  platform: event
+  event_types: [entering, entered, exiting, idle]   # 필수. 여기 없는 값은 HA가 버린다
+  source_field: manufacturer_data
+  length: 6
+  publish:
+    heartbeat: 60s          # 같은 event_type 반복 발화 허용 (아래 주의 참고)
+  decode:
+    offset: 4
+    length: 1
+    type: uint8
+    map: { "65": entering, "1": entered, "64": exiting, "0": idle }
+```
+
+| 필드 | 설명 |
+|------|------|
+| `event_types` | 허용 event_type 목록. **필수** — 없으면 HA가 선언을 거부하므로 앱이 해당 센서를 건너뛴다 |
+| `decode.map` | 디코딩 값 → event_type. map 값은 모두 `event_types` 안에 있어야 한다 |
+
+> **주의:** `on_change_only`(기본 true)는 직전과 같은 값을 막는다. 같은 event_type이 반복되는 경우
+> (예: 출입문을 통과할 때마다 `entering`) 두 번째부터 발화되지 않으므로, `publish.heartbeat`를 발생 간격보다
+> 짧게 주거나 `on_change_only: false`로 둬야 매번 기록된다.
+>
+> event 엔티티는 HA 재시작 시 복원되지 않는다(유령 이벤트 방지). 현재 상태도 같이 보고 싶으면 같은 광고에서
+> `text_sensor` 센서를 하나 더 뽑아 두 엔티티를 병행한다.
 
 ## publish 억제 (통신 완화, 값 기반 — 앱)
 
