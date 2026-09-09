@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
 import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
+import dev.eigger.hassble.service.CrashReporter
 import dev.eigger.hassble.service.LiveEventLogger
 
 class HassBleApp : Application() {
@@ -21,6 +22,8 @@ class HassBleApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 다른 초기화보다 먼저 걸어야 초기화 중에 난 크래시도 잡힌다.
+        CrashReporter.install(this)
         LiveEventLogger.init(this)
         BluetoothAdapterNameGuard.resetToInitial(this)
         val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
