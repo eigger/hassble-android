@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">HassBle</string>
     <string name="app_sub_title">Home Assistant BLE 게이트웨이</string>
+    <string name="update_available_badge">%1$s 업데이트</string>
     <string name="cd_status">상태</string>
     <string name="cd_error">오류</string>
     <string name="cd_search">검색</string>

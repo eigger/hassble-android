@@ -47,6 +47,9 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_EXCLUDED_DEVICES = stringPreferencesKey("excluded_devices")
         private val KEY_LOG_BUFFER_LIMIT = intPreferencesKey("log_buffer_limit")
         private val KEY_ADV_COUNTERS = stringPreferencesKey("adv_counters")
+        private val KEY_LATEST_RELEASE_VERSION = stringPreferencesKey("latest_release_version")
+        private val KEY_LATEST_RELEASE_URL = stringPreferencesKey("latest_release_url")
+        private val KEY_LATEST_RELEASE_CHECKED_AT = longPreferencesKey("latest_release_checked_at")
     }
 
     val haUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -602,5 +605,24 @@ class HassSettingsRepository(private val context: Context) {
 
     suspend fun clearEntityFingerprints() {
         context.dataStore.edit { prefs -> prefs.remove(KEY_ENTITY_FINGERPRINTS) }
+    }
+
+    // ── 최신 릴리스 캐시 ───────────────────────────────────────────────────────
+    // 익명 GitHub API는 호출 한도가 있어 조회 결과를 들고 있다가 재사용한다.
+    data class LatestReleaseCache(val version: String, val pageUrl: String, val checkedAtMs: Long)
+
+    suspend fun loadLatestReleaseCache(): LatestReleaseCache? {
+        val prefs = context.dataStore.data.first()
+        val version = prefs[KEY_LATEST_RELEASE_VERSION] ?: return null
+        val pageUrl = prefs[KEY_LATEST_RELEASE_URL] ?: return null
+        return LatestReleaseCache(version, pageUrl, prefs[KEY_LATEST_RELEASE_CHECKED_AT] ?: 0L)
+    }
+
+    suspend fun saveLatestReleaseCache(version: String, pageUrl: String, checkedAtMs: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LATEST_RELEASE_VERSION] = version
+            prefs[KEY_LATEST_RELEASE_URL] = pageUrl
+            prefs[KEY_LATEST_RELEASE_CHECKED_AT] = checkedAtMs
+        }
     }
 }
