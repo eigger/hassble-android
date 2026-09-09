@@ -113,7 +113,7 @@ object ConfigValidator {
                         sensorPath(id, key, "device_class"))
                 // 같은 event_type이 반복될 때(문 통과처럼) on_change_only가 재발화를 막는다.
                 val rule = s.publish ?: device.publish ?: defaultPublish
-                if (rule.onChangeOnly && rule.heartbeat == null)
+                if (rule.onChangeOnly && parseDurationMs(rule.heartbeat, 0) <= 0)
                     issues += ValidationIssue(ValidationLevel.WARNING, id, key,
                         "on_change_only suppresses repeats of the same event_type — set publish.heartbeat (or on_change_only: false) to fire on every occurrence",
                         sensorPath(id, key, "publish"))
@@ -407,8 +407,13 @@ object ConfigValidator {
         val sb = StringBuilder()
         for (s in d.sensors) {
             if (s.key in errKeys) continue
-            val isText = s.platform == "text_sensor"
-            sb.append("S|${s.key}|${s.platform}|${if (isText) null else s.unit}|${if (isText) null else s.effectiveStateClass()}|${s.deviceClass}|${s.accuracyDecimals}\n")
+            // 선언에 실리지 않는 값은 fingerprint에도 넣지 않는다 (declareEntitiesForInstance와 동일한 보정).
+            val numericMeta = s.platform != "text_sensor" && s.platform != "event"
+            val unit = if (numericMeta) s.unit else null
+            val stateClass = if (numericMeta) s.effectiveStateClass() else null
+            // text_sensor의 accuracy_decimals는 기존에 저장된 fingerprint와의 호환을 위해 그대로 둔다.
+            val precision = if (s.platform == "event") null else s.accuracyDecimals
+            sb.append("S|${s.key}|${s.platform}|$unit|$stateClass|${s.deviceClass}|$precision\n")
         }
         for (c in d.controls) {
             if (c.key in errKeys) continue

@@ -89,6 +89,26 @@ class EventSensorTest {
     }
 
     @Test
+    fun `unparseable heartbeat still warns about suppressed repeats`() {
+        // "60sec"은 parseDurationMs 규격(ms|s|m|h) 밖이라 0으로 떨어져 heartbeat가 꺼진다.
+        val issues = ConfigValidator.validate(parse("publish: { heartbeat: 60sec }"))
+        assertTrue(issues.any { it.message.contains("on_change_only suppresses repeats") })
+    }
+
+    @Test
+    fun `fingerprint ignores numeric meta that event never declares`() {
+        val base = parse(withHeartbeat)
+        val d = base.devices[0]
+        val withMeta = base.copy(
+            devices = listOf(d.copy(sensors = listOf(d.sensors[0].copy(unit = "x", accuracyDecimals = 1)))),
+        )
+        assertEquals(
+            ConfigValidator.computeEffectiveFingerprint(base, "apt_key_door"),
+            ConfigValidator.computeEffectiveFingerprint(withMeta, "apt_key_door"),
+        )
+    }
+
+    @Test
     fun `on_change_only false does not warn`() {
         val issues = ConfigValidator.validate(parse("publish: { on_change_only: false }"))
         assertFalse(issues.any { it.message.contains("on_change_only suppresses repeats") })
