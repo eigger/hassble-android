@@ -5,12 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.ble.BleRuntime
+import dev.eigger.hassble.ble.BleScanHealth
 import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
 import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.ble.haRemoveModeForDevice
@@ -87,12 +92,45 @@ class BleGatewayService : Service() {
     // 동일하다. 실제로 값이 바뀔 때만 WS로 보내 불필요한 프레임 전송을 없앤다.
     private val lastSentLinkConnected = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    // Bluetooth OFF→ON은 스캔 세션을 콜백 없이 죽인다. ON에서 스캐너를 바로 다시 세운다.
+    // OFF에서는 건드리지 않는다 — 스캐너가 ON을 기다리는 루프에 스스로 들어가고, 어차피 ON에서 갈아 끼운다.
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            val label = when (state) {
+                BluetoothAdapter.STATE_ON -> "ON"
+                BluetoothAdapter.STATE_OFF -> "OFF"
+                BluetoothAdapter.STATE_TURNING_ON -> "TURNING_ON"
+                BluetoothAdapter.STATE_TURNING_OFF -> "TURNING_OFF"
+                else -> "UNKNOWN($state)"
+            }
+            LiveEventLogger.log(LogType.LINK, "Bluetooth adapter state: $label")
+            if (state == BluetoothAdapter.STATE_ON) runtime?.restartScan("Bluetooth turned on")
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         _isServiceRunning.value = true
         registerNetworkCallback()
         startForeground(NOTIF_ID, buildNotification())
+        LiveEventLogger.log(LogType.LINK, "Foreground service started (type=connectedDevice)")
+        // ACTION_STATE_CHANGED는 시스템 보호 브로드캐스트라 NOT_EXPORTED로도 받는다.
+        ContextCompat.registerReceiver(
+            this,
+            bluetoothStateReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         BluetoothAdapterNameGuard.resetToInitial(this)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // 최근 앱 목록에서 스와이프해도 FGS는 계속 돈다. 사용자가 "앱을 껐는데도 돈다/안 돈다"를
+        // 로그로 가릴 수 있게 남긴다.
+        LiveEventLogger.log(LogType.LINK, "App task removed — foreground service keeps running")
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -312,6 +350,8 @@ class BleGatewayService : Service() {
             while (true) {
                 delay(300_000)
                 publishGatewayStates(ws)
+                LiveEventLogger.log(LogType.LINK,
+                    "Heartbeat: fgs=running, ws=${ws?.connectionState?.value}, scan[${BleScanHealth.state.value.describe()}]")
             }
         }
     }
@@ -538,7 +578,9 @@ class BleGatewayService : Service() {
                 "${gatewayId()}_service_status" to "off",
             ))
         }
+        LiveEventLogger.log(LogType.LINK, "Foreground service stopping")
         unregisterNetworkCallback()
+        runCatching { unregisterReceiver(bluetoothStateReceiver) }
         configJob?.cancel()
         settingsJob?.cancel()
         wsStateJob?.cancel()
@@ -547,6 +589,7 @@ class BleGatewayService : Service() {
         ws?.close()
         runtime = null
         ws = null
+        BleScanHealth.reset()
         pendingEntityCleanupDeviceIds = emptySet()
         lastSentLinkConnected.clear()
         _isServiceRunning.value = false

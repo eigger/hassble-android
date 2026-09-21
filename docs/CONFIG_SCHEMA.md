@@ -41,6 +41,7 @@ devices: [ ... ]                    # 아래 참조
 | `name` | ✅ | HA 표시 이름 |
 | `source` | ✅ | `advertisement` \| `gatt_notify` \| `obd` |
 | `instance_mode` | | advertisement 전용. `mac`(기본)=MAC별 엔티티, `shared`=프로필 ID 하나로 덮어쓰기 |
+| `presence_timeout` | | advertisement 전용. 기본 `5m`. 이 시간 동안 광고가 없으면 `{instance}_advertisement` binary_sensor를 `off`로, 다시 수신되면 `on`으로. 센서 값·설정은 그대로 유지. `"0"`이면 엔티티를 만들지 않음. YAML 전용(앱 기기 편집 화면에는 없음) |
 | `advertise` | | advertisement 전용. 앱에서 BLE 광고(TX)를 송신하기 위한 설정 |
 | `sensors` | △ | 센서 목록 (읽기) |
 | `controls` | | 제어 목록 (HA→BLE 또는 앱 동작 제어) |
@@ -53,6 +54,7 @@ devices: [ ... ]                    # 아래 참조
   name: "거실 온습도계"
   source: advertisement
   instance_mode: mac           # mac(기본) | shared
+  presence_timeout: 5m         # 광고 끊김 판정 시간 → {instance}_advertisement on/off. "0"이면 비활성
   match:                       # 지정한 항목은 **모두** 일치해야 함 (AND)
     mac: "A4:C1:38:..."
     service_data_uuid: "181a"  # service_data 또는 광고 service_uuids 목록

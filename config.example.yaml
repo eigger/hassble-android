@@ -68,6 +68,7 @@ devices:
   #   name: "마이타운 주차위치"
   #   source: advertisement
   #   instance_mode: shared              # 기둥 MAC이 매번 달라도 엔티티 1벌 유지
+  #   presence_timeout: 5m               # 5분간 광고 없으면 binary_sensor.*_advertisement off, 재수신 시 on
   #   match:
   #     manufacturer_id: 861             # 0x035D — kaml 파싱을 위해 10진수(decimal) 사용 권장
   #     manufacturer_hex_prefix: "06<본인_16BYTE_UUID_HEX>"

@@ -16,6 +16,7 @@ import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.config.SourceField
 import dev.eigger.hassble.config.ValidationIssue
 import dev.eigger.hassble.config.ValidationLevel
+import dev.eigger.hassble.config.parseDurationMs
 import dev.eigger.hassble.decode.Decoder
 import dev.eigger.hassble.decode.ValueFilter
 import dev.eigger.hassble.net.CommandPayload
@@ -30,7 +31,11 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -87,6 +92,15 @@ class BleRuntime(
     private val controls = java.util.concurrent.ConcurrentHashMap<String, Pair<DeviceConfig, ControlConfig>>()  // uniqueId →
     private val declaredAdvInstances = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val discoveredAdvInstances = java.util.concurrent.ConcurrentHashMap<String, DiscoveredAdvInstance>()
+    // instanceId → presence 상태. lastSeen을 여기 같이 들고 있어 discoveredAdvInstances(UI용)가
+    // 비워져도 off 판정이 가능하다. HA 전송은 online 전이 때만.
+    private val advertisementPresence = java.util.concurrent.ConcurrentHashMap<String, AdvertisementPresence>()
+    private var presenceJob: Job? = null
+    // scanJob 교체는 항상 이 mutex 안에서 cancelAndJoin → scanner.stop() → launchScan() 순서로 한다.
+    // apply()/restartScan()/stop()이 서로 다른 스레드에서 겹쳐도 세션이 둘이 되거나,
+    // collect 중인 스캐너 캐시를 다른 쪽이 비우는 일이 없게.
+    private val scanLifecycleMutex = Mutex()
+    @Volatile private var stopped = false
     private val lastSensorValues = java.util.concurrent.ConcurrentHashMap<String, SensorLastValue>()
     private var validationIssues: List<ValidationIssue> = emptyList()
     // async HA cleanup 진행 중인 deviceId → 완료 전 apply()에서 재시작 방지
@@ -180,12 +194,7 @@ class BleRuntime(
                 newAdvDevices.zip(oldAdvDevices).any { (newD, oldD) -> newD != oldD }
 
         if (advChanged) {
-            scanJob?.cancel()
-            scanJob = null
-            scanner.stop()
-            if (newAdvDevices.isNotEmpty()) {
-                scanJob = scanner.scan(newAdvDevices, scanMode, unfilteredScan).onEach(::onReading).launchIn(scope)
-            }
+            relaunchScan("config changed")
         }
 
         // --- Connection devices and advertisement devices change detection ---
@@ -291,6 +300,21 @@ class BleRuntime(
             ws.sendStates(listOf("${instanceId}_advertising" to if (isAdv) "on" else "off"))
         }
 
+        if (d.source == Source.advertisement && presenceTimeoutMs(d) > 0) {
+            // 광고가 끊겨도 센서 엔티티는 마지막 값을 유지한다. 대신 "지금 수신 중인가"를 이 엔티티가
+            // 알려 주고, HA 자동화는 off→on 전이를 재발견 트리거로 쓸 수 있다.
+            ws.declareEntity(EntityMsg(
+                id = 0, uniqueId = "${instanceId}_advertisement", platform = "binary_sensor",
+                name = "Advertisement", device = ref,
+                deviceClass = "connectivity", entityCategory = "diagnostic",
+            ))
+            val now = System.currentTimeMillis()
+            val lastSeen = advertisementPresence[instanceId]?.lastSeenMs?.takeIf { it > 0 } ?: latestSeenMs(instanceId)
+            val online = lastSeen != null && now - lastSeen < presenceTimeoutMs(d)
+            advertisementPresence[instanceId] = AdvertisementPresence(online, lastSeen ?: 0L)
+            ws.sendStates(listOf("${instanceId}_advertisement" to if (online) "on" else "off"))
+        }
+
         val errorKeys = ConfigValidator.errorKeys(validationIssues, d.id)
         for (s in d.sensors) {
             if (!isEnabled(d.id, s.key)) continue
@@ -371,7 +395,8 @@ class BleRuntime(
         advKeysToRemove.forEach { discoveredAdvInstances.remove(it) }
         publishDiscoveredAdv()
 
-        declaredAdvInstances.removeAll { it == deviceId || it.startsWith("${deviceId}_") }
+        declaredAdvInstances.removeAll { belongsToDevice(it, deviceId) }
+        advertisementPresence.keys.removeAll { belongsToDevice(it, deviceId) }
 
         val mac = boundDevices[deviceId] ?: ""
         onLinkStatus(DeviceLinkStatus(deviceId, DeviceLinkState.Disconnected, mac))
@@ -463,13 +488,95 @@ class BleRuntime(
     }
 
     private fun startSources() {
+        // 첫 기동도 같은 mutex를 탄다 — 직후 BT ON restartScan()과 겹쳐도 세션이 둘이 되지 않게.
+        relaunchScan("initial start")
+        for (d in config.devices) {
+            startDevice(d)
+        }
+    }
+
+    private fun launchScan() {
         val adv = config.devices.filter { it.source == Source.advertisement }
         if (adv.isNotEmpty()) {
             scanJob = scanner.scan(adv, scanMode, unfilteredScan).onEach(::onReading).launchIn(scope)
         }
-        for (d in config.devices) {
-            startDevice(d)
+        startPresenceWatcher()
+    }
+
+    /**
+     * 광고 스캔 세션을 밖에서 강제로 다시 세운다. Bluetooth OFF→ON처럼 스캐너가 콜백 없이 죽는
+     * 사건을 서비스가 감지했을 때 호출한다. 스캐너 내부 watchdog도 같은 일을 하지만 최대 60초가
+     * 걸리므로, 사건을 아는 쪽에서 바로 깨우는 편이 빠르다.
+     */
+    fun restartScan(reason: String) {
+        if (!::config.isInitialized) return
+        if (config.devices.none { it.source == Source.advertisement }) return
+        LiveEventLogger.log(LogType.LINK, "BLE scan restart requested: $reason")
+        relaunchScan(reason)
+    }
+
+    /** 현재 세션을 취소 완료까지 기다린 뒤 새 세션을 띄운다. 연달아 불려도 mutex로 한 번에 하나씩. */
+    private fun relaunchScan(reason: String) {
+        scope.launch {
+            scanLifecycleMutex.withLock {
+                scanJob?.cancelAndJoin()
+                scanJob = null
+                scanner.stop()
+                // stop() 이후에 도착한 재시작 요청은 무시한다 — destroy 중에 세션을 다시 세우지 않게.
+                if (stopped) return@withLock
+                launchScan()
+                // stop()은 mutex 밖에서 플래그만 세우므로, 위 검사와 launchScan() 사이에 끼어든 경우를
+                // 한 번 더 닫는다. 이 시점에 stopped면 방금 띄운 세션이 마지막이라 여기서 거둔다.
+                if (stopped) {
+                    scanJob?.cancel()
+                    scanJob = null
+                    presenceJob?.cancel()
+                    presenceJob = null
+                }
+            }
         }
+    }
+
+    // ── advertisement presence ────────────────────────────────────────────────
+    private fun presenceTimeoutMs(d: DeviceConfig): Long = parseDurationMs(d.presenceTimeout, 0)
+
+    /** instanceId에 속한 모든 MAC(shared 모드면 여러 개) 중 가장 최근 수신 시각. */
+    private fun latestSeenMs(instanceId: String): Long? =
+        discoveredAdvInstances.values.filter { it.instanceId == instanceId }.maxOfOrNull { it.lastSeenMs }
+
+    /** instanceId가 속한 프로필. 동적 인스턴스는 `{id}_{MAC}` 꼴이라 belongsToDevice와 같은 규칙으로 찾는다. */
+    private fun profileForInstance(instanceId: String): DeviceConfig? =
+        devices[instanceId] ?: devices.values.firstOrNull { belongsToDevice(instanceId, it.id) }
+
+    private fun startPresenceWatcher() {
+        presenceJob?.cancel()
+        presenceJob = scope.launch {
+            while (isActive) {
+                delay(PRESENCE_TICK_MS)
+                val now = System.currentTimeMillis()
+                val out = mutableListOf<Pair<String, String>>()
+                for ((instanceId, state) in advertisementPresence) {
+                    if (!state.online) continue
+                    // 프로필이 사라졌으면(설정 삭제) 더 볼 것 없이 off. 타임아웃은 프로필에서 읽는다.
+                    val timeout = profileForInstance(instanceId)?.let { presenceTimeoutMs(it) } ?: 0L
+                    if (timeout > 0 && now - state.lastSeenMs < timeout) continue
+                    if (!advertisementPresence.replace(instanceId, state, state.copy(online = false))) continue
+                    out += "${instanceId}_advertisement" to "off"
+                    LiveEventLogger.log(LogType.LINK,
+                        "device=$instanceId: advertisement lost (off) — no packets for ${(now - state.lastSeenMs) / 1000}s, keeping last sensor values")
+                }
+                if (out.isNotEmpty()) ws.sendStates(out)
+            }
+        }
+    }
+
+    private fun markAdvertisementSeen(d: DeviceConfig, instanceId: String) {
+        if (presenceTimeoutMs(d) <= 0) return
+        val now = System.currentTimeMillis()
+        val previous = advertisementPresence.put(instanceId, AdvertisementPresence(true, now))
+        if (previous?.online == true) return
+        ws.sendStates(listOf("${instanceId}_advertisement" to "on"))
+        LiveEventLogger.log(LogType.LINK, "device=$instanceId: advertisement present (on)")
     }
 
     private fun resolveDeviceMac(d: DeviceConfig): DeviceConfig {
@@ -519,11 +626,13 @@ class BleRuntime(
                 if (d.advertise?.stopOnResponse == true && advertiser?.isAdvertising(d.id) == true) {
                     advertiser.stop(d.id, AdvertiseStopReason.ResponseReceived)
                 }
+                val instanceId = advertisementInstanceId(d, mac)
+                // 선언보다 먼저 기록해야 동적 인스턴스의 첫 선언에서 presence가 바로 on으로 나간다.
+                recordAdvertisementSeen(d, mac, r.deviceName, instanceId, r)
                 if (isDynamicAdvertisement(d)) {
                     ensureAdvertisementInstance(d, mac, r.deviceName)
                 }
-                val instanceId = advertisementInstanceId(d, mac)
-                recordAdvertisementSeen(d, mac, r.deviceName, instanceId, r)
+                markAdvertisementSeen(d, instanceId)
                 for (s in d.sensors) {
                     if (!isEnabled(d.id, s.key) || s.decode == null) continue
                     val bytes = advertisementPayloadBytes(r, s.sourceField) ?: continue
@@ -717,9 +826,7 @@ class BleRuntime(
         onAdvertisingChanged(d.id, isAdvertising)
         val stateStr = if (isAdvertising) "on" else "off"
         val targetInstanceIds = if (isDynamicAdvertisement(d)) {
-            declaredAdvInstances.filter {
-                it == d.id || (it.startsWith("${d.id}_") && NORMALIZED_MAC_REGEX.matches(it.substring(d.id.length + 1)))
-            }.ifEmpty { listOf(d.id) }
+            declaredAdvInstances.filter { belongsToDevice(it, d.id) }.ifEmpty { listOf(d.id) }
         } else {
             listOf(d.id)
         }
@@ -741,8 +848,13 @@ class BleRuntime(
     fun isAdvertising(deviceId: String): Boolean = advertiser?.isAdvertising(deviceId) == true
 
     fun stop() {
+        // relaunchScan()이 대기 중이어도 launchScan()으로 넘어가지 못하게 먼저 막는다.
+        stopped = true
         scanJob?.cancel()
         scanJob = null
+        presenceJob?.cancel()
+        presenceJob = null
+        advertisementPresence.clear()
         deviceConnectionJobs.values.forEach { it.cancel() }
         deviceConnectionJobs.clear()
 
@@ -857,6 +969,16 @@ class BleRuntime(
 
     private fun normalizeMac(mac: String) = mac.replace(":", "").replace("-", "").uppercase()
 
+    /**
+     * instanceId가 이 프로필의 것인가. 동적 인스턴스는 `{id}_{12자리 MAC}`이므로 접두사만 보면
+     * `car`를 지울 때 `car_park_…`까지 걸린다. 접두사 뒤가 정확히 MAC일 때만 같은 프로필로 본다.
+     */
+    private fun belongsToDevice(instanceId: String, deviceId: String): Boolean {
+        if (instanceId == deviceId) return true
+        val suffix = instanceId.removePrefix("${deviceId}_")
+        return suffix != instanceId && NORMALIZED_MAC_REGEX.matches(suffix)
+    }
+
     private fun isEnabled(deviceId: String, key: String) = "$deviceId/$key" in enabled
     private fun uid(deviceId: String, key: String) = "${deviceId}_$key"
     private fun title(key: String) = key.replace('_', ' ').replaceFirstChar { it.uppercase() }
@@ -875,7 +997,11 @@ class BleRuntime(
             if (fmt.isEmpty()) value.toInt().toString() else String.format("%$fmt", value.toInt())
         }
 
+    /** `{instanceId}_advertisement`의 현재 상태와 마지막 수신 시각. */
+    private data class AdvertisementPresence(val online: Boolean, val lastSeenMs: Long)
+
     companion object {
+        private const val PRESENCE_TICK_MS = 10_000L
         private val NORMALIZED_MAC_REGEX = Regex("^[0-9A-F]{12}$", RegexOption.IGNORE_CASE)
     }
 }
