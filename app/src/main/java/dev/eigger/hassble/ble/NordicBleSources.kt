@@ -1,6 +1,5 @@
 package dev.eigger.hassble.ble
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
@@ -66,14 +65,15 @@ private const val PREREQ_POLL_MS = 2_000L
  * 매칭되는 기기의 페이로드 데이터를 추출하여 방출합니다.
  */
 class NordicAdvertisementScanner(private val context: Context) : AdvertisementScanner {
-    private var scanJob: Job? = null
     private val scanner by lazy { BleScanner(context) }
 
-    // Simple cache to merge ADV_IND and SCAN_RSP data per MAC address
-    private val manufacturerDataCache = mutableMapOf<String, android.util.SparseArray<no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
-    private val serviceDataCache = mutableMapOf<String, Map<android.os.ParcelUuid, no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
-    private val serviceUuidsCache = mutableMapOf<String, List<android.os.ParcelUuid>>()
-    private val cacheTimestamps = mutableMapOf<String, Long>()
+    // Simple cache to merge ADV_IND and SCAN_RSP data per MAC address.
+    // stop()은 collect 코루틴과 다른 스레드에서 불릴 수 있어(서비스 destroy, 설정 변경) clear()가
+    // 순회와 겹친다. ConcurrentHashMap이면 그 순간에도 CME 없이 지나간다.
+    private val manufacturerDataCache = java.util.concurrent.ConcurrentHashMap<String, android.util.SparseArray<no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
+    private val serviceDataCache = java.util.concurrent.ConcurrentHashMap<String, Map<android.os.ParcelUuid, no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray>>()
+    private val serviceUuidsCache = java.util.concurrent.ConcurrentHashMap<String, List<android.os.ParcelUuid>>()
+    private val cacheTimestamps = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     // Shared throttle guard: Android counts scan starts per-app across ALL scan sessions
     // (scan() for advertisement devices, scanForMac() for OBD reconnect-wait), not per callback.
@@ -348,8 +348,10 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)
             ?.adapter?.isEnabled == true
 
-    private fun hasScanPermission(): Boolean =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+    private fun missingScanPermissions(): List<String> =
+        ScanPermissions.missing(android.os.Build.VERSION.SDK_INT) { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
 
     /**
      * 권한이 없거나 Bluetooth가 꺼져 있으면 startScan()이 실패만 반복하므로, 조건이 갖춰질 때까지
@@ -358,16 +360,19 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
      */
     private suspend fun awaitScanPrerequisites() {
         var loggedPermission = false
-        while (!hasScanPermission()) {
+        while (true) {
+            val missing = missingScanPermissions()
+            if (missing.isEmpty()) break
+            val names = missing.joinToString { it.substringAfterLast('.') }
             if (!loggedPermission) {
-                Log.e(TAG, "BLUETOOTH_SCAN permission not granted")
-                LiveEventLogger.log(LogType.LINK, "BLE scan blocked: BLUETOOTH_SCAN permission not granted — waiting for permission")
+                Log.e(TAG, "scan permissions not granted: $names")
+                LiveEventLogger.log(LogType.LINK, "BLE scan blocked: permission not granted ($names) — waiting for permission")
                 loggedPermission = true
             }
-            BleScanHealth.onScanStopped("waiting for BLUETOOTH_SCAN permission")
+            BleScanHealth.onScanStopped("waiting for permission: $names")
             delay(PREREQ_POLL_MS)
         }
-        if (loggedPermission) LiveEventLogger.log(LogType.LINK, "BLUETOOTH_SCAN permission granted — resuming scan")
+        if (loggedPermission) LiveEventLogger.log(LogType.LINK, "Scan permissions granted — resuming scan")
 
         var loggedBluetooth = false
         while (!isBluetoothEnabled()) {
@@ -382,11 +387,13 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     }
 
     override fun scanForMac(mac: String, scanMode: BleScanModeOption): Flow<Unit> = flow {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+        val missing = missingScanPermissions()
+        if (missing.isNotEmpty()) {
             // 조용히 return하면 빈 Flow가 되어 호출측 first()가 NoSuchElementException을 던진다.
             // 재연결 루프에서는 그게 "권한 없음"이 아니라 정체불명의 실패로 보이므로 명시한다.
-            Log.e(TAG, "BLUETOOTH_SCAN permission not granted for scanForMac")
-            throw SecurityException("BLUETOOTH_SCAN permission not granted")
+            val names = missing.joinToString { it.substringAfterLast('.') }
+            Log.e(TAG, "scan permissions not granted for scanForMac: $names")
+            throw SecurityException("scan permission not granted: $names")
         }
         val normalizedMac = mac.uppercase().replace("-", ":")
         val nativeScanMode = when (scanMode) {
@@ -404,8 +411,6 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     }
 
     override fun stop() {
-        scanJob?.cancel()
-        scanJob = null
         manufacturerDataCache.clear()
         serviceDataCache.clear()
         serviceUuidsCache.clear()

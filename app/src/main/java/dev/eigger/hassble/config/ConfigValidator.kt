@@ -174,6 +174,39 @@ object ConfigValidator {
                     sensorPath(id, key, "decode"))
         }
 
+        // ── 예약 키 / presence_timeout ─────────────────────────────────────────────
+        // 앱이 자동으로 붙이는 진단 엔티티(`{instance}_link_status`, `_advertising`, `_advertisement`)와
+        // 같은 uniqueId가 되는 센서/컨트롤 키는 HA에서 서로 덮어쓴다. 해당 키만 비활성(ERROR).
+        run {
+            val id = device.id
+            val reserved = reservedKeys(device)
+            for (s in device.sensors) {
+                if (s.key in reserved) {
+                    issues += ValidationIssue(ValidationLevel.ERROR, id, s.key,
+                        "sensor key '${s.key}' is reserved for the app's built-in diagnostic entity",
+                        sensorPath(id, s.key, "key"))
+                }
+            }
+            for (c in device.controls) {
+                if (c.key in reserved) {
+                    issues += ValidationIssue(ValidationLevel.ERROR, id, c.key,
+                        "control key '${c.key}' is reserved for the app's built-in diagnostic entity",
+                        controlPath(id, c.key, "key"))
+                }
+            }
+            if (device.source == Source.advertisement && !isValidDuration(device.presenceTimeout)) {
+                issues += ValidationIssue(ValidationLevel.WARNING, id, null,
+                    "presence_timeout '${device.presenceTimeout}' is not a duration (e.g. 5m, 300s, 0) — " +
+                        "the advertisement presence entity is disabled",
+                    devicePath(id, "presence_timeout"))
+            }
+            if (device.source != Source.advertisement && device.presenceTimeout != DEFAULT_PRESENCE_TIMEOUT) {
+                issues += ValidationIssue(ValidationLevel.WARNING, id, null,
+                    "presence_timeout only applies to source: advertisement — ignored",
+                    devicePath(id, "presence_timeout"))
+            }
+        }
+
         // ── advertise 검증 ────────────────────────────────────────────────────────
         if (device.advertise != null) {
             val id = device.id
@@ -402,6 +435,21 @@ object ConfigValidator {
      * 문자열 fingerprint로 반환. 이전 fingerprint와 다르면 HA 엔티티 cleanup이 필요.
      * issues는 반드시 호출 전에 validate()로 한 번만 계산하여 넘길 것 (O(n²) 방지).
      */
+    private const val DEFAULT_PRESENCE_TIMEOUT = "5m"
+    private val durationRegex = Regex("""^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$""")
+
+    /** parseDurationMs와 같은 문법. "5min"처럼 어긋나면 parse가 조용히 0을 줘서 기능이 꺼지므로 따로 검사한다. */
+    fun isValidDuration(value: String): Boolean = durationRegex.matches(value)
+
+    /** 앱이 붙이는 진단 엔티티와 uniqueId가 겹치는 센서/컨트롤 키. */
+    fun reservedKeys(d: DeviceConfig): Set<String> = when (d.source) {
+        Source.advertisement -> buildSet {
+            add("advertisement")
+            if (d.advertise != null) add("advertising")
+        }
+        Source.gatt_notify, Source.obd -> setOf("link_status")
+    }
+
     fun computeEffectiveFingerprint(d: DeviceConfig, issues: List<ValidationIssue>): String {
         val errKeys = errorKeys(issues, d.id)
         val sb = StringBuilder()

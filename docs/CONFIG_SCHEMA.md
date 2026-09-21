@@ -41,7 +41,7 @@ devices: [ ... ]                    # 아래 참조
 | `name` | ✅ | HA 표시 이름 |
 | `source` | ✅ | `advertisement` \| `gatt_notify` \| `obd` |
 | `instance_mode` | | advertisement 전용. `mac`(기본)=MAC별 엔티티, `shared`=프로필 ID 하나로 덮어쓰기 |
-| `presence_timeout` | | advertisement 전용. 기본 `5m`. 이 시간 동안 광고가 없으면 `{instance}_advertisement` binary_sensor를 `off`로, 다시 수신되면 `on`으로. 센서 값·설정은 그대로 유지. `"0"`이면 엔티티를 만들지 않음 |
+| `presence_timeout` | | advertisement 전용. 기본 `5m`. 이 시간 동안 광고가 없으면 `{instance}_advertisement` binary_sensor를 `off`로, 다시 수신되면 `on`으로. 센서 값·설정은 그대로 유지. `"0"`이면 엔티티를 만들지 않음. YAML 전용(앱 기기 편집 화면에는 없음) |
 | `advertise` | | advertisement 전용. 앱에서 BLE 광고(TX)를 송신하기 위한 설정 |
 | `sensors` | △ | 센서 목록 (읽기) |
 | `controls` | | 제어 목록 (HA→BLE 또는 앱 동작 제어) |
