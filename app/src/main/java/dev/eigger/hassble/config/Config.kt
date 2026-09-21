@@ -32,6 +32,9 @@ data class DeviceConfig(
     val source: Source,
     val match: MatchConfig? = null,
     @SerialName("instance_mode") val instanceMode: AdvertisementInstanceMode = AdvertisementInstanceMode.mac,
+    // advertisement 전용. 이 시간 동안 광고가 한 건도 없으면 `{instance}_advertisement` binary_sensor를
+    // off로 내린다(다시 수신되면 on). 센서 값·설정은 그대로 두므로 "사라짐"만 HA에서 보인다. "0"이면 비활성.
+    @SerialName("presence_timeout") val presenceTimeout: String = "5m",
     val advertise: AdvertiseConfig? = null,
     val gatt: GattConfig? = null,
     val obd: ObdConfig? = null,

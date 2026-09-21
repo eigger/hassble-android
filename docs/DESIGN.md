@@ -143,6 +143,11 @@ connect → notify char 구독 → raw 디코딩. write char 있으면 command �
 | 권한 31+ | BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION (비콘 스캔 시 필수) |
 | 권한 ≤30 | ACCESS_FINE_LOCATION |
 | 스캔 스로틀 | 30초 5회 제한 → 지속 스캔 유지 |
+| 스캔 조용한 죽음 | Nordic flow는 `onScanFailed`가 올 때만 끝난다. AOSP 30분 opportunistic 강등·BT OFF·스택 재시작은 콜백이 없으므로 `ScanWatchdogPolicy`가 60초(무결과 시 최대 10분까지 백오프) 무결과 또는 25분 세션 경과 시 `stopScan → 1s → startScan` |
+| BT OFF→ON / 권한 | 서비스의 `ACTION_STATE_CHANGED` 리시버가 `restartScan()`, 스캐너는 권한·BT ON이 갖춰질 때까지 대기 후 재개 |
+| sticky 재생성 | `onStartCommand(null)`이면 DataStore 저장값으로 게이트웨이 복원 (BootReceiver와 동일 경로) |
+| 광고 끊김 표시 | `presence_timeout`(기본 5m) 동안 광고 없으면 `{instance}_advertisement` binary_sensor off, 재수신 시 on. 센서 값·설정은 유지 |
+| 진단 로그 | scan start/stop/restart 사유, `onScanFailed errorCode`, 5분 heartbeat에 `BleScanHealth`(lastResult age·세션 나이·필터 수) |
 | Doze/배터리 | 배터리 최적화 예외 안내 |
 | WS 재연결 | HA 끊기면 백오프 재연결, 재연결 시 앱이 엔티티 선언 재전송 |
 

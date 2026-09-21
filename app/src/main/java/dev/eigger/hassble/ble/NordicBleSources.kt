@@ -35,6 +35,7 @@ import no.nordicsemi.android.kotlin.ble.core.data.util.DataByteArray
 import no.nordicsemi.android.kotlin.ble.core.data.BleWriteType
 import no.nordicsemi.android.kotlin.ble.core.data.GattConnectionState
 import no.nordicsemi.android.kotlin.ble.scanner.BleScanner
+import no.nordicsemi.android.kotlin.ble.scanner.errors.ScanningFailedException
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanMode
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScannerSettings
 import no.nordicsemi.android.kotlin.ble.core.scanner.BleScanFilter
@@ -56,6 +57,8 @@ private fun uuidFrom(str: String): UUID {
 }
 
 private const val TAG = "HassBleSources"
+/** 권한/Bluetooth ON을 기다리는 동안의 재확인 주기. */
+private const val PREREQ_POLL_MS = 2_000L
 
 /**
  * 경로 A: 광고 passive scan.
@@ -113,12 +116,6 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         scanMode: BleScanModeOption,
         unfiltered: Boolean
     ): Flow<RawReading> = flow {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, "BLUETOOTH_SCAN permission not granted")
-            LiveEventLogger.log(LogType.LINK, "BLE scan failed: BLUETOOTH_SCAN permission not granted")
-            return@flow
-        }
-
         val scanner = this@NordicAdvertisementScanner.scanner
         Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles (unfiltered=$unfiltered)")
         LiveEventLogger.log(LogType.LINK, "Starting Nordic BLE scan for ${devices.size} profiles (unfiltered=$unfiltered)...")
@@ -134,151 +131,254 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         )
         val scanFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
         LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size}")
+        if (scanFilters.isEmpty()) {
+            // Android 8.1+는 필터 없는 스캔에 화면이 꺼진 동안 결과를 주지 않는다.
+            LiveEventLogger.log(LogType.LINK,
+                "[Warning] BLE scan has no hardware filters — Android suppresses unfiltered scan results while the screen is off")
+        }
+
+        // 세션마다 결과가 한 건도 없이 끝난 횟수. 결과가 오면 0으로 돌아간다.
+        var consecutiveIdleRestarts = 0
+        // 스캐너 자신이 감지한 마지막 결과 시각. 세션 경계와 무관하게 이어진다.
+        val lastResultMs = java.util.concurrent.atomic.AtomicLong(0L)
 
         while (currentCoroutineContext().isActive) {
+            awaitScanPrerequisites()
             awaitScanThrottleSlot()
 
+            val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
+            val sessionStartMs = System.currentTimeMillis()
+            lastResultMs.set(sessionStartMs)
+            var gotResultThisSession = false
+            var stopReason = "flow ended"
+            var failureCode: Int? = null
+            BleScanHealth.onScanStarted(sessionStartMs, scanFilters.size)
+            LiveEventLogger.log(LogType.LINK,
+                "BLE scan start: session #${BleScanHealth.state.value.sessionCount}, mode=${scanMode.label}, " +
+                    "filters=${scanFilters.size}, idleLimit=${idleLimitMs / 1000}s, maxSession=${ScanWatchdogPolicy.MAX_SESSION_MS / 60_000}m")
+
             try {
-                scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
-                    val deviceName = result.device.name ?: ""
-                    val deviceAddress = result.device.address
-                    val scanRecord = result.data?.scanRecord
-                    val isConnectable = result.data?.isConnectable
-
-                    // Update caches with new data if available
-                    var cacheUpdated = false
-                    scanRecord?.manufacturerSpecificData?.let {
-                        if (it.size() > 0) {
-                            manufacturerDataCache[deviceAddress] = it
-                            cacheUpdated = true
+                coroutineScope {
+                    // watchdog: 결과가 끊기거나 세션이 너무 오래되면 ScanRestartRequest를 던져
+                    // 이 coroutineScope(=collect)를 통째로 취소한다. 예외는 아래 catch가 받는다.
+                    val watchdog = launch {
+                        while (isActive) {
+                            delay(ScanWatchdogPolicy.TICK_MS)
+                            val reason = ScanWatchdogPolicy.restartReason(
+                                nowMs = System.currentTimeMillis(),
+                                sessionStartMs = sessionStartMs,
+                                lastResultMs = lastResultMs.get(),
+                                idleLimitMs = idleLimitMs,
+                            ) ?: continue
+                            throw ScanRestartRequest(reason)
                         }
                     }
-                    scanRecord?.serviceData?.let {
-                        if (it.isNotEmpty()) {
-                            serviceDataCache[deviceAddress] = it
-                            cacheUpdated = true
-                        }
-                    }
-                    scanRecord?.serviceUuids?.let {
-                        if (it.isNotEmpty()) {
-                            serviceUuidsCache[deviceAddress] = it
-                            cacheUpdated = true
-                        }
-                    }
-                    if (cacheUpdated) {
-                        cacheTimestamps[deviceAddress] = System.currentTimeMillis()
-                    }
-                    cleanupOldCaches()
-
-                    // Use merged data for matching and decoding
-                    val manufacturerData = manufacturerDataCache[deviceAddress] ?: scanRecord?.manufacturerSpecificData
-                    val serviceData = serviceDataCache[deviceAddress] ?: scanRecord?.serviceData ?: emptyMap()
-                    val advertisedServiceUuids = serviceUuidsCache[deviceAddress] ?: scanRecord?.serviceUuids.orEmpty()
-                    val rawBytes = scanRecord?.bytes
-
-                    // LiveEventLogger.log()는 includeAdvLogs가 꺼져 있으면(기본값) ADV 항목을
-                    // 그냥 버린다. 그런데 이 hex 포맷팅 자체가 스캔 결과마다(주행 중엔 초당
-                    // 수십 건) 도는 비용이라, 로그를 쓸 게 아니면 애초에 만들지 않는다.
-                    if (LiveEventLogger.includeAdvLogs) {
-                        val mfrHex = manufacturerData?.let {
-                            val list = mutableListOf<String>()
-                            for (i in 0 until it.size()) {
-                                val id = it.keyAt(i)
-                                val bytes = it.valueAt(i).value
-                                list.add("0x%04X: %s".format(id, bytes.joinToString("") { String.format("%02X", it) }))
+                    try {
+                        scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
+                            val now = System.currentTimeMillis()
+                            lastResultMs.set(now)
+                            gotResultThisSession = true
+                            BleScanHealth.onResult(now)
+                            val deviceName = result.device.name ?: ""
+                            val deviceAddress = result.device.address
+                            val scanRecord = result.data?.scanRecord
+                            val isConnectable = result.data?.isConnectable
+        
+                            // Update caches with new data if available
+                            var cacheUpdated = false
+                            scanRecord?.manufacturerSpecificData?.let {
+                                if (it.size() > 0) {
+                                    manufacturerDataCache[deviceAddress] = it
+                                    cacheUpdated = true
+                                }
                             }
-                            list.joinToString(", ")
-                        }
-                        val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
-                            "${getShortUuid(key.uuid)}: ${value.value.joinToString("") { String.format("%02X", it) }}"
-                        }
-                        val logMsg = buildString {
-                            append("addr=$deviceAddress")
-                            if (deviceName.isNotBlank()) append(", name='$deviceName'")
-                            if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
-                            if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
-                            isConnectable?.let { append(", connectable=$it") }
-                        }
-                        LiveEventLogger.log(LogType.ADV, logMsg)
-                    }
-
-                    if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
-                        val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }
-                        val svcUuids = serviceData.keys.map { getShortUuid(it.uuid) }
-                        Log.d(TAG, "ADV addr=$deviceAddress name='$deviceName' mfr=$mfrIds svc=$svcUuids")
-                    }
-
-                    for (d in devices) {
-                        if (d.source != Source.advertisement) continue
-                        val match = d.match ?: continue
-
-                        if (!AdvertisementMatcher.matches(
-                                match,
-                                deviceAddress,
-                                deviceName,
-                                hasServiceUuid = { uuid ->
+                            scanRecord?.serviceData?.let {
+                                if (it.isNotEmpty()) {
+                                    serviceDataCache[deviceAddress] = it
+                                    cacheUpdated = true
+                                }
+                            }
+                            scanRecord?.serviceUuids?.let {
+                                if (it.isNotEmpty()) {
+                                    serviceUuidsCache[deviceAddress] = it
+                                    cacheUpdated = true
+                                }
+                            }
+                            if (cacheUpdated) {
+                                cacheTimestamps[deviceAddress] = System.currentTimeMillis()
+                            }
+                            cleanupOldCaches()
+        
+                            // Use merged data for matching and decoding
+                            val manufacturerData = manufacturerDataCache[deviceAddress] ?: scanRecord?.manufacturerSpecificData
+                            val serviceData = serviceDataCache[deviceAddress] ?: scanRecord?.serviceData ?: emptyMap()
+                            val advertisedServiceUuids = serviceUuidsCache[deviceAddress] ?: scanRecord?.serviceUuids.orEmpty()
+                            val rawBytes = scanRecord?.bytes
+        
+                            // LiveEventLogger.log()는 includeAdvLogs가 꺼져 있으면(기본값) ADV 항목을
+                            // 그냥 버린다. 그런데 이 hex 포맷팅 자체가 스캔 결과마다(주행 중엔 초당
+                            // 수십 건) 도는 비용이라, 로그를 쓸 게 아니면 애초에 만들지 않는다.
+                            if (LiveEventLogger.includeAdvLogs) {
+                                val mfrHex = manufacturerData?.let {
+                                    val list = mutableListOf<String>()
+                                    for (i in 0 until it.size()) {
+                                        val id = it.keyAt(i)
+                                        val bytes = it.valueAt(i).value
+                                        list.add("0x%04X: %s".format(id, bytes.joinToString("") { String.format("%02X", it) }))
+                                    }
+                                    list.joinToString(", ")
+                                }
+                                val svcHex = serviceData.entries.joinToString(", ") { (key, value) ->
+                                    "${getShortUuid(key.uuid)}: ${value.value.joinToString("") { String.format("%02X", it) }}"
+                                }
+                                val logMsg = buildString {
+                                    append("addr=$deviceAddress")
+                                    if (deviceName.isNotBlank()) append(", name='$deviceName'")
+                                    if (!mfrHex.isNullOrBlank()) append(", mfr=[$mfrHex]")
+                                    if (svcHex.isNotBlank()) append(", svc=[$svcHex]")
+                                    isConnectable?.let { append(", connectable=$it") }
+                                }
+                                LiveEventLogger.log(LogType.ADV, logMsg)
+                            }
+        
+                            if ((manufacturerData != null && manufacturerData.size() > 0) || serviceData.isNotEmpty()) {
+                                val mfrIds = (0 until (manufacturerData?.size() ?: 0)).map { manufacturerData!!.keyAt(it) }
+                                val svcUuids = serviceData.keys.map { getShortUuid(it.uuid) }
+                                Log.d(TAG, "ADV addr=$deviceAddress name='$deviceName' mfr=$mfrIds svc=$svcUuids")
+                            }
+        
+                            for (d in devices) {
+                                if (d.source != Source.advertisement) continue
+                                val match = d.match ?: continue
+        
+                                if (!AdvertisementMatcher.matches(
+                                        match,
+                                        deviceAddress,
+                                        deviceName,
+                                        hasServiceUuid = { uuid ->
+                                            val target = uuid.uppercase()
+                                            serviceData.keys.any { it.uuid.toString().uppercase().contains(target) }
+                                                || advertisedServiceUuids.any {
+                                                    it.uuid.toString().uppercase().contains(target)
+                                                }
+                                        },
+                                        manufacturerPayload = { id ->
+                                            manufacturerData?.get(id)?.value?.takeIf { it.isNotEmpty() }
+                                        },
+                                    )
+                                ) {
+                                    if (match.manufacturerId != null || match.serviceDataUuid != null) {
+                                        Log.d(TAG, "  NO MATCH profile=${d.id} mfrId=${match.manufacturerId} svcUuid=${match.serviceDataUuid}")
+                                    }
+                                    continue
+                                }
+        
+                                val manufacturerHex = resolveManufacturerHex(manufacturerData, match.manufacturerId)
+                                val serviceDataHex = match.serviceDataUuid?.let { uuid ->
                                     val target = uuid.uppercase()
-                                    serviceData.keys.any { it.uuid.toString().uppercase().contains(target) }
-                                        || advertisedServiceUuids.any {
-                                            it.uuid.toString().uppercase().contains(target)
-                                        }
-                                },
-                                manufacturerPayload = { id ->
-                                    manufacturerData?.get(id)?.value?.takeIf { it.isNotEmpty() }
-                                },
-                            )
-                        ) {
-                            if (match.manufacturerId != null || match.serviceDataUuid != null) {
-                                Log.d(TAG, "  NO MATCH profile=${d.id} mfrId=${match.manufacturerId} svcUuid=${match.serviceDataUuid}")
+                                    serviceData.entries.firstOrNull { (key, _) ->
+                                        key.uuid.toString().uppercase().contains(target)
+                                    }?.value?.value?.let { AdvertisementMatcher.bytesToHex(it) }
+                                }
+                                val fullScanHex = rawBytes?.value?.let { bytesToHex(it) }
+                                val primaryField = d.sensors.firstOrNull()?.sourceField ?: SourceField.raw
+                                val primaryHex = when (primaryField) {
+                                    SourceField.service_data -> serviceDataHex
+                                    SourceField.manufacturer_data -> manufacturerHex
+                                    SourceField.raw -> fullScanHex
+                                }
+                                if (primaryHex.isNullOrBlank()) {
+                                    Log.d(TAG, "  MATCHED ${d.id} addr=$deviceAddress but $primaryField is null (mfr=$manufacturerHex)")
+                                    continue
+                                }
+                                Log.i(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
+        
+                                emit(
+                                    RawReading(
+                                        deviceId = d.id,
+                                        source = "advertisement",
+                                        rawHex = primaryHex,
+                                        macAddress = deviceAddress,
+                                        deviceName = deviceName.takeIf { it.isNotBlank() },
+                                        manufacturerHex = manufacturerHex,
+                                        serviceDataHex = serviceDataHex,
+                                        fullScanHex = fullScanHex,
+                                        isConnectable = isConnectable,
+                                    ),
+                                )
                             }
-                            continue
                         }
-
-                        val manufacturerHex = resolveManufacturerHex(manufacturerData, match.manufacturerId)
-                        val serviceDataHex = match.serviceDataUuid?.let { uuid ->
-                            val target = uuid.uppercase()
-                            serviceData.entries.firstOrNull { (key, _) ->
-                                key.uuid.toString().uppercase().contains(target)
-                            }?.value?.value?.let { AdvertisementMatcher.bytesToHex(it) }
-                        }
-                        val fullScanHex = rawBytes?.value?.let { bytesToHex(it) }
-                        val primaryField = d.sensors.firstOrNull()?.sourceField ?: SourceField.raw
-                        val primaryHex = when (primaryField) {
-                            SourceField.service_data -> serviceDataHex
-                            SourceField.manufacturer_data -> manufacturerHex
-                            SourceField.raw -> fullScanHex
-                        }
-                        if (primaryHex.isNullOrBlank()) {
-                            Log.d(TAG, "  MATCHED ${d.id} addr=$deviceAddress but $primaryField is null (mfr=$manufacturerHex)")
-                            continue
-                        }
-                        Log.i(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
-
-                        emit(
-                            RawReading(
-                                deviceId = d.id,
-                                source = "advertisement",
-                                rawHex = primaryHex,
-                                macAddress = deviceAddress,
-                                deviceName = deviceName.takeIf { it.isNotBlank() },
-                                manufacturerHex = manufacturerHex,
-                                serviceDataHex = serviceDataHex,
-                                fullScanHex = fullScanHex,
-                                isConnectable = isConnectable,
-                            ),
-                        )
+                    } finally {
+                        watchdog.cancel()
                     }
                 }
-                // Scan ended without exception — restart immediately (throttle guard above handles rate)
+                // Scan ended without exception — restart (throttle guard above handles rate)
                 Log.w(TAG, "BLE scanner flow ended, restarting...")
-                LiveEventLogger.log(LogType.LINK, "BLE scan ended, restarting...")
+                LiveEventLogger.log(LogType.LINK, "BLE scan stop: flow ended, restarting...")
             } catch (e: CancellationException) {
+                BleScanHealth.onScanStopped("cancelled")
+                LiveEventLogger.log(LogType.LINK, "BLE scan stop: cancelled")
                 throw e
+            } catch (e: ScanRestartRequest) {
+                stopReason = "watchdog: ${e.message}"
+                Log.w(TAG, "BLE scan watchdog restart: ${e.message}")
+                LiveEventLogger.log(LogType.LINK, "BLE scan restart: ${e.message}")
+            } catch (e: ScanningFailedException) {
+                failureCode = e.errorCode.value
+                stopReason = "onScanFailed ${e.errorCode}"
+                Log.e(TAG, "BLE scan failed: ${e.errorCode} (code=${e.errorCode.value})")
+                LiveEventLogger.log(LogType.LINK,
+                    "BLE scan failure: errorCode=${e.errorCode.value} (${e.errorCode}), restarting...")
             } catch (e: Exception) {
+                stopReason = "error: ${e.localizedMessage}"
                 Log.e(TAG, "Error in BleScanner stream, restarting...", e)
                 LiveEventLogger.log(LogType.LINK, "BLE scan error: ${e.localizedMessage}, restarting...")
             }
+            BleScanHealth.onScanStopped(stopReason, failureCode)
+            consecutiveIdleRestarts = if (gotResultThisSession) 0 else consecutiveIdleRestarts + 1
+            // 스택이 이전 세션을 정리할 시간을 준 뒤 startScan() 한다.
+            delay(ScanWatchdogPolicy.RESTART_DELAY_MS)
         }
+    }
+
+    /** watchdog이 세션을 끊을 때 던지는 신호. CancellationException이 아니어야 catch에서 구분된다. */
+    private class ScanRestartRequest(reason: String) : RuntimeException(reason)
+
+    private fun isBluetoothEnabled(): Boolean =
+        (context.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)
+            ?.adapter?.isEnabled == true
+
+    private fun hasScanPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * 권한이 없거나 Bluetooth가 꺼져 있으면 startScan()이 실패만 반복하므로, 조건이 갖춰질 때까지
+     * 여기서 기다린다. 예전엔 권한이 없으면 flow를 그냥 끝내서 사용자가 나중에 권한을 줘도
+     * 재시작 경로가 없었다. 서비스의 Bluetooth 상태 리시버가 restartScan()으로 즉시 깨우기도 한다.
+     */
+    private suspend fun awaitScanPrerequisites() {
+        var loggedPermission = false
+        while (!hasScanPermission()) {
+            if (!loggedPermission) {
+                Log.e(TAG, "BLUETOOTH_SCAN permission not granted")
+                LiveEventLogger.log(LogType.LINK, "BLE scan blocked: BLUETOOTH_SCAN permission not granted — waiting for permission")
+                loggedPermission = true
+            }
+            BleScanHealth.onScanStopped("waiting for BLUETOOTH_SCAN permission")
+            delay(PREREQ_POLL_MS)
+        }
+        if (loggedPermission) LiveEventLogger.log(LogType.LINK, "BLUETOOTH_SCAN permission granted — resuming scan")
+
+        var loggedBluetooth = false
+        while (!isBluetoothEnabled()) {
+            if (!loggedBluetooth) {
+                LiveEventLogger.log(LogType.LINK, "BLE scan blocked: Bluetooth is off — waiting for it to turn on")
+                loggedBluetooth = true
+            }
+            BleScanHealth.onScanStopped("waiting for Bluetooth ON")
+            delay(PREREQ_POLL_MS)
+        }
+        if (loggedBluetooth) LiveEventLogger.log(LogType.LINK, "Bluetooth is on — resuming scan")
     }
 
     override fun scanForMac(mac: String, scanMode: BleScanModeOption): Flow<Unit> = flow {
