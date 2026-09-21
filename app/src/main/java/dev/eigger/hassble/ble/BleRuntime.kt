@@ -395,8 +395,8 @@ class BleRuntime(
         advKeysToRemove.forEach { discoveredAdvInstances.remove(it) }
         publishDiscoveredAdv()
 
-        declaredAdvInstances.removeAll { it == deviceId || it.startsWith("${deviceId}_") }
-        advertisementPresence.keys.removeAll { it == deviceId || it.startsWith("${deviceId}_") }
+        declaredAdvInstances.removeAll { belongsToDevice(it, deviceId) }
+        advertisementPresence.keys.removeAll { belongsToDevice(it, deviceId) }
 
         val mac = boundDevices[deviceId] ?: ""
         onLinkStatus(DeviceLinkStatus(deviceId, DeviceLinkState.Disconnected, mac))
@@ -488,7 +488,8 @@ class BleRuntime(
     }
 
     private fun startSources() {
-        launchScan()
+        // 첫 기동도 같은 mutex를 탄다 — 직후 BT ON restartScan()과 겹쳐도 세션이 둘이 되지 않게.
+        relaunchScan("initial start")
         for (d in config.devices) {
             startDevice(d)
         }
@@ -524,6 +525,14 @@ class BleRuntime(
                 // stop() 이후에 도착한 재시작 요청은 무시한다 — destroy 중에 세션을 다시 세우지 않게.
                 if (stopped) return@withLock
                 launchScan()
+                // stop()은 mutex 밖에서 플래그만 세우므로, 위 검사와 launchScan() 사이에 끼어든 경우를
+                // 한 번 더 닫는다. 이 시점에 stopped면 방금 띄운 세션이 마지막이라 여기서 거둔다.
+                if (stopped) {
+                    scanJob?.cancel()
+                    scanJob = null
+                    presenceJob?.cancel()
+                    presenceJob = null
+                }
             }
         }
     }
@@ -818,9 +827,7 @@ class BleRuntime(
         onAdvertisingChanged(d.id, isAdvertising)
         val stateStr = if (isAdvertising) "on" else "off"
         val targetInstanceIds = if (isDynamicAdvertisement(d)) {
-            declaredAdvInstances.filter {
-                it == d.id || (it.startsWith("${d.id}_") && NORMALIZED_MAC_REGEX.matches(it.substring(d.id.length + 1)))
-            }.ifEmpty { listOf(d.id) }
+            declaredAdvInstances.filter { belongsToDevice(it, d.id) }.ifEmpty { listOf(d.id) }
         } else {
             listOf(d.id)
         }
@@ -962,6 +969,16 @@ class BleRuntime(
     }
 
     private fun normalizeMac(mac: String) = mac.replace(":", "").replace("-", "").uppercase()
+
+    /**
+     * instanceId가 이 프로필의 것인가. 동적 인스턴스는 `{id}_{12자리 MAC}`이므로 접두사만 보면
+     * `car`를 지울 때 `car_park_…`까지 걸린다. 접두사 뒤가 정확히 MAC일 때만 같은 프로필로 본다.
+     */
+    private fun belongsToDevice(instanceId: String, deviceId: String): Boolean {
+        if (instanceId == deviceId) return true
+        val suffix = instanceId.removePrefix("${deviceId}_")
+        return suffix != instanceId && NORMALIZED_MAC_REGEX.matches(suffix)
+    }
 
     private fun isEnabled(deviceId: String, key: String) = "$deviceId/$key" in enabled
     private fun uid(deviceId: String, key: String) = "${deviceId}_$key"

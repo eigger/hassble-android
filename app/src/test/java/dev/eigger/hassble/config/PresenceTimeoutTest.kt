@@ -14,13 +14,14 @@ class PresenceTimeoutTest {
     private fun parse(devicesYaml: String): GatewayConfig =
         Yaml.default.decodeFromString(GatewayConfig.serializer(), "devices:\n$devicesYaml")
 
+    // trimIndent 없이 2칸 들여쓰기 그대로 둔다 — 아래에서 줄을 덧붙일 때 열이 맞아야 한다.
     private val baseAdv = """
-          - id: door
-            name: "Door"
-            source: advertisement
-            match:
-              service_data_uuid: "181a"
-    """.trimIndent()
+  - id: door
+    name: "Door"
+    source: advertisement
+    match:
+      service_data_uuid: "181a"
+"""
 
     @Test
     fun `defaults to 5 minutes and parses to millis`() {
@@ -32,14 +33,14 @@ class PresenceTimeoutTest {
 
     @Test
     fun `zero disables without any issue`() {
-        val cfg = parse("$baseAdv\n            presence_timeout: \"0\"")
+        val cfg = parse("$baseAdv    presence_timeout: \"0\"\n")
         assertEquals(0L, parseDurationMs(cfg.devices.single().presenceTimeout, 0))
         assertTrue(ConfigValidator.validate(cfg).isEmpty())
     }
 
     @Test
     fun `unparsable value silently parses to 0 so the validator warns`() {
-        val cfg = parse("$baseAdv\n            presence_timeout: 5min")
+        val cfg = parse("$baseAdv    presence_timeout: 5min\n")
         assertEquals(0L, parseDurationMs(cfg.devices.single().presenceTimeout, 0))
         val issue = ConfigValidator.validate(cfg).single()
         assertEquals(ValidationLevel.WARNING, issue.level)
@@ -56,13 +57,13 @@ class PresenceTimeoutTest {
     @Test
     fun `presence_timeout on a non-advertisement device warns`() {
         val yaml = """
-          - id: obd
-            name: "OBD"
-            source: obd
-            presence_timeout: 1m
-            obd:
-              mac: "AA:BB:CC:DD:EE:FF"
-        """.trimIndent()
+  - id: obd
+    name: "OBD"
+    source: obd
+    presence_timeout: 1m
+    obd:
+      mac: "AA:BB:CC:DD:EE:FF"
+"""
         val issues = ConfigValidator.validate(parse(yaml))
         assertTrue(issues.any { it.level == ValidationLevel.WARNING && it.yamlPath == "devices[obd].presence_timeout" })
     }
@@ -70,12 +71,12 @@ class PresenceTimeoutTest {
     @Test
     fun `sensor key colliding with the built-in advertisement entity is an error`() {
         val cfg = parse(
-            "$baseAdv\n" +
-                "            sensors:\n" +
-                "              - key: advertisement\n" +
-                "                platform: text_sensor\n" +
-                "                source_field: service_data\n" +
-                "                decode: { offset: 0, length: 0, type: string }\n"
+            baseAdv +
+                "    sensors:\n" +
+                "      - key: advertisement\n" +
+                "        platform: text_sensor\n" +
+                "        source_field: service_data\n" +
+                "        decode: { offset: 0, length: 0, type: string }\n"
         )
         val issues = ConfigValidator.validate(cfg)
         assertTrue(issues.any { it.level == ValidationLevel.ERROR && it.sensorKey == "advertisement" })

@@ -111,6 +111,9 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         }
     }
 
+    // 권한은 awaitScanPrerequisites()가 ScanPermissions로 API별로 확인한 뒤에만 startScan()에 이른다.
+    // lint는 같은 메서드 안의 checkSelfPermission만 인식하므로 여기서 억제한다.
+    @SuppressLint("MissingPermission")
     override fun scan(
         devices: List<DeviceConfig>,
         scanMode: BleScanModeOption,
@@ -386,6 +389,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         if (loggedBluetooth) LiveEventLogger.log(LogType.LINK, "Bluetooth is on — resuming scan")
     }
 
+    // 권한은 바로 아래 missingScanPermissions()에서 확인하고 없으면 SecurityException을 던진다.
+    @SuppressLint("MissingPermission")
     override fun scanForMac(mac: String, scanMode: BleScanModeOption): Flow<Unit> = flow {
         val missing = missingScanPermissions()
         if (missing.isNotEmpty()) {
