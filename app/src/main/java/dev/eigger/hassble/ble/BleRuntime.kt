@@ -544,10 +544,9 @@ class BleRuntime(
     private fun latestSeenMs(instanceId: String): Long? =
         discoveredAdvInstances.values.filter { it.instanceId == instanceId }.maxOfOrNull { it.lastSeenMs }
 
-    /** instanceId가 속한 프로필. 동적 인스턴스는 `{id}_{MAC}` 꼴이라 접두사로 찾는다 (`a`/`a_b` 같이 겹치면 긴 id 우선). */
+    /** instanceId가 속한 프로필. 동적 인스턴스는 `{id}_{MAC}` 꼴이라 belongsToDevice와 같은 규칙으로 찾는다. */
     private fun profileForInstance(instanceId: String): DeviceConfig? =
-        devices[instanceId]
-            ?: devices.values.filter { instanceId.startsWith("${it.id}_") }.maxByOrNull { it.id.length }
+        devices[instanceId] ?: devices.values.firstOrNull { belongsToDevice(instanceId, it.id) }
 
     private fun startPresenceWatcher() {
         presenceJob?.cancel()
