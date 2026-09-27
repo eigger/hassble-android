@@ -189,6 +189,9 @@ fun sensorValueText(label: String, v: SensorLastValue): String {
     val sent = v.publishedAtMs
     return when {
         sent == null -> "$base · ${stringResource(R.string.sensor_value_not_sent)}"
+        // 필터(deadband·min_interval)에 막혀 HA가 아직 이전 값을 들고 있으면 그 값을 같이 보여 준다.
+        v.publishedValue != null && v.publishedValue != v.value ->
+            "$base · ${stringResource(R.string.sensor_value_ha_has, v.publishedValue, lastSeenText(sent))}"
         v.updatedAtMs - sent >= SENT_LAG_SHOW_MS ->
             "$base · ${stringResource(R.string.sensor_value_sent_ago, lastSeenText(sent))}"
         else -> base

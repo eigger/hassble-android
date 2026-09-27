@@ -100,6 +100,8 @@ class BleRuntime(
     // apply()/restartScan()/stop()이 서로 다른 스레드에서 겹쳐도 세션이 둘이 되거나,
     // collect 중인 스캐너 캐시를 다른 쪽이 비우는 일이 없게.
     private val scanLifecycleMutex = Mutex()
+    // deviceId → 요청 후 응답 대기 Job. 새 요청이 오면 이전 대기는 취소한다.
+    private val responseWatchJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
     @Volatile private var stopped = false
     private val lastSensorValues = java.util.concurrent.ConcurrentHashMap<String, SensorLastValue>()
     private var validationIssues: List<ValidationIssue> = emptyList()
@@ -362,6 +364,7 @@ class BleRuntime(
     }
 
     private fun stopDevice(deviceId: String) {
+        responseWatchJobs.remove(deviceId)?.cancel()
         deviceConnectionJobs[deviceId]?.cancel()
         deviceConnectionJobs.remove(deviceId)
         advertiser?.stop(deviceId, AdvertiseStopReason.Shutdown)
@@ -821,7 +824,30 @@ class BleRuntime(
         ) ?: false
         if (started) {
             publishAdvertisingState(d, true)
+            watchForResponse(d)
         }
+    }
+
+    /**
+     * 응답을 기대하는 요청(stop_on_response)인데 송신 시간이 다 지나도록 이 프로필의 광고가 한 건도
+     * 안 들어오면 스캔 세션을 갈아 끼운다. 스캐너 idle watchdog은 세션 전체의 결과만 보므로, 도어센서처럼
+     * 다른 기기 광고가 계속 들어오면 주차 응답만 못 받는 약해진 세션을 25분 순환 전까지 못 잡는다.
+     * 요청은 "지금 이 프로필 광고가 와야 한다"는 확실한 신호라 여기서 확인한다. 다음 요청은 새 세션에서 받는다.
+     */
+    private fun watchForResponse(d: DeviceConfig) {
+        val advConfig = d.advertise ?: return
+        if (!advConfig.stopOnResponse) return
+        val requestAtMs = System.currentTimeMillis()
+        val windowMs = parseDurationMs(advConfig.timeout, 15_000) + RESPONSE_GRACE_MS
+        val job = scope.launch {
+            delay(windowMs)
+            val lastSeen = discoveredAdvInstances.values
+                .filter { it.profileId == d.id }
+                .maxOfOrNull { it.lastSeenMs } ?: 0L
+            if (lastSeen >= requestAtMs) return@launch
+            restartScan("no response from ${d.id} within ${windowMs / 1000}s of the request")
+        }
+        responseWatchJobs.put(d.id, job)?.cancel()
     }
 
     private fun publishAdvertisingState(d: DeviceConfig, isAdvertising: Boolean) {
@@ -857,6 +883,8 @@ class BleRuntime(
         presenceJob?.cancel()
         presenceJob = null
         advertisementPresence.clear()
+        responseWatchJobs.values.forEach { it.cancel() }
+        responseWatchJobs.clear()
         deviceConnectionJobs.values.forEach { it.cancel() }
         deviceConnectionJobs.clear()
 
@@ -896,19 +924,17 @@ class BleRuntime(
         published: Boolean,
     ) {
         val entityUid = uid(instanceId, sensorKey)
-        val now = System.currentTimeMillis()
-        val display = formatDisplayValue(value, unit, accuracyDecimals)
-        val prev = lastSensorValues[entityUid]
-        // 광고는 초당 수십 건이라, 전송되지 않은 같은 값은 UI 갱신을 1초 단위로 묶는다.
-        if (!published && prev != null && prev.value == display && now - prev.updatedAtMs < UI_REFRESH_MS) return
-        lastSensorValues[entityUid] = SensorLastValue(
+        val next = SensorLastValue.next(
+            prev = lastSensorValues[entityUid],
             profileId = profileId,
             instanceId = instanceId,
             sensorKey = sensorKey,
-            value = display,
-            updatedAtMs = now,
-            publishedAtMs = if (published) now else prev?.publishedAtMs,
-        )
+            display = formatDisplayValue(value, unit, accuracyDecimals),
+            published = published,
+            nowMs = System.currentTimeMillis(),
+            refreshMs = UI_REFRESH_MS,
+        ) ?: return
+        lastSensorValues[entityUid] = next
         publishSensorValues()
     }
 
@@ -982,11 +1008,8 @@ class BleRuntime(
      * instanceId가 이 프로필의 것인가. 동적 인스턴스는 `{id}_{12자리 MAC}`이므로 접두사만 보면
      * `car`를 지울 때 `car_park_…`까지 걸린다. 접두사 뒤가 정확히 MAC일 때만 같은 프로필로 본다.
      */
-    private fun belongsToDevice(instanceId: String, deviceId: String): Boolean {
-        if (instanceId == deviceId) return true
-        val suffix = instanceId.removePrefix("${deviceId}_")
-        return suffix != instanceId && NORMALIZED_MAC_REGEX.matches(suffix)
-    }
+    private fun belongsToDevice(instanceId: String, deviceId: String): Boolean =
+        InstanceIds.belongsTo(instanceId, deviceId)
 
     private fun isEnabled(deviceId: String, key: String) = "$deviceId/$key" in enabled
     private fun uid(deviceId: String, key: String) = "${deviceId}_$key"
@@ -1013,13 +1036,9 @@ class BleRuntime(
      */
     private fun resetPublishFilters(d: DeviceConfig) {
         var count = 0
-        for (s in d.sensors) {
-            val suffix = "_${s.key}"
-            for ((entityUid, filter) in filters) {
-                if (!entityUid.endsWith(suffix)) continue
-                if (!belongsToDevice(entityUid.removeSuffix(suffix), d.id)) continue
-                filter.reset()
-                count++
+        for (instanceId in InstanceIds.of(d.id, declaredAdvInstances)) {
+            for (s in d.sensors) {
+                filters[uid(instanceId, s.key)]?.let { it.reset(); count++ }
             }
         }
         if (count > 0) {
@@ -1033,6 +1052,7 @@ class BleRuntime(
     companion object {
         private const val PRESENCE_TICK_MS = 10_000L
         private const val UI_REFRESH_MS = 1_000L
-        private val NORMALIZED_MAC_REGEX = Regex("^[0-9A-F]{12}$", RegexOption.IGNORE_CASE)
+        /** 송신 종료 후 응답이 늦게 도착할 여유. */
+        private const val RESPONSE_GRACE_MS = 5_000L
     }
 }

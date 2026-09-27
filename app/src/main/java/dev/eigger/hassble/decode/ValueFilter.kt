@@ -16,6 +16,9 @@ class ValueFilter(rule: PublishRule) {
     private var lastAt = 0L
     private var last: Any? = null
 
+    // allow()는 스캔 collect 스레드에서, reset()은 요청을 처리하는 스레드(메인/WS)에서 불린다.
+    // 두 필드를 따로 쓰는 사이에 allow()가 끼면 reset이 절반만 보이고 되돌려질 수 있어 묶는다.
+    @Synchronized
     fun allow(value: Any, now: Long = System.currentTimeMillis()): Boolean {
         if (minIntervalMs > 0 && now - lastAt < minIntervalMs) return false
         val heartbeatDue = heartbeatMs > 0 && now - lastAt >= heartbeatMs
@@ -29,6 +32,7 @@ class ValueFilter(rule: PublishRule) {
      * 다음 값을 무조건 통과시킨다. 요청→응답형 기기(주차위치 비콘)는 같은 자리에 다시 주차하면
      * 응답 값이 이전과 같아 on_change에 막히는데, 요청 한 번에는 응답이 한 번 나가야 한다.
      */
+    @Synchronized
     fun reset() {
         lastAt = 0L
         last = null
