@@ -15,13 +15,7 @@ data class SensorLastValue(
     val publishedValue: String? = null,
 ) {
     companion object {
-        /**
-         * 새 수신값을 반영한 다음 상태. UI를 갱신할 필요가 없으면 null.
-         *
-         * 광고는 초당 수십 건이라, HA에 전송되지 않은 수신은 값이 바뀌어도 [refreshMs] 단위로만 반영한다
-         * (예전엔 min_interval이 이 역할을 했는데 수신 시각을 따로 기록하면서 그 상한이 사라졌다).
-         * 전송된 값은 항상 즉시 반영한다.
-         */
+        /** 새 수신값을 반영한 다음 상태. HA 전송 여부와 무관하게 수신 값·시각은 항상 최신으로 둔다. */
         fun next(
             prev: SensorLastValue?,
             profileId: String,
@@ -30,9 +24,7 @@ data class SensorLastValue(
             display: String,
             published: Boolean,
             nowMs: Long,
-            refreshMs: Long,
-        ): SensorLastValue? {
-            if (!published && prev != null && nowMs - prev.updatedAtMs < refreshMs) return null
+        ): SensorLastValue {
             return SensorLastValue(
                 profileId = profileId,
                 instanceId = instanceId,

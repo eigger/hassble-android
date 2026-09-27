@@ -100,8 +100,8 @@ class BleRuntime(
     // apply()/restartScan()/stop()이 서로 다른 스레드에서 겹쳐도 세션이 둘이 되거나,
     // collect 중인 스캐너 캐시를 다른 쪽이 비우는 일이 없게.
     private val scanLifecycleMutex = Mutex()
-    // deviceId → 요청 후 응답 대기 Job. 새 요청이 오면 이전 대기는 취소한다.
-    private val responseWatchJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    // 필터에 막힌 수신은 UI 목록 발행을 UI_REFRESH_MS 단위로 모은다. true면 예약된 발행이 있다.
+    private val sensorUiPublishPending = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var stopped = false
     private val lastSensorValues = java.util.concurrent.ConcurrentHashMap<String, SensorLastValue>()
     private var validationIssues: List<ValidationIssue> = emptyList()
@@ -364,7 +364,6 @@ class BleRuntime(
     }
 
     private fun stopDevice(deviceId: String) {
-        responseWatchJobs.remove(deviceId)?.cancel()
         deviceConnectionJobs[deviceId]?.cancel()
         deviceConnectionJobs.remove(deviceId)
         advertiser?.stop(deviceId, AdvertiseStopReason.Shutdown)
@@ -824,30 +823,7 @@ class BleRuntime(
         ) ?: false
         if (started) {
             publishAdvertisingState(d, true)
-            watchForResponse(d)
         }
-    }
-
-    /**
-     * 응답을 기대하는 요청(stop_on_response)인데 송신 시간이 다 지나도록 이 프로필의 광고가 한 건도
-     * 안 들어오면 스캔 세션을 갈아 끼운다. 스캐너 idle watchdog은 세션 전체의 결과만 보므로, 도어센서처럼
-     * 다른 기기 광고가 계속 들어오면 주차 응답만 못 받는 약해진 세션을 25분 순환 전까지 못 잡는다.
-     * 요청은 "지금 이 프로필 광고가 와야 한다"는 확실한 신호라 여기서 확인한다. 다음 요청은 새 세션에서 받는다.
-     */
-    private fun watchForResponse(d: DeviceConfig) {
-        val advConfig = d.advertise ?: return
-        if (!advConfig.stopOnResponse) return
-        val requestAtMs = System.currentTimeMillis()
-        val windowMs = parseDurationMs(advConfig.timeout, 15_000) + RESPONSE_GRACE_MS
-        val job = scope.launch {
-            delay(windowMs)
-            val lastSeen = discoveredAdvInstances.values
-                .filter { it.profileId == d.id }
-                .maxOfOrNull { it.lastSeenMs } ?: 0L
-            if (lastSeen >= requestAtMs) return@launch
-            restartScan("no response from ${d.id} within ${windowMs / 1000}s of the request")
-        }
-        responseWatchJobs.put(d.id, job)?.cancel()
     }
 
     private fun publishAdvertisingState(d: DeviceConfig, isAdvertising: Boolean) {
@@ -883,8 +859,6 @@ class BleRuntime(
         presenceJob?.cancel()
         presenceJob = null
         advertisementPresence.clear()
-        responseWatchJobs.values.forEach { it.cancel() }
-        responseWatchJobs.clear()
         deviceConnectionJobs.values.forEach { it.cancel() }
         deviceConnectionJobs.clear()
 
@@ -924,7 +898,7 @@ class BleRuntime(
         published: Boolean,
     ) {
         val entityUid = uid(instanceId, sensorKey)
-        val next = SensorLastValue.next(
+        lastSensorValues[entityUid] = SensorLastValue.next(
             prev = lastSensorValues[entityUid],
             profileId = profileId,
             instanceId = instanceId,
@@ -932,10 +906,26 @@ class BleRuntime(
             display = formatDisplayValue(value, unit, accuracyDecimals),
             published = published,
             nowMs = System.currentTimeMillis(),
-            refreshMs = UI_REFRESH_MS,
-        ) ?: return
-        lastSensorValues[entityUid] = next
-        publishSensorValues()
+        )
+        if (published) {
+            publishSensorValues()
+        } else {
+            scheduleSensorUiPublish()
+        }
+    }
+
+    /**
+     * HA에 전송되지 않은 수신은 초당 수십 건이라 매번 목록 전체를 정렬·발행하지 않는다. 센서가 몇 개든
+     * UI_REFRESH_MS에 한 번만 발행하고, 대기 중 들어온 수신은 그 한 번에 모두 반영된다(마지막 값도 빠짐없이).
+     * 전송된 값은 recordSensorValue가 즉시 발행한다.
+     */
+    private fun scheduleSensorUiPublish() {
+        if (!sensorUiPublishPending.compareAndSet(false, true)) return
+        scope.launch {
+            delay(UI_REFRESH_MS)
+            sensorUiPublishPending.set(false)
+            publishSensorValues()
+        }
     }
 
     private fun formatDisplayValue(value: Any, unit: String?, accuracyDecimals: Int?): String {
@@ -1052,7 +1042,5 @@ class BleRuntime(
     companion object {
         private const val PRESENCE_TICK_MS = 10_000L
         private const val UI_REFRESH_MS = 1_000L
-        /** 송신 종료 후 응답이 늦게 도착할 여유. */
-        private const val RESPONSE_GRACE_MS = 5_000L
     }
 }

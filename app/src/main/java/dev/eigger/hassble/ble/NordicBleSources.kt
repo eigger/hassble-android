@@ -65,11 +65,7 @@ private const val PREREQ_POLL_MS = 2_000L
  * 매칭되는 기기의 페이로드 데이터를 추출하여 방출합니다.
  */
 class NordicAdvertisementScanner(private val context: Context) : AdvertisementScanner {
-    // Nordic BleScanner는 생성 시점의 BluetoothLeScanner를 붙잡고 쓴다. 게이트웨이 수명 동안 하나를
-    // 재사용하면 watchdog 재시작이 같은 객체로 stop/start만 반복해, "게이트웨이 정지→재시작"과 달리
-    // 약해진 세션을 못 살리는 경우가 있었다. 세션(및 scanForMac 호출)마다 새로 만든다 — 생성 비용은
-    // 어댑터 참조를 읽는 정도다. Bluetooth ON이 확인된 뒤에만 부른다(OFF면 내부에서 NPE).
-    private fun newBleScanner() = BleScanner(context)
+    private val scanner by lazy { BleScanner(context) }
 
     // Simple cache to merge ADV_IND and SCAN_RSP data per MAC address.
     // stop()은 collect 코루틴과 다른 스레드에서 불릴 수 있어(서비스 destroy, 설정 변경) clear()가
@@ -123,6 +119,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         scanMode: BleScanModeOption,
         unfiltered: Boolean
     ): Flow<RawReading> = flow {
+        val scanner = this@NordicAdvertisementScanner.scanner
         Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles (unfiltered=$unfiltered)")
         LiveEventLogger.log(LogType.LINK, "Starting Nordic BLE scan for ${devices.size} profiles (unfiltered=$unfiltered)...")
 
@@ -152,15 +149,6 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             awaitScanPrerequisites()
             awaitScanThrottleSlot()
 
-            // 전제 확인 직후 Bluetooth가 꺼지면 생성 자체가 실패한다. 다음 바퀴에서 다시 ON을 기다린다.
-            val scannerResult = runCatching { newBleScanner() }
-            val scanner = scannerResult.getOrNull()
-            if (scanner == null) {
-                LiveEventLogger.log(LogType.LINK,
-                    "BLE scanner init failed: ${scannerResult.exceptionOrNull()?.localizedMessage}, retrying...")
-                delay(ScanWatchdogPolicy.RESTART_DELAY_MS)
-                continue
-            }
             val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
             val sessionStartMs = System.currentTimeMillis()
             lastResultMs.set(sessionStartMs)
@@ -419,9 +407,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             BleScanModeOption.LOW_LATENCY -> BleScanMode.SCAN_MODE_LOW_LATENCY
         }
         val filters = listOf(BleScanFilter(deviceAddress = normalizedMac))
-        // OFF 상태에서 BleScanner를 만들면 내부에서 NPE가 난다. 재연결 루프가 원인을 알 수 있게 명시한다.
-        if (!isBluetoothEnabled()) throw IllegalStateException("Bluetooth is off")
-        val scanner = newBleScanner()
+        val scanner = this@NordicAdvertisementScanner.scanner
         awaitScanThrottleSlot()
         scanner.scan(filters = filters, settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
             val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
