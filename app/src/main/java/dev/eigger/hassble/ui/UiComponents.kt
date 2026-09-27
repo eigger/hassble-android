@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import dev.eigger.hassble.R
 import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
+import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.ControlType
 import dev.eigger.hassble.config.SensorConfig
 import dev.eigger.hassble.net.ConnectionIssue
@@ -176,6 +177,28 @@ fun lastSeenText(lastSeenMs: Long): String {
         else -> stringResource(R.string.last_seen_hours, (diffSec / 3600).toInt())
     }
 }
+
+/**
+ * 센서 값 한 줄. 시각은 마지막 **수신** 기준이고, HA 전송이 그보다 눈에 띄게 오래됐으면
+ * (같은 값이라 on_change 필터에 막히는 중) 전송 시각을 덧붙인다. 예전엔 전송 시각만 보여서
+ * 수신은 되는데 "갱신이 멈춘" 것처럼 보였다.
+ */
+@Composable
+fun sensorValueText(label: String, v: SensorLastValue): String {
+    val base = stringResource(R.string.sensor_value_updated, label, lastSeenText(v.updatedAtMs))
+    val sent = v.publishedAtMs
+    return when {
+        sent == null -> "$base · ${stringResource(R.string.sensor_value_not_sent)}"
+        // 필터(deadband·min_interval)에 막혀 HA가 아직 이전 값을 들고 있으면 그 값을 같이 보여 준다.
+        v.publishedValue != null && v.publishedValue != v.value ->
+            "$base · ${stringResource(R.string.sensor_value_ha_has, v.publishedValue, lastSeenText(sent))}"
+        v.updatedAtMs - sent >= SENT_LAG_SHOW_MS ->
+            "$base · ${stringResource(R.string.sensor_value_sent_ago, lastSeenText(sent))}"
+        else -> base
+    }
+}
+
+private const val SENT_LAG_SHOW_MS = 5_000L
 
 @Composable
 fun DeviceLinkStatusRow(link: DeviceLinkStatus) {

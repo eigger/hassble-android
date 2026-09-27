@@ -78,6 +78,9 @@
     <string name="adv_instance_not_mac_based">Not MAC-based</string>
     <string name="sensor_no_data">No data yet</string>
     <string name="sensor_value_updated">%1$s · %2$s</string>
+    <string name="sensor_value_sent_ago">sent to HA %1$s</string>
+    <string name="sensor_value_not_sent">not sent to HA yet</string>
+    <string name="sensor_value_ha_has">HA has %1$s (sent %2$s)</string>
     <string name="discovered_devices_waiting">Start gateway to discover BLE advertisers.</string>
     <string name="discovered_devices_count">%1$d device(s) detected</string>
     <string name="last_seen_just_now">Just now</string>

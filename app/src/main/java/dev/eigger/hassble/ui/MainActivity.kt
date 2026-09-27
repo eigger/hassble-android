@@ -2039,11 +2039,7 @@ private fun DeviceConfigCard(
                                 if (showPerSensorValues && checked) {
                                     Text(
                                         text = if (latest != null) {
-                                            stringResource(
-                                                R.string.sensor_value_updated,
-                                                latest.value,
-                                                lastSeenText(latest.updatedAtMs),
-                                            )
+                                            sensorValueText(latest.value, latest)
                                         } else {
                                             stringResource(R.string.sensor_no_data)
                                         },
@@ -2177,11 +2173,7 @@ private fun DeviceConfigCard(
                                         if (instValues.isNotEmpty()) {
                                             instValues.forEach { v ->
                                                 Text(
-                                                    text = stringResource(
-                                                        R.string.sensor_value_updated,
-                                                        "${v.sensorKey}: ${v.value}",
-                                                        lastSeenText(v.updatedAtMs),
-                                                    ),
+                                                    text = sensorValueText("${v.sensorKey}: ${v.value}", v),
                                                     color = MaterialTheme.colorScheme.secondary,
                                                     fontSize = 10.sp,
                                                     modifier = Modifier.padding(start = 14.dp, top = 2.dp),
