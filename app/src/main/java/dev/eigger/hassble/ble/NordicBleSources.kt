@@ -153,8 +153,11 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             awaitScanThrottleSlot()
 
             // 전제 확인 직후 Bluetooth가 꺼지면 생성 자체가 실패한다. 다음 바퀴에서 다시 ON을 기다린다.
-            val scanner = runCatching { newBleScanner() }.getOrElse { e ->
-                LiveEventLogger.log(LogType.LINK, "BLE scanner init failed: ${e.localizedMessage}, retrying...")
+            val scannerResult = runCatching { newBleScanner() }
+            val scanner = scannerResult.getOrNull()
+            if (scanner == null) {
+                LiveEventLogger.log(LogType.LINK,
+                    "BLE scanner init failed: ${scannerResult.exceptionOrNull()?.localizedMessage}, retrying...")
                 delay(ScanWatchdogPolicy.RESTART_DELAY_MS)
                 continue
             }
