@@ -78,6 +78,8 @@
     <string name="adv_instance_not_mac_based">MAC 기반 아님</string>
     <string name="sensor_no_data">아직 데이터 없음</string>
     <string name="sensor_value_updated">%1$s · %2$s</string>
+    <string name="sensor_value_sent_ago">HA 전송 %1$s</string>
+    <string name="sensor_value_not_sent">HA 미전송</string>
     <string name="discovered_devices_waiting">게이트웨이를 시작하면 BLE 광고 기기를 탐지합니다.</string>
     <string name="discovered_devices_count">%1$d개 기기 탐지됨</string>
     <string name="last_seen_just_now">방금</string>

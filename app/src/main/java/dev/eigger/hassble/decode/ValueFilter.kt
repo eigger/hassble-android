@@ -25,6 +25,15 @@ class ValueFilter(rule: PublishRule) {
         return true
     }
 
+    /**
+     * 다음 값을 무조건 통과시킨다. 요청→응답형 기기(주차위치 비콘)는 같은 자리에 다시 주차하면
+     * 응답 값이 이전과 같아 on_change에 막히는데, 요청 한 번에는 응답이 한 번 나가야 한다.
+     */
+    fun reset() {
+        lastAt = 0L
+        last = null
+    }
+
     private fun changed(value: Any): Boolean {
         val prev = last ?: return true
         if (value is Number && prev is Number) {

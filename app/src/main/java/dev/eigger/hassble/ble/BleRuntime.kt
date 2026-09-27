@@ -709,10 +709,11 @@ class BleRuntime(
         } else value
         val entityUid = uid(instanceId, s.key)
         val filter = filters[entityUid] ?: return  // not declared (validation error or not enabled)
-        if (filter.allow(rounded) != false) {
-            out += entityUid to rounded
-            recordSensorValue(d.id, instanceId, s.key, rounded, s.unit, s.accuracyDecimals)
-        }
+        val published = filter.allow(rounded)
+        if (published) out += entityUid to rounded
+        // 필터에 막혀도 수신 시각은 남긴다. 예전엔 전송될 때만 기록해서, 같은 값이 계속 들어오면
+        // 화면이 "N분 전"에 멈춰 수신이 끊긴 것처럼 보였다.
+        recordSensorValue(d.id, instanceId, s.key, rounded, s.unit, s.accuracyDecimals, published)
     }
 
     // ── HA command → BLE write ──────────────────────────────────────────────
@@ -796,6 +797,7 @@ class BleRuntime(
     private fun startAdvertise(d: DeviceConfig) {
         val advConfig = d.advertise ?: return
         if (ConfigValidator.hasDeviceError(validationIssues, d.id)) return
+        resetPublishFilters(d)
         val seed = when (advConfig.counterMode) {
             AdvertiseCounterMode.reset -> advConfig.counterStart and 0xFF
             AdvertiseCounterMode.persist -> {
@@ -891,14 +893,21 @@ class BleRuntime(
         value: Any,
         unit: String?,
         accuracyDecimals: Int?,
+        published: Boolean,
     ) {
         val entityUid = uid(instanceId, sensorKey)
+        val now = System.currentTimeMillis()
+        val display = formatDisplayValue(value, unit, accuracyDecimals)
+        val prev = lastSensorValues[entityUid]
+        // 광고는 초당 수십 건이라, 전송되지 않은 같은 값은 UI 갱신을 1초 단위로 묶는다.
+        if (!published && prev != null && prev.value == display && now - prev.updatedAtMs < UI_REFRESH_MS) return
         lastSensorValues[entityUid] = SensorLastValue(
             profileId = profileId,
             instanceId = instanceId,
             sensorKey = sensorKey,
-            value = formatDisplayValue(value, unit, accuracyDecimals),
-            updatedAtMs = System.currentTimeMillis(),
+            value = display,
+            updatedAtMs = now,
+            publishedAtMs = if (published) now else prev?.publishedAtMs,
         )
         publishSensorValues()
     }
@@ -997,11 +1006,33 @@ class BleRuntime(
             if (fmt.isEmpty()) value.toInt().toString() else String.format("%$fmt", value.toInt())
         }
 
+    /**
+     * 요청(광고 송신) 직전에 이 기기 센서들의 발행 필터를 비운다. 주차위치처럼 요청→응답인 기기는
+     * 같은 자리에 다시 주차하면 응답이 이전 값과 같아 on_change_only에 막혀 HA에 아무것도 안 갔다.
+     * 게이트웨이를 재시작하면 필터가 새로 만들어져 "재시작하니 잡힌다"로 보이던 원인이다.
+     */
+    private fun resetPublishFilters(d: DeviceConfig) {
+        var count = 0
+        for (s in d.sensors) {
+            val suffix = "_${s.key}"
+            for ((entityUid, filter) in filters) {
+                if (!entityUid.endsWith(suffix)) continue
+                if (!belongsToDevice(entityUid.removeSuffix(suffix), d.id)) continue
+                filter.reset()
+                count++
+            }
+        }
+        if (count > 0) {
+            LiveEventLogger.log(LogType.TX, "device=${d.id}: publish filters reset for request ($count sensor(s)) — next response is always sent")
+        }
+    }
+
     /** `{instanceId}_advertisement`의 현재 상태와 마지막 수신 시각. */
     private data class AdvertisementPresence(val online: Boolean, val lastSeenMs: Long)
 
     companion object {
         private const val PRESENCE_TICK_MS = 10_000L
+        private const val UI_REFRESH_MS = 1_000L
         private val NORMALIZED_MAC_REGEX = Regex("^[0-9A-F]{12}$", RegexOption.IGNORE_CASE)
     }
 }
