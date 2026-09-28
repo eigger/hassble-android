@@ -296,7 +296,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                                 }
                                 Log.i(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
         
-                                emit(
+                                emitDownstream(
                                     RawReading(
                                         deviceId = d.id,
                                         source = "advertisement",
@@ -322,6 +322,12 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 BleScanHealth.onScanStopped("cancelled")
                 LiveEventLogger.log(LogType.LINK, "BLE scan stop: cancelled")
                 throw e
+            } catch (e: DownstreamException) {
+                // 수신값 처리(collector) 쪽 예외는 스캐너 문제가 아니다. 여기서 삼키면 이후 모든 emit이
+                // 실패해 수신이 영구히 멈추므로 그대로 내보낸다. BleRuntime이 collector를 다시 띄운다.
+                BleScanHealth.onScanStopped("downstream error: ${e.cause}")
+                LiveEventLogger.log(LogType.LINK, "BLE scan stop: reading handler failed (${e.cause}) — propagating")
+                throw e.cause
             } catch (e: ScanRestartRequest) {
                 stopReason = "watchdog: ${e.message}"
                 Log.w(TAG, "BLE scan watchdog restart: ${e.message}")
@@ -547,7 +553,7 @@ class NordicGattNotifySource(
                         characteristic.getNotifications().collect { bytes ->
                             onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
                             val hex = bytes.value.joinToString("") { String.format("%02X", it) }
-                            emit(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                            emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
                         }
                         onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac))
                         activeConnections.remove(device.id)
@@ -558,6 +564,9 @@ class NordicGattNotifySource(
                     }
                 } catch (e: CancellationException) {
                     throw e
+                } catch (e: DownstreamException) {
+                    // 수신값 처리 쪽 예외 — 재연결로 삼키면 이후 모든 emit이 실패한다. 그대로 내보낸다.
+                    throw e.cause
                 } catch (e: Exception) {
                     Log.w(TAG, "GATT session ended for ${device.id}: ${e.message}")
                     onLinkStatus(
@@ -648,6 +657,9 @@ class NordicElm327Source(
                     runObdSession(this, device, enabledKeys, mac)
                 } catch (e: CancellationException) {
                     throw e
+                } catch (e: DownstreamException) {
+                    // 수신값 처리 쪽 예외 — 재연결로 삼키면 이후 모든 emit이 실패한다. 그대로 내보낸다.
+                    throw e.cause
                 } catch (e: Exception) {
                     Log.w(TAG, "OBD session ended for ${device.id}: ${e.message}")
                     LiveEventLogger.log(
@@ -794,7 +806,7 @@ class NordicElm327Source(
                                     onLinkStatus(
                                         DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()),
                                     )
-                                    collector.emit(
+                                    collector.emitDownstream(
                                         RawReading(deviceId = device.id, source = "obd", rawHex = hex),
                                     )
                                 }

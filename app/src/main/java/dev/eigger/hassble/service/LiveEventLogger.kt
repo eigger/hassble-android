@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 enum class LogType {
@@ -69,7 +69,10 @@ object LiveEventLogger {
 
     private var nextLogId = 0L
 
-    private val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+    // SimpleDateFormat은 스레드에 안전하지 않은데 log()는 스캔·WS·메인 스레드에서 동시에 불린다.
+    // 동시 format은 깨진 값이나 예외를 낼 수 있고, 그 예외가 수신값 처리로 올라가면 처리 전체가 멈췄다.
+    // DateTimeFormatter는 불변이라 공유해도 안전하다.
+    private val dateFormat = DateTimeFormatter.ofPattern("HH:mm:ss.SSS", Locale.getDefault())
 
     fun setMaxLogs(limit: Int) {
         val clamped = limit.coerceIn(BUFFER_LIMIT_OPTIONS.min(), BUFFER_LIMIT_OPTIONS.max())
@@ -91,7 +94,7 @@ object LiveEventLogger {
 
     fun log(type: LogType, message: String) {
         if (type == LogType.ADV && !includeAdvLogs) return
-        val timestamp = dateFormat.format(Date())
+        val timestamp = LocalTime.now().format(dateFormat)
         val entry = synchronized(_logs) {
             val id = nextLogId++
             LogEntry(id, timestamp, type, message).also { newEntry ->

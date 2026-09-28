@@ -351,7 +351,8 @@ class BleGatewayService : Service() {
                 delay(300_000)
                 publishGatewayStates(ws)
                 LiveEventLogger.log(LogType.LINK,
-                    "Heartbeat: fgs=running, ws=${ws?.connectionState?.value}, scan[${BleScanHealth.state.value.describe()}]")
+                    "Heartbeat: fgs=running, ws=${ws?.connectionState?.value} (queued=${ws?.pendingMessageCount ?: 0}), " +
+                        "scan[${BleScanHealth.state.value.describe()}], pipeline[${runtime?.diagnostics() ?: "no runtime"}]")
             }
         }
     }
