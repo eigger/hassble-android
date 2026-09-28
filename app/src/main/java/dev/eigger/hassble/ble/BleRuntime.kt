@@ -25,6 +25,7 @@ import dev.eigger.hassble.net.EntityMsg
 import dev.eigger.hassble.net.HaWsClient
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -64,6 +65,8 @@ class BleRuntime(
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
     private val onAdvCounterChanged: (String, Int) -> Unit = { _, _ -> },
     private val onAdvertisingChanged: (String, Boolean) -> Unit = { _, _ -> },
+    /** 처리 오류 로그가 남을 때(새 종류 첫 발생·반복 N회마다). 서비스가 알림의 오류 건수를 갱신한다. */
+    private val onPipelineError: () -> Unit = {},
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private var scanJob: Job? = null
@@ -103,13 +106,87 @@ class BleRuntime(
     // 필터에 막힌 수신은 UI 목록 발행을 UI_REFRESH_MS 단위로 모은다. true면 예약된 발행이 있다.
     private val sensorUiPublishPending = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var stopped = false
+    // ── 파이프라인 진단 ──────────────────────────────────────────────────────
+    // 수신값/HA 명령 한 건의 예외가 수집(collect) 전체를 끝내 "연결됨인데 아무것도 처리 안 됨" 상태로
+    // 게이트웨이 재시작 전까지 남던 문제가 있었다. 이제 건별로 격리하고, 그 사실과 처리량을 heartbeat에 남긴다.
+    private val pipelineErrors = PipelineErrorLog(
+        log = { LiveEventLogger.log(LogType.LINK, it) },
+        onLogged = { onPipelineError() },
+    )
+
+    /** 지금까지 버린 수신값·명령 수(알림 표시용). */
+    val pipelineErrorCount: Long get() = pipelineErrors.totalCount
+    private val readingCount = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var lastReadingMs = 0L
+    private val commandCount = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var lastCommandMs = 0L
+    private val collectorRestarts = java.util.concurrent.atomic.AtomicLong(0)
+    private var eventJob: Job? = null
     private val lastSensorValues = java.util.concurrent.ConcurrentHashMap<String, SensorLastValue>()
     private var validationIssues: List<ValidationIssue> = emptyList()
     // async HA cleanup 진행 중인 deviceId → 완료 전 apply()에서 재시작 방지
     private val pendingHaCleanupIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     fun start() {
-        ws.events.onEach(::onEvent).launchIn(scope)
+        launchEventCollector()
+    }
+
+    /** HA 명령 수집. 명령 하나의 예외로 수집이 끝나면 이후 HA 버튼(주차위치 요청 등)이 전부 무시됐다. */
+    private fun launchEventCollector() {
+        val job = ws.events.onEach(::safeOnEvent).launchIn(scope)
+        eventJob = job
+        watchCollector(job, "HA command collector", relaunchOnNormalEnd = true) { launchEventCollector() }
+    }
+
+    /**
+     * collector가 취소가 아닌 이유로 끝나면 로그를 남기고 [relaunch]로 다시 띄운다. 건별 격리로
+     * 끝날 일이 없어야 하지만, 끝났을 때 조용히 멈춰 있지 않게 하는 마지막 안전망이다.
+     */
+    private fun watchCollector(job: Job, name: String, relaunchOnNormalEnd: Boolean, relaunch: () -> Unit) {
+        job.invokeOnCompletion { cause ->
+            if (stopped || cause is CancellationException) return@invokeOnCompletion
+            // 기기 연결 flow는 auto_connect가 꺼져 있으면 정상 종료한다 — 그건 의도된 끝이다.
+            if (cause == null && !relaunchOnNormalEnd) return@invokeOnCompletion
+            collectorRestarts.incrementAndGet()
+            LiveEventLogger.log(LogType.LINK,
+                "[Error] $name ended unexpectedly (${cause ?: "completed"}) — relaunching in ${COLLECTOR_RELAUNCH_DELAY_MS / 1000}s")
+            scope.launch {
+                delay(COLLECTOR_RELAUNCH_DELAY_MS)
+                if (!stopped) relaunch()
+            }
+        }
+    }
+
+    private fun safeOnEvent(event: JsonObject) {
+        try {
+            onEvent(event)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            pipelineErrors.record("HA command handling", e, detail = "event=$event")
+        }
+    }
+
+    private fun safeOnReading(r: RawReading) {
+        readingCount.incrementAndGet()
+        lastReadingMs = System.currentTimeMillis()
+        try {
+            onReading(r)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            pipelineErrors.record("reading handling (device=${r.deviceId}, source=${r.source})", e)
+        }
+    }
+
+    /** heartbeat 로그용 한 줄 요약. */
+    fun diagnostics(nowMs: Long = System.currentTimeMillis()): String {
+        fun age(ms: Long) = if (ms == 0L) "never" else "${(nowMs - ms) / 1000}s ago"
+        return "readings=${readingCount.get()} (last ${age(lastReadingMs)}), " +
+            "haCommands=${commandCount.get()} (last ${age(lastCommandMs)}), " +
+            "pipelineErrors=${pipelineErrors.totalCount}, collectorRestarts=${collectorRestarts.get()}, " +
+            "scanCollector=${if (scanJob?.isActive == true) "active" else "inactive"}, " +
+            "commandCollector=${if (eventJob?.isActive == true) "active" else "inactive"}"
     }
 
     fun redeclareEntities() {
@@ -447,7 +524,7 @@ class BleRuntime(
                                     scanner.scanForMac(mac, BleScanModeOption.LOW_POWER).first()
                                 }
                             }, autoReconnect = autoReconnect).collect { reading ->
-                                onReading(reading)
+                                safeOnReading(reading)
                             }
                         } else {
                             onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
@@ -476,7 +553,7 @@ class BleRuntime(
                                     scanner.scanForMac(mac, BleScanModeOption.LOW_POWER).first()
                                 }
                             }, autoReconnect = autoReconnect).collect { reading ->
-                                onReading(reading)
+                                safeOnReading(reading)
                             }
                         } else {
                             onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Disconnected, mac))
@@ -487,6 +564,11 @@ class BleRuntime(
             }
         }
         deviceConnectionJobs[resolved.id] = job
+        // 수신값 처리는 건별로 격리돼 있지만, 그래도 Error 등이 연결 flow를 끝내면 그 기기는 재시작 전까지
+        // 끊긴 채로 남는다. 스캔 collector와 같은 안전망을 둔다. 교체·삭제된 기기면 건드리지 않는다.
+        watchCollector(job, "device=${resolved.id} connection", relaunchOnNormalEnd = false) {
+            if (deviceConnectionJobs[resolved.id] === job && devices[d.id] != null) startDevice(d)
+        }
     }
 
     private fun startSources() {
@@ -500,7 +582,12 @@ class BleRuntime(
     private fun launchScan() {
         val adv = config.devices.filter { it.source == Source.advertisement }
         if (adv.isNotEmpty()) {
-            scanJob = scanner.scan(adv, scanMode, unfilteredScan).onEach(::onReading).launchIn(scope)
+            val job = scanner.scan(adv, scanMode, unfilteredScan).onEach(::safeOnReading).launchIn(scope)
+            scanJob = job
+            watchCollector(job, "BLE scan collector", relaunchOnNormalEnd = true) {
+                // 교체된 옛 세션이면 건드리지 않는다(새 세션은 이미 떠 있다).
+                if (scanJob === job) relaunchScan("scan collector ended unexpectedly")
+            }
         }
         startPresenceWatcher()
     }
@@ -555,21 +642,32 @@ class BleRuntime(
         presenceJob = scope.launch {
             while (isActive) {
                 delay(PRESENCE_TICK_MS)
-                val now = System.currentTimeMillis()
-                val out = mutableListOf<Pair<String, String>>()
-                for ((instanceId, state) in advertisementPresence) {
-                    if (!state.online) continue
-                    // 프로필이 사라졌으면(설정 삭제) 더 볼 것 없이 off. 타임아웃은 프로필에서 읽는다.
-                    val timeout = profileForInstance(instanceId)?.let { presenceTimeoutMs(it) } ?: 0L
-                    if (timeout > 0 && now - state.lastSeenMs < timeout) continue
-                    if (!advertisementPresence.replace(instanceId, state, state.copy(online = false))) continue
-                    out += "${instanceId}_advertisement" to "off"
-                    LiveEventLogger.log(LogType.LINK,
-                        "device=$instanceId: advertisement lost (off) — no packets for ${(now - state.lastSeenMs) / 1000}s, keeping last sensor values")
+                // 한 바퀴의 예외로 감시 루프가 끝나면 이후 광고가 끊겨도 off가 영영 안 나간다. 바퀴 단위로 격리한다.
+                try {
+                    checkPresenceOnce()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    pipelineErrors.record("advertisement presence check", e)
                 }
-                if (out.isNotEmpty()) ws.sendStates(out)
             }
         }
+    }
+
+    private fun checkPresenceOnce() {
+        val now = System.currentTimeMillis()
+        val out = mutableListOf<Pair<String, String>>()
+        for ((instanceId, state) in advertisementPresence) {
+            if (!state.online) continue
+            // 프로필이 사라졌으면(설정 삭제) 더 볼 것 없이 off. 타임아웃은 프로필에서 읽는다.
+            val timeout = profileForInstance(instanceId)?.let { presenceTimeoutMs(it) } ?: 0L
+            if (timeout > 0 && now - state.lastSeenMs < timeout) continue
+            if (!advertisementPresence.replace(instanceId, state, state.copy(online = false))) continue
+            out += "${instanceId}_advertisement" to "off"
+            LiveEventLogger.log(LogType.LINK,
+                "device=$instanceId: advertisement lost (off) — no packets for ${(now - state.lastSeenMs) / 1000}s, keeping last sensor values")
+        }
+        if (out.isNotEmpty()) ws.sendStates(out)
     }
 
     private fun markAdvertisementSeen(d: DeviceConfig, instanceId: String) {
@@ -705,9 +803,13 @@ class BleRuntime(
         out: MutableList<Pair<String, Any>>,
     ) {
         if (value == null) return
+        // 쓰레기 바이트를 float로 디코딩하면 NaN/Infinity가 나온다. HA에 보낼 수 없고, 아래 반올림에서
+        // "NaN".toLong()이 예외를 던진다.
+        if ((value is Double && !value.isFinite()) || (value is Float && !value.isFinite())) return
+        // 반올림 문자열은 다시 숫자로 파싱하므로 소수점이 쉼표인 로케일(de, fr 등)에서도 깨지지 않게 ROOT.
         val rounded: Any = if (s.accuracyDecimals != null && value is Double) {
-            if (s.accuracyDecimals == 0) "%.0f".format(value).toLong()
-            else "%.${s.accuracyDecimals}f".format(value).toDouble()
+            if (s.accuracyDecimals == 0) "%.0f".format(java.util.Locale.ROOT, value).toLong()
+            else "%.${s.accuracyDecimals}f".format(java.util.Locale.ROOT, value).toDouble()
         } else value
         val entityUid = uid(instanceId, s.key)
         val filter = filters[entityUid] ?: return  // not declared (validation error or not enabled)
@@ -722,7 +824,15 @@ class BleRuntime(
     private fun onEvent(event: JsonObject) {
         if (event["kind"]?.jsonPrimitive?.content != "command") return
         val cmd = json.decodeFromJsonElement(CommandPayload.serializer(), event)
-        val (d, c) = controls[cmd.uniqueId] ?: return
+        commandCount.incrementAndGet()
+        lastCommandMs = System.currentTimeMillis()
+        val (d, c) = controls[cmd.uniqueId] ?: run {
+            // 예전엔 조용히 버렸다. HA 버튼을 눌렀는데 아무 일도 없을 때 여기서 걸렸는지 로그로 가릴 수 있게 한다.
+            LiveEventLogger.log(LogType.LINK,
+                "HA command ignored: no control registered for unique_id=${cmd.uniqueId} (action=${cmd.action})")
+            return
+        }
+        LiveEventLogger.log(LogType.LINK, "HA command: device=${d.id}, control=${c.key}, action=${cmd.action}")
         when (c.action) {
             ControlAction.advertise -> {
                 when (cmd.action) {
@@ -1042,5 +1152,6 @@ class BleRuntime(
     companion object {
         private const val PRESENCE_TICK_MS = 10_000L
         private const val UI_REFRESH_MS = 1_000L
+        private const val COLLECTOR_RELAUNCH_DELAY_MS = 5_000L
     }
 }

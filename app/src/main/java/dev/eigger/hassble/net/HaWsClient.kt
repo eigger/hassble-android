@@ -78,7 +78,7 @@ class HaWsClient(
     private var ws: WebSocket? = null
     private var connectMessageId: Int? = null
     private var bridgeTimeoutJob: Job? = null
-    private val pendingMessages = mutableListOf<String>()
+    private val pendingMessages = PendingMessageQueue()
 
     private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 64)
     val events: SharedFlow<JsonObject> = _events.asSharedFlow()
@@ -97,6 +97,7 @@ class HaWsClient(
     private var authFailed = false
     private var reconnectDelayMs = 2000L
     private val resubscribePending = AtomicBoolean(false)
+    private val missedResubscribes = java.util.concurrent.atomic.AtomicInteger(0)
     private var resubscribeJob: Job? = null
     private val pendingRequests = java.util.concurrent.ConcurrentHashMap<Int, CompletableDeferred<JsonObject>>()
 
@@ -253,12 +254,22 @@ class HaWsClient(
     }
 
     private fun enqueueOrSend(text: String) {
-        if (_connectionState.value == ConnectionState.Connected) {
-            send(text)
-        } else {
-            pendingMessages += text
+        val dropped = pendingMessages.withLock {
+            if (_connectionState.value == ConnectionState.Connected) {
+                send(text)
+                0L
+            } else {
+                pendingMessages.add(text)
+            }
+        }
+        if (dropped > 0 && dropped % DROP_LOG_EVERY == 1L) {
+            LiveEventLogger.log(LogType.LINK,
+                "WS offline queue full — dropped oldest messages (total dropped: $dropped)")
         }
     }
+
+    /** heartbeat 로그용. */
+    val pendingMessageCount: Int get() = pendingMessages.size
 
     private fun send(text: String) {
         ws?.send(text)
@@ -266,9 +277,13 @@ class HaWsClient(
     }
 
     private fun flushPendingMessages() {
-        val queued = pendingMessages.toList()
-        pendingMessages.clear()
-        for (text in queued) send(text)
+        pendingMessages.withLock {
+            val queued = pendingMessages.drain()
+            if (queued.isNotEmpty()) {
+                LiveEventLogger.log(LogType.LINK, "WS: flushing ${queued.size} queued message(s) after (re)connect")
+            }
+            for (text in queued) send(text)
+        }
     }
 
     private fun subscribe() {
@@ -289,12 +304,29 @@ class HaWsClient(
 
     private fun startBridgeTimeout() {
         bridgeTimeoutJob?.cancel()
+        val isResubscribe = _connectionState.value == ConnectionState.Connected
+        val timeoutMs = if (isResubscribe) RESUBSCRIBE_TIMEOUT_MS else BRIDGE_TIMEOUT_MS
         bridgeTimeoutJob = scope.launch {
-            delay(15_000)
-            if (_connectionState.value == ConnectionState.Connecting) {
-                _connectionIssue.value = ConnectionIssue.BridgeNotResponding
-                ws?.close(1000, "Bridge timeout")
+            delay(timeoutMs)
+            // 결과가 오면 onConnectResult가 이 Job을 취소한다. 여기까지 왔으면 응답이 없었던 것.
+            if (isResubscribe) {
+                // 예전엔 첫 연결(Connecting)만 봤다. 60초 주기 재구독은 이미 Connected라 응답이 없어도
+                // "연결됨"으로 남아, HA 쪽 ws_bridge가 멈춘 경우 명령·상태가 오가지 않는데도 그대로였다.
+                // 다만 HA가 잠깐 바쁜 것(재시작 직후 등)만으로 끊으면 재선언 부하로 더 느려지므로,
+                // 연속으로 놓쳤을 때만 재연결한다.
+                val missed = missedResubscribes.incrementAndGet()
+                if (missed < RESUBSCRIBE_MISSES_BEFORE_RECONNECT) {
+                    LiveEventLogger.log(LogType.LINK,
+                        "WS: resubscribe got no ws_bridge result within ${timeoutMs / 1000}s ($missed/$RESUBSCRIBE_MISSES_BEFORE_RECONNECT) — waiting for the next one")
+                    return@launch
+                }
             }
+            val phase = if (isResubscribe) "resubscribe, ${missedResubscribes.get()} in a row" else "connect"
+            LiveEventLogger.log(LogType.LINK,
+                "WS: no ws_bridge/connect result within ${timeoutMs / 1000}s ($phase) — reconnecting")
+            _connectionIssue.value = ConnectionIssue.BridgeNotResponding
+            // close()는 상대가 닫기 응답을 줄 때까지(최대 60초) 기다린다. 응답이 없는 상대이므로 바로 끊는다.
+            ws?.cancel()
         }
     }
 
@@ -306,11 +338,16 @@ class HaWsClient(
 
     private fun onConnectResult() {
         bridgeTimeoutJob?.cancel()
+        missedResubscribes.set(0)
         val isResubscribe = resubscribePending.getAndSet(false)
-        _connectionState.value = ConnectionState.Connected
+        // Connected 전환과 flush를 같은 락에서 한다. 따로 하면 그 사이 새 상태가 먼저 나가고
+        // 뒤이어 flush된 옛 상태가 HA 값을 덮어쓸 수 있다.
+        pendingMessages.withLock {
+            _connectionState.value = ConnectionState.Connected
+            flushPendingMessages()
+        }
         _connectionIssue.value = ConnectionIssue.None
         reconnectDelayMs = 2000L
-        flushPendingMessages()
         _bridgeConnected.tryEmit(!isResubscribe)
         if (!isResubscribe) {
             resubscribeJob?.cancel()
@@ -329,6 +366,7 @@ class HaWsClient(
         resubscribeJob?.cancel()
         connectMessageId = null
         pendingMessages.clear()
+        missedResubscribes.set(0)
         _connectionState.value = ConnectionState.Disconnected
         scope.launch {
             delay(reconnectDelayMs)
@@ -354,6 +392,13 @@ class HaWsClient(
         _connectionIssue.value = ConnectionIssue.AuthFailed
         _connectionState.value = ConnectionState.Disconnected
         webSocket.close(1000, "Auth failed")
+    }
+
+    /** 종료 로그에 붙일 다음 동작. triggerReconnection()이 재연결하지 않는 경우와 맞춘다. */
+    private fun nextStepNote(): String = when {
+        isClosedManually -> "closed by app, not reconnecting"
+        authFailed -> "auth failed, not reconnecting"
+        else -> "reconnecting"
     }
 
     private inner class Listener : WebSocketListener() {
@@ -407,6 +452,7 @@ class HaWsClient(
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            LiveEventLogger.log(LogType.LINK, "WS closed: code=$code, reason='$reason' — ${nextStepNote()}")
             if (code != 4000 && _connectionIssue.value == ConnectionIssue.None && !authFailed) {
                 _connectionIssue.value = ConnectionIssue.NetworkError
             }
@@ -414,6 +460,7 @@ class HaWsClient(
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            LiveEventLogger.log(LogType.LINK, "WS failure: ${t::class.java.simpleName}: ${t.message} — ${nextStepNote()}")
             if (_connectionIssue.value == ConnectionIssue.None) {
                 _connectionIssue.value = ConnectionIssue.NetworkError
             }
@@ -421,3 +468,9 @@ class HaWsClient(
         }
     }
 }
+
+private const val BRIDGE_TIMEOUT_MS = 15_000L
+/** 재구독 주기(60s)보다 짧아야 다음 재구독 전에 판정된다. */
+private const val RESUBSCRIBE_TIMEOUT_MS = 45_000L
+private const val RESUBSCRIBE_MISSES_BEFORE_RECONNECT = 2
+private const val DROP_LOG_EVERY = 100L

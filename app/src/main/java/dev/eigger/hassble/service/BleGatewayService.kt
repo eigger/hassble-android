@@ -88,6 +88,23 @@ class BleGatewayService : Service() {
     private var currentConfig: GatewayConfig? = null
     @Volatile private var pendingEntityCleanupDeviceIds: Set<String> = emptySet()
     private val pipelineStarting = java.util.concurrent.atomic.AtomicBoolean(false)
+    // 서비스 쪽 collector(WS 상태, 브리지 재연결 처리, 설정 적용)도 본문에서 예외 한 번이면 수집이 영구히
+    // 끝났다. 특히 브리지 재연결 처리는 WS 상태 collector와 같은 Job의 형제라, 함께 취소되어 화면이
+    // "연결됨"에 멈추고 HA 재시작 뒤 엔티티 재선언도 안 됐다. 건별로 격리해 로그만 남긴다.
+    private val serviceErrors = dev.eigger.hassble.ble.PipelineErrorLog(
+        log = { LiveEventLogger.log(LogType.LINK, it) },
+        onLogged = { runCatching { updateNotification() } },
+    )
+
+    private inline fun guarded(what: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            serviceErrors.record(what, e)
+        }
+    }
     // link_status는 폴링마다(초 단위) onLinkStatus가 여러 번 호출되지만 값은 대부분 "on"으로
     // 동일하다. 실제로 값이 바뀔 때만 WS로 보내 불필요한 프레임 전송을 없앤다.
     private val lastSentLinkConnected = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
@@ -294,7 +311,7 @@ class BleGatewayService : Service() {
         var lastIssue: ConnectionIssue = ConnectionIssue.None
         wsStateJob = scope.launch {
             launch {
-                client.bridgeConnected.collect {
+                client.bridgeConnected.collect { guarded("bridge (re)connect handling") {
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
                     val repository = HassSettingsRepository(this@BleGatewayService)
@@ -330,16 +347,19 @@ class BleGatewayService : Service() {
                             LiveEventLogger.log(LogType.LINK, "[Warning] Failed to save entity fingerprints: ${e.message}")
                         }
                     }
-                }
+                } }
             }
             combine(client.connectionState, client.connectionIssue) { state, issue ->
                 state to issue
             }.collect { (state, issue) ->
+                // 상태 반영은 알림보다 먼저 한다 — 알림에서 예외가 나도 화면 상태는 맞게.
                 _serviceConnectionState.value = state
                 _connectionIssue.value = issue
-                updateNotification()
-                if (issue == ConnectionIssue.AuthFailed && lastIssue != ConnectionIssue.AuthFailed) {
-                    showAuthExpiredNotification()
+                guarded("connection state notification") {
+                    updateNotification()
+                    if (issue == ConnectionIssue.AuthFailed && lastIssue != ConnectionIssue.AuthFailed) {
+                        showAuthExpiredNotification()
+                    }
                 }
                 lastIssue = issue
             }
@@ -351,7 +371,8 @@ class BleGatewayService : Service() {
                 delay(300_000)
                 publishGatewayStates(ws)
                 LiveEventLogger.log(LogType.LINK,
-                    "Heartbeat: fgs=running, ws=${ws?.connectionState?.value}, scan[${BleScanHealth.state.value.describe()}]")
+                    "Heartbeat: fgs=running, ws=${ws?.connectionState?.value} (queued=${ws?.pendingMessageCount ?: 0}), " +
+                        "scan[${BleScanHealth.state.value.describe()}], pipeline[${runtime?.diagnostics() ?: "no runtime"}]")
             }
         }
     }
@@ -489,6 +510,7 @@ class BleGatewayService : Service() {
                         val cur = _advertisingDeviceIds.value
                         _advertisingDeviceIds.value = if (isAdv) cur + id else cur - id
                     },
+                    onPipelineError = { runCatching { updateNotification() } },
                 ).also { it.start() }
             }
 
@@ -520,7 +542,7 @@ class BleGatewayService : Service() {
                         unfilteredScan = unfilteredScan,
                         advCounters = advCounters.entries.associate { it.key.toString() to ((it.value as? Number)?.toInt() ?: 0) },
                     )
-                }.collect { snapshot ->
+                }.collect { snapshot -> guarded("settings apply") {
                     runtime?.apply(
                         config,
                         snapshot.enabledSensors,
@@ -530,7 +552,7 @@ class BleGatewayService : Service() {
                         snapshot.unfilteredScan,
                         snapshot.advCounters,
                     )
-                }
+                } }
             }
             updateNotification()
         }
@@ -687,9 +709,17 @@ class BleGatewayService : Service() {
             _serviceConnectionState.value == ConnectionState.Connecting -> getString(R.string.status_connecting)
             else -> getString(R.string.sending_ble_data_notif)
         }
+        // 처리 중 버린 수신값·명령이 있으면 알림에서도 보이게 한다. 예전엔 이런 실패가 조용히
+        // "연결됨" 뒤에 숨어 있었고, 로그 버퍼가 밀리면 흔적도 남지 않았다.
+        val droppedCount = (runtime?.pipelineErrorCount ?: 0L) + serviceErrors.totalCount
+        val text = if (droppedCount > 0) {
+            contentText + getString(R.string.notif_pipeline_errors_suffix, droppedCount)
+        } else {
+            contentText
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("HassBle")
-            .setContentText(contentText)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentIntent(openIntent)
             .setOngoing(true)
