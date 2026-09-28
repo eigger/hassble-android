@@ -154,6 +154,7 @@
     <string name="control_type_button">버튼</string>
     <string name="obd_reconnecting_hint">OBD 어댑터 연결이 끊겼습니다. 자동으로 재연결합니다…</string>
     <string name="notif_connected_sensors">연결됨 · 센서 값 %1$d개</string>
+    <string name="notif_pipeline_errors_suffix"> · 처리 오류 %1$d건(로그 확인)</string>
     <string name="notif_auth_failed">인증 실패 — 토큰 확인</string>
     <string name="notif_bridge_timeout">ws_bridge 응답 없음</string>
     <string name="notif_config_error">설정 로드 실패</string>

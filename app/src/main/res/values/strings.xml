@@ -161,6 +161,7 @@
     <string name="obd_reconnecting_hint">OBD adapter disconnected. Reconnecting automatically…</string>
     <!-- Notification -->
     <string name="notif_connected_sensors">Connected · %1$d sensor values</string>
+    <string name="notif_pipeline_errors_suffix"> · %1$d processing error(s), see Logs</string>
     <string name="notif_auth_failed">Auth failed — check token</string>
     <string name="notif_bridge_timeout">ws_bridge not responding</string>
     <string name="notif_config_error">Config load failed</string>

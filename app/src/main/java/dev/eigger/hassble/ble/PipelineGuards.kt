@@ -30,25 +30,33 @@ internal suspend fun <T> FlowCollector<T>.emitDownstream(value: T) {
 /**
  * 수신값·HA 명령 한 건을 처리하다 난 예외를 기록한다. 같은 예외가 패킷마다 반복되면 로그가 넘치므로
  * 처음 한 번은 스택트레이스를, 그 뒤로는 [repeatEvery]번마다 횟수만 남긴다.
+ *
+ * 같은 예외인지는 context + 예외 클래스로만 가른다. 메시지(인덱스·오프셋 등)나 이벤트 내용까지 키에
+ * 넣으면 값마다 새 키가 생겨 맵이 끝없이 커지고, 변형마다 스택트레이스가 찍혀 로그 버퍼를 덮는다.
+ * 그래서 [context]에는 가변 데이터를 넣지 말고, 첫 로그에만 보일 내용은 detail로 넘긴다.
+ * [onNewError]는 새 종류의 오류가 처음 나왔을 때 한 번 불린다(알림 갱신 등).
  */
 internal class PipelineErrorLog(
     private val log: (String) -> Unit,
     private val repeatEvery: Long = 100,
     private val maxTraceLines: Int = 25,
+    private val onNewError: () -> Unit = {},
 ) {
     private val counts = ConcurrentHashMap<String, AtomicLong>()
     private val total = AtomicLong(0)
 
     val totalCount: Long get() = total.get()
 
-    fun record(context: String, e: Throwable) {
+    fun record(context: String, e: Throwable, detail: String? = null) {
         total.incrementAndGet()
-        val key = "$context|${e::class.java.name}|${e.message}"
+        val key = "$context|${e::class.java.name}"
         val n = counts.getOrPut(key) { AtomicLong(0) }.incrementAndGet()
         when {
             n == 1L -> {
                 val trace = e.stackTraceToString().lineSequence().take(maxTraceLines).joinToString("\n")
-                log("[Error] $context failed — dropped this one and kept going:\n$trace")
+                val detailLine = detail?.let { " ($it)" } ?: ""
+                log("[Error] $context failed$detailLine — dropped this one and kept going:\n$trace")
+                onNewError()
             }
             n % repeatEvery == 0L ->
                 log("[Error] $context: same error repeated $n times: ${e::class.java.simpleName}: ${e.message}")

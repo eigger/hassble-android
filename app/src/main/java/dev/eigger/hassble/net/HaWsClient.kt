@@ -97,6 +97,7 @@ class HaWsClient(
     private var authFailed = false
     private var reconnectDelayMs = 2000L
     private val resubscribePending = AtomicBoolean(false)
+    private val missedResubscribes = java.util.concurrent.atomic.AtomicInteger(0)
     private var resubscribeJob: Job? = null
     private val pendingRequests = java.util.concurrent.ConcurrentHashMap<Int, CompletableDeferred<JsonObject>>()
 
@@ -303,14 +304,26 @@ class HaWsClient(
 
     private fun startBridgeTimeout() {
         bridgeTimeoutJob?.cancel()
+        val isResubscribe = _connectionState.value == ConnectionState.Connected
+        val timeoutMs = if (isResubscribe) RESUBSCRIBE_TIMEOUT_MS else BRIDGE_TIMEOUT_MS
         bridgeTimeoutJob = scope.launch {
-            delay(BRIDGE_TIMEOUT_MS)
+            delay(timeoutMs)
             // 결과가 오면 onConnectResult가 이 Job을 취소한다. 여기까지 왔으면 응답이 없었던 것.
-            // 예전엔 첫 연결(Connecting)만 봤다. 60초 주기 재구독은 이미 Connected라 응답이 없어도
-            // "연결됨"으로 남아, HA 쪽 ws_bridge가 멈춘 경우 명령·상태가 오가지 않는데도 그대로였다.
-            val phase = if (_connectionState.value == ConnectionState.Connecting) "connect" else "resubscribe"
+            if (isResubscribe) {
+                // 예전엔 첫 연결(Connecting)만 봤다. 60초 주기 재구독은 이미 Connected라 응답이 없어도
+                // "연결됨"으로 남아, HA 쪽 ws_bridge가 멈춘 경우 명령·상태가 오가지 않는데도 그대로였다.
+                // 다만 HA가 잠깐 바쁜 것(재시작 직후 등)만으로 끊으면 재선언 부하로 더 느려지므로,
+                // 연속으로 놓쳤을 때만 재연결한다.
+                val missed = missedResubscribes.incrementAndGet()
+                if (missed < RESUBSCRIBE_MISSES_BEFORE_RECONNECT) {
+                    LiveEventLogger.log(LogType.LINK,
+                        "WS: resubscribe got no ws_bridge result within ${timeoutMs / 1000}s ($missed/$RESUBSCRIBE_MISSES_BEFORE_RECONNECT) — waiting for the next one")
+                    return@launch
+                }
+            }
+            val phase = if (isResubscribe) "resubscribe, ${missedResubscribes.get()} in a row" else "connect"
             LiveEventLogger.log(LogType.LINK,
-                "WS: no ws_bridge/connect result within ${BRIDGE_TIMEOUT_MS / 1000}s ($phase) — reconnecting")
+                "WS: no ws_bridge/connect result within ${timeoutMs / 1000}s ($phase) — reconnecting")
             _connectionIssue.value = ConnectionIssue.BridgeNotResponding
             // close()는 상대가 닫기 응답을 줄 때까지(최대 60초) 기다린다. 응답이 없는 상대이므로 바로 끊는다.
             ws?.cancel()
@@ -325,6 +338,7 @@ class HaWsClient(
 
     private fun onConnectResult() {
         bridgeTimeoutJob?.cancel()
+        missedResubscribes.set(0)
         val isResubscribe = resubscribePending.getAndSet(false)
         // Connected 전환과 flush를 같은 락에서 한다. 따로 하면 그 사이 새 상태가 먼저 나가고
         // 뒤이어 flush된 옛 상태가 HA 값을 덮어쓸 수 있다.
@@ -352,6 +366,7 @@ class HaWsClient(
         resubscribeJob?.cancel()
         connectMessageId = null
         pendingMessages.clear()
+        missedResubscribes.set(0)
         _connectionState.value = ConnectionState.Disconnected
         scope.launch {
             delay(reconnectDelayMs)
@@ -455,4 +470,7 @@ class HaWsClient(
 }
 
 private const val BRIDGE_TIMEOUT_MS = 15_000L
+/** 재구독 주기(60s)보다 짧아야 다음 재구독 전에 판정된다. */
+private const val RESUBSCRIBE_TIMEOUT_MS = 45_000L
+private const val RESUBSCRIBE_MISSES_BEFORE_RECONNECT = 2
 private const val DROP_LOG_EVERY = 100L

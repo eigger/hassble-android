@@ -2,6 +2,7 @@ package dev.eigger.hassble.ble
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -103,19 +104,26 @@ class PipelineGuardsTest {
 
     @Test
     fun `take and first still cancel cleanly through emitDownstream`() {
+        // take/first는 CancellationException 하위(AbortFlowException)로 상류를 끊는다.
+        // emitDownstream이 이를 DownstreamException으로 감싸면 소비자가 정상 종료 대신 예외를 받는다.
         val values = runBlocking {
             flow { var i = 0; while (true) emitDownstream(i++) }.take(3).toList()
         }
         assertEquals(listOf(0, 1, 2), values)
+        val first = runBlocking {
+            flow { var i = 10; while (true) emitDownstream(i++) }.first()
+        }
+        assertEquals(10, first)
     }
 
     @Test
     fun `error log prints the trace once then only every Nth repeat`() {
         val lines = mutableListOf<String>()
         val log = PipelineErrorLog({ lines += it }, repeatEvery = 3)
-        repeat(7) { log.record("reading handling (device=p)", NumberFormatException("NaN")) }
+        repeat(7) { log.record("reading handling (device=p)", NumberFormatException("NaN $it")) }
         log.record("reading handling (device=q)", NumberFormatException("NaN"))
         assertEquals(8L, log.totalCount)
+        // 메시지가 매번 달라도(값·인덱스 등) 같은 종류로 묶여야 한다.
         // p: 1회째 전체, 3·6회째 횟수 / q: 1회째 전체
         assertEquals(4, lines.size)
         assertTrue(lines[0].startsWith("[Error] reading handling (device=p) failed"))
@@ -123,5 +131,18 @@ class PipelineGuardsTest {
         assertTrue(lines[1].contains("repeated 3 times"))
         assertTrue(lines[2].contains("repeated 6 times"))
         assertTrue(lines[3].startsWith("[Error] reading handling (device=q) failed"))
+    }
+
+    @Test
+    fun `detail shows only in the first log and new kinds notify once`() {
+        val lines = mutableListOf<String>()
+        var notified = 0
+        val log = PipelineErrorLog({ lines += it }, repeatEvery = 1000, onNewError = { notified++ })
+        log.record("HA command handling", IllegalArgumentException("x"), detail = "event={a}")
+        log.record("HA command handling", IllegalArgumentException("y"), detail = "event={b}")
+        log.record("HA command handling", IllegalStateException("z"), detail = "event={c}")
+        assertEquals(2, lines.size)
+        assertTrue(lines[0].contains("(event={a})"))
+        assertEquals(2, notified)
     }
 }

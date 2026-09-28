@@ -65,6 +65,8 @@ class BleRuntime(
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
     private val onAdvCounterChanged: (String, Int) -> Unit = { _, _ -> },
     private val onAdvertisingChanged: (String, Boolean) -> Unit = { _, _ -> },
+    /** 새 종류의 처리 오류가 처음 났을 때. 서비스가 알림에 표시한다. */
+    private val onPipelineError: () -> Unit = {},
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private var scanJob: Job? = null
@@ -107,7 +109,13 @@ class BleRuntime(
     // ── 파이프라인 진단 ──────────────────────────────────────────────────────
     // 수신값/HA 명령 한 건의 예외가 수집(collect) 전체를 끝내 "연결됨인데 아무것도 처리 안 됨" 상태로
     // 게이트웨이 재시작 전까지 남던 문제가 있었다. 이제 건별로 격리하고, 그 사실과 처리량을 heartbeat에 남긴다.
-    private val pipelineErrors = PipelineErrorLog({ LiveEventLogger.log(LogType.LINK, it) })
+    private val pipelineErrors = PipelineErrorLog(
+        log = { LiveEventLogger.log(LogType.LINK, it) },
+        onNewError = { onPipelineError() },
+    )
+
+    /** 지금까지 버린 수신값·명령 수(알림 표시용). */
+    val pipelineErrorCount: Long get() = pipelineErrors.totalCount
     private val readingCount = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile private var lastReadingMs = 0L
     private val commandCount = java.util.concurrent.atomic.AtomicLong(0)
@@ -127,16 +135,18 @@ class BleRuntime(
     private fun launchEventCollector() {
         val job = ws.events.onEach(::safeOnEvent).launchIn(scope)
         eventJob = job
-        watchCollector(job, "HA command collector") { launchEventCollector() }
+        watchCollector(job, "HA command collector", relaunchOnNormalEnd = true) { launchEventCollector() }
     }
 
     /**
      * collector가 취소가 아닌 이유로 끝나면 로그를 남기고 [relaunch]로 다시 띄운다. 건별 격리로
      * 끝날 일이 없어야 하지만, 끝났을 때 조용히 멈춰 있지 않게 하는 마지막 안전망이다.
      */
-    private fun watchCollector(job: Job, name: String, relaunch: () -> Unit) {
+    private fun watchCollector(job: Job, name: String, relaunchOnNormalEnd: Boolean, relaunch: () -> Unit) {
         job.invokeOnCompletion { cause ->
             if (stopped || cause is CancellationException) return@invokeOnCompletion
+            // 기기 연결 flow는 auto_connect가 꺼져 있으면 정상 종료한다 — 그건 의도된 끝이다.
+            if (cause == null && !relaunchOnNormalEnd) return@invokeOnCompletion
             collectorRestarts.incrementAndGet()
             LiveEventLogger.log(LogType.LINK,
                 "[Error] $name ended unexpectedly (${cause ?: "completed"}) — relaunching in ${COLLECTOR_RELAUNCH_DELAY_MS / 1000}s")
@@ -153,7 +163,7 @@ class BleRuntime(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            pipelineErrors.record("HA command handling (event=$event)", e)
+            pipelineErrors.record("HA command handling", e, detail = "event=$event")
         }
     }
 
@@ -554,6 +564,11 @@ class BleRuntime(
             }
         }
         deviceConnectionJobs[resolved.id] = job
+        // 수신값 처리는 건별로 격리돼 있지만, 그래도 Error 등이 연결 flow를 끝내면 그 기기는 재시작 전까지
+        // 끊긴 채로 남는다. 스캔 collector와 같은 안전망을 둔다. 교체·삭제된 기기면 건드리지 않는다.
+        watchCollector(job, "device=${resolved.id} connection", relaunchOnNormalEnd = false) {
+            if (deviceConnectionJobs[resolved.id] === job && devices[d.id] != null) startDevice(d)
+        }
     }
 
     private fun startSources() {
@@ -569,7 +584,7 @@ class BleRuntime(
         if (adv.isNotEmpty()) {
             val job = scanner.scan(adv, scanMode, unfilteredScan).onEach(::safeOnReading).launchIn(scope)
             scanJob = job
-            watchCollector(job, "BLE scan collector") {
+            watchCollector(job, "BLE scan collector", relaunchOnNormalEnd = true) {
                 // 교체된 옛 세션이면 건드리지 않는다(새 세션은 이미 떠 있다).
                 if (scanJob === job) relaunchScan("scan collector ended unexpectedly")
             }
