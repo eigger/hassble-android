@@ -134,15 +134,18 @@ class PipelineGuardsTest {
     }
 
     @Test
-    fun `detail shows only in the first log and new kinds notify once`() {
+    fun `detail shows only in the first log and the callback follows each log line`() {
         val lines = mutableListOf<String>()
-        var notified = 0
-        val log = PipelineErrorLog({ lines += it }, repeatEvery = 1000, onNewError = { notified++ })
+        var callbacks = 0
+        val log = PipelineErrorLog({ lines += it }, repeatEvery = 2, onLogged = { callbacks++ })
         log.record("HA command handling", IllegalArgumentException("x"), detail = "event={a}")
         log.record("HA command handling", IllegalArgumentException("y"), detail = "event={b}")
         log.record("HA command handling", IllegalStateException("z"), detail = "event={c}")
-        assertEquals(2, lines.size)
+        // IAE 1회째(전체) · IAE 2회째(반복 알림) · ISE 1회째(전체)
+        assertEquals(3, lines.size)
         assertTrue(lines[0].contains("(event={a})"))
-        assertEquals(2, notified)
+        assertTrue(lines[1].contains("repeated 2 times"))
+        // 알림 건수 갱신도 로그와 같은 빈도로 불린다(패킷마다가 아니라).
+        assertEquals(3, callbacks)
     }
 }

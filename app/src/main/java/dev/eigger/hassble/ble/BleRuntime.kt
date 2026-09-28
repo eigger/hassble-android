@@ -65,7 +65,7 @@ class BleRuntime(
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
     private val onAdvCounterChanged: (String, Int) -> Unit = { _, _ -> },
     private val onAdvertisingChanged: (String, Boolean) -> Unit = { _, _ -> },
-    /** 새 종류의 처리 오류가 처음 났을 때. 서비스가 알림에 표시한다. */
+    /** 처리 오류 로그가 남을 때(새 종류 첫 발생·반복 N회마다). 서비스가 알림의 오류 건수를 갱신한다. */
     private val onPipelineError: () -> Unit = {},
 ) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -111,7 +111,7 @@ class BleRuntime(
     // 게이트웨이 재시작 전까지 남던 문제가 있었다. 이제 건별로 격리하고, 그 사실과 처리량을 heartbeat에 남긴다.
     private val pipelineErrors = PipelineErrorLog(
         log = { LiveEventLogger.log(LogType.LINK, it) },
-        onNewError = { onPipelineError() },
+        onLogged = { onPipelineError() },
     )
 
     /** 지금까지 버린 수신값·명령 수(알림 표시용). */
@@ -642,21 +642,32 @@ class BleRuntime(
         presenceJob = scope.launch {
             while (isActive) {
                 delay(PRESENCE_TICK_MS)
-                val now = System.currentTimeMillis()
-                val out = mutableListOf<Pair<String, String>>()
-                for ((instanceId, state) in advertisementPresence) {
-                    if (!state.online) continue
-                    // 프로필이 사라졌으면(설정 삭제) 더 볼 것 없이 off. 타임아웃은 프로필에서 읽는다.
-                    val timeout = profileForInstance(instanceId)?.let { presenceTimeoutMs(it) } ?: 0L
-                    if (timeout > 0 && now - state.lastSeenMs < timeout) continue
-                    if (!advertisementPresence.replace(instanceId, state, state.copy(online = false))) continue
-                    out += "${instanceId}_advertisement" to "off"
-                    LiveEventLogger.log(LogType.LINK,
-                        "device=$instanceId: advertisement lost (off) — no packets for ${(now - state.lastSeenMs) / 1000}s, keeping last sensor values")
+                // 한 바퀴의 예외로 감시 루프가 끝나면 이후 광고가 끊겨도 off가 영영 안 나간다. 바퀴 단위로 격리한다.
+                try {
+                    checkPresenceOnce()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    pipelineErrors.record("advertisement presence check", e)
                 }
-                if (out.isNotEmpty()) ws.sendStates(out)
             }
         }
+    }
+
+    private fun checkPresenceOnce() {
+        val now = System.currentTimeMillis()
+        val out = mutableListOf<Pair<String, String>>()
+        for ((instanceId, state) in advertisementPresence) {
+            if (!state.online) continue
+            // 프로필이 사라졌으면(설정 삭제) 더 볼 것 없이 off. 타임아웃은 프로필에서 읽는다.
+            val timeout = profileForInstance(instanceId)?.let { presenceTimeoutMs(it) } ?: 0L
+            if (timeout > 0 && now - state.lastSeenMs < timeout) continue
+            if (!advertisementPresence.replace(instanceId, state, state.copy(online = false))) continue
+            out += "${instanceId}_advertisement" to "off"
+            LiveEventLogger.log(LogType.LINK,
+                "device=$instanceId: advertisement lost (off) — no packets for ${(now - state.lastSeenMs) / 1000}s, keeping last sensor values")
+        }
+        if (out.isNotEmpty()) ws.sendStates(out)
     }
 
     private fun markAdvertisementSeen(d: DeviceConfig, instanceId: String) {

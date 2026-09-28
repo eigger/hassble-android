@@ -93,7 +93,7 @@ class BleGatewayService : Service() {
     // "연결됨"에 멈추고 HA 재시작 뒤 엔티티 재선언도 안 됐다. 건별로 격리해 로그만 남긴다.
     private val serviceErrors = dev.eigger.hassble.ble.PipelineErrorLog(
         log = { LiveEventLogger.log(LogType.LINK, it) },
-        onNewError = { runCatching { updateNotification() } },
+        onLogged = { runCatching { updateNotification() } },
     )
 
     private inline fun guarded(what: String, block: () -> Unit) {
