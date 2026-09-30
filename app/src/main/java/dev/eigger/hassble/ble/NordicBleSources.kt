@@ -21,7 +21,11 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -75,9 +79,15 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     private val serviceUuidsCache = java.util.concurrent.ConcurrentHashMap<String, List<android.os.ParcelUuid>>()
     private val cacheTimestamps = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
-    // Shared throttle guard: Android counts scan starts per-app across ALL scan sessions
-    // (scan() for advertisement devices, scanForMac() for OBD reconnect-wait), not per callback.
-    // A single tracker here ensures both paths respect the same 5-starts-per-30s system limit.
+    // scan()이 waitMacs(OBD/GATT 재연결 대기 MAC)에서 본 광고의 주소. 구독자가 없으면 버려지므로
+    // scanForMac() 구독 이후의 광고만 전달된다. tryEmit은 suspend하지 않아 스캔 콜백을 막지 않는다.
+    private val macSightings = MutableSharedFlow<String>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    // Throttle guard: Android counts scan starts per-app (5 starts per 30s). 스캔 세션은 scan() 하나뿐이라
+    // 재시작 루프가 이 한도를 넘지 않게 한다.
     private val scanStartTimesMutex = Mutex()
     private val scanStartTimes = ArrayDeque<Long>()
 
@@ -117,7 +127,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
     override fun scan(
         devices: List<DeviceConfig>,
         scanMode: BleScanModeOption,
-        unfiltered: Boolean
+        unfiltered: Boolean,
+        waitMacs: Set<String>,
     ): Flow<RawReading> = flow {
         val scanner = this@NordicAdvertisementScanner.scanner
         Log.d(TAG, "Starting Nordic BLE scan for ${devices.size} advertisement profiles (unfiltered=$unfiltered)")
@@ -132,13 +143,26 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             scanMode = nativeScanMode,
             legacy = true,
         )
-        val scanFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
-        LiveEventLogger.log(LogType.LINK, "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size}")
+        val normalizedWaitMacs = waitMacs.map { it.uppercase().replace("-", ":") }.toSet()
+        val advFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
+        // 광고 프로필 중 필터로 못 바꾸는 것이 있으면(advFilters 빔) 스캔은 필터 없이 돈다. 이때 MAC 필터만
+        // 덧붙이면 그 프로필의 광고가 걸러지므로 합치지 않는다 — 필터 없는 스캔은 MAC도 전부 본다.
+        // 광고 프로필이 없으면(OBD/GATT만) "필터 없는 스캔" 옵션과 무관하게 MAC 필터 스캔으로 돈다.
+        val scanFilters = if (devices.isNotEmpty() && (unfiltered || advFilters.isEmpty())) {
+            emptyList()
+        } else {
+            advFilters + normalizedWaitMacs.map { BleScanFilter(deviceAddress = it) }
+        }
+        LiveEventLogger.log(LogType.LINK,
+            "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size} (reconnect-wait MACs: ${normalizedWaitMacs.size})")
         if (scanFilters.isEmpty()) {
             // Android 8.1+는 필터 없는 스캔에 화면이 꺼진 동안 결과를 주지 않는다.
             LiveEventLogger.log(LogType.LINK,
                 "[Warning] BLE scan has no hardware filters — Android suppresses unfiltered scan results while the screen is off")
         }
+
+        // 필터 없는 스캔이면 화면 꺼진 재연결 대기를 위해 MAC 전용 보조 스캔을 곁들인다(startScan 2회).
+        val needsMacFallback = scanFilters.isEmpty() && normalizedWaitMacs.isNotEmpty()
 
         // 세션마다 결과가 한 건도 없이 끝난 횟수. 결과가 오면 0으로 돌아간다.
         var consecutiveIdleRestarts = 0
@@ -148,6 +172,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         while (currentCoroutineContext().isActive) {
             awaitScanPrerequisites()
             awaitScanThrottleSlot()
+            // 보조 스캔의 startScan도 OS 한도(30초 5회)에 든다.
+            if (needsMacFallback) awaitScanThrottleSlot()
 
             val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
             val sessionStartMs = System.currentTimeMillis()
@@ -176,6 +202,30 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             throw ScanRestartRequest(reason)
                         }
                     }
+                    // 필터 없는 스캔은 화면이 꺼진 동안 결과를 못 받는다. 그 상태로 재연결 대기 MAC을 합칠 수
+                    // 없으니, 이 경우에만 MAC 전용 필터 스캔을 곁들여 화면 꺼진 재연결을 지킨다.
+                    val macFallback: Job? = if (needsMacFallback) {
+                        LiveEventLogger.log(LogType.LINK,
+                            "BLE scan is unfiltered — running a MAC-only scan for ${normalizedWaitMacs.size} reconnect-wait device(s)")
+                        launch {
+                            try {
+                                scanner.scan(
+                                    filters = normalizedWaitMacs.map { BleScanFilter(deviceAddress = it) },
+                                    settings = BleScannerSettings(scanMode = BleScanMode.SCAN_MODE_LOW_POWER, legacy = true),
+                                ).collect { result ->
+                                    val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
+                                    // 보조 스캔 결과는 watchdog·건강 상태에 세지 않는다. 세면 메인 스캔이
+                                    // 조용히 멈춰도 연결된 기기의 광고 때문에 복구 재시작이 일어나지 않는다.
+                                    if (addr in normalizedWaitMacs) macSightings.tryEmit(addr)
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // 보조 스캔 실패가 메인 광고 스캔까지 끌고 내려가면 안 된다.
+                                LiveEventLogger.log(LogType.LINK, "BLE MAC-only scan failed: ${e.localizedMessage} — retried on the next scan session restart")
+                            }
+                        }
+                    } else null
                     try {
                         scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
                             val now = System.currentTimeMillis()
@@ -184,6 +234,11 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             BleScanHealth.onResult(now)
                             val deviceName = result.device.name ?: ""
                             val deviceAddress = result.device.address
+                            if (normalizedWaitMacs.isNotEmpty() &&
+                                deviceAddress?.uppercase()?.replace("-", ":") in normalizedWaitMacs
+                            ) {
+                                macSightings.tryEmit(deviceAddress.uppercase().replace("-", ":"))
+                            }
                             val scanRecord = result.data?.scanRecord
                             val isConnectable = result.data?.isConnectable
         
@@ -313,6 +368,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                         }
                     } finally {
                         watchdog.cancel()
+                        macFallback?.cancel()
                     }
                 }
                 // Scan ended without exception — restart (throttle guard above handles rate)
@@ -395,30 +451,9 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         if (loggedBluetooth) LiveEventLogger.log(LogType.LINK, "Bluetooth is on — resuming scan")
     }
 
-    // 권한은 바로 아래 missingScanPermissions()에서 확인하고 없으면 SecurityException을 던진다.
-    @SuppressLint("MissingPermission")
-    override fun scanForMac(mac: String, scanMode: BleScanModeOption): Flow<Unit> = flow {
-        val missing = missingScanPermissions()
-        if (missing.isNotEmpty()) {
-            // 조용히 return하면 빈 Flow가 되어 호출측 first()가 NoSuchElementException을 던진다.
-            // 재연결 루프에서는 그게 "권한 없음"이 아니라 정체불명의 실패로 보이므로 명시한다.
-            val names = missing.joinToString { it.substringAfterLast('.') }
-            Log.e(TAG, "scan permissions not granted for scanForMac: $names")
-            throw SecurityException("scan permission not granted: $names")
-        }
+    override fun scanForMac(mac: String): Flow<Unit> {
         val normalizedMac = mac.uppercase().replace("-", ":")
-        val nativeScanMode = when (scanMode) {
-            BleScanModeOption.LOW_POWER -> BleScanMode.SCAN_MODE_LOW_POWER
-            BleScanModeOption.BALANCED -> BleScanMode.SCAN_MODE_BALANCED
-            BleScanModeOption.LOW_LATENCY -> BleScanMode.SCAN_MODE_LOW_LATENCY
-        }
-        val filters = listOf(BleScanFilter(deviceAddress = normalizedMac))
-        val scanner = this@NordicAdvertisementScanner.scanner
-        awaitScanThrottleSlot()
-        scanner.scan(filters = filters, settings = BleScannerSettings(scanMode = nativeScanMode, legacy = true)).collect { result ->
-            val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
-            if (addr == normalizedMac) emit(Unit)
-        }
+        return macSightings.filter { it == normalizedMac }.map { }
     }
 
     override fun stop() {
