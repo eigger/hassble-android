@@ -83,6 +83,7 @@ class BleGatewayService : Service() {
     private var wsStateJob: Job? = null
     private var heartbeatJob: Job? = null
     private var settingsJob: Job? = null
+    private val bleResetInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
     private var currentGitUrl: String = ""
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
@@ -513,6 +514,7 @@ class BleGatewayService : Service() {
                     onPipelineError = { runCatching { updateNotification() } },
                 ).also {
                     it.resetBleUniqueId = resetBleUniqueId()
+                    it.onResetBleRequested = { resetBle("HA button") }
                     it.start()
                 }
             }
@@ -593,6 +595,33 @@ class BleGatewayService : Service() {
     }
 
     private fun resetBleUniqueId() = "${gatewayId()}_restart_ble"
+
+    /**
+     * 게이트웨이를 껐다 켤 때와 같게 BLE 쪽을 통째로 다시 만든다: 런타임(스캐너·advertiser·GATT/OBD
+     * 소스 포함)을 버리고, 컨트롤러가 조용해질 시간을 준 뒤 설정을 다시 읽어 새로 세운다. WS는 유지한다.
+     * 버튼은 런타임의 명령 수집 안에서 오므로 별도 코루틴에서 처리한다.
+     */
+    private fun resetBle(reason: String) {
+        scope.launch {
+            if (!bleResetInProgress.compareAndSet(false, true)) return@launch
+            try {
+                LiveEventLogger.log(LogType.LINK,
+                    "BLE reset ($reason): recreating runtime — ${BleScanHealth.state.value.describe()}")
+                settingsJob?.cancel()
+                configJob?.cancel()
+                val old = runtime
+                runtime = null
+                old?.stop()
+                BleScanHealth.reset()
+                _advertisingDeviceIds.value = emptySet()
+                runCatching { BluetoothAdapterNameGuard.resetToInitial(this@BleGatewayService, force = true) }
+                delay(BLE_RESET_QUIET_MS)
+                if (ws != null) reloadConfig()
+            } finally {
+                bleResetInProgress.set(false)
+            }
+        }
+    }
 
 
     private fun publishGatewayStates(client: HaWsClient?) {
@@ -746,6 +775,7 @@ class BleGatewayService : Service() {
         const val EXTRA_GIT_URL = "git_url"
         const val EXTRA_GIT_TOKEN = "git_token"
         private const val EXTRA_DEVICE_ID = "device_id"
+        private const val BLE_RESET_QUIET_MS = 1_500L
         private const val ACTION_RELOAD_CONFIG = "dev.eigger.hassble.RELOAD_CONFIG"
         private const val ACTION_REMOVE_DEVICE = "dev.eigger.hassble.REMOVE_DEVICE"
         private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"
