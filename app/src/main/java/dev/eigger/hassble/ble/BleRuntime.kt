@@ -620,7 +620,8 @@ class BleRuntime(
             if (d.source != Source.gatt_notify && d.source != Source.obd) continue
             if (deviceConnectionJobs[d.id]?.isActive != true) continue
             stopDevice(d.id)
-            startDevice(d)
+            // 자동 연결이 꺼진 기기는 사용자가 수동으로 붙인 것이라 강제 연결로 다시 붙인다.
+            startDevice(d, forceConnect = d.id in autoConnectDisabledIds)
         }
     }
 
@@ -955,8 +956,14 @@ class BleRuntime(
             },
             onStopped = { reason ->
                 publishAdvertisingState(d, false)
-                if (reason == AdvertiseStopReason.Timeout && !gotResponseSince(d, requestStartMs)) {
-                    restartScan("no response to request for ${d.id} — scanner may be stalled")
+                // 기기가 범위 밖이라 안 답한 경우와 스캐너가 죽은 경우를 가른다: 요청 동안 스캔 결과가
+                // 아예 없었을 때만 스캐너 문제로 본다.
+                val lastScanResult = BleScanHealth.state.value.lastResultMs ?: 0L
+                if (reason == AdvertiseStopReason.Timeout &&
+                    !gotResponseSince(d, requestStartMs) &&
+                    lastScanResult < requestStartMs
+                ) {
+                    forceScanRestart("no scan results during request for ${d.id} — scanner may be stalled")
                 }
             },
         ) ?: false
@@ -978,8 +985,19 @@ class BleRuntime(
         val startedAt = BleScanHealth.state.value.sessionStartMs ?: return
         val ageMs = System.currentTimeMillis() - startedAt
         if (ageMs >= STALE_SCAN_FOR_REQUEST_MS) {
-            restartScan("request for ${d.id} with ${ageMs / 1000}s-old scan session")
+            forceScanRestart("request for ${d.id} with ${ageMs / 1000}s-old scan session")
         }
+    }
+
+    private val lastForcedScanRestartMs = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /** 요청 기반 재시작을 합친다: 동시에 여러 요청이 와도, 직전 재시작 직후에도 한 번만 세운다. */
+    private fun forceScanRestart(reason: String) {
+        val now = System.currentTimeMillis()
+        val last = lastForcedScanRestartMs.get()
+        if (now - last < FORCED_RESTART_MIN_GAP_MS) return
+        if (!lastForcedScanRestartMs.compareAndSet(last, now)) return
+        restartScan(reason)
     }
 
     private fun publishAdvertisingState(d: DeviceConfig, isAdvertising: Boolean) {
@@ -1200,5 +1218,6 @@ class BleRuntime(
         private const val UI_REFRESH_MS = 1_000L
         private const val COLLECTOR_RELAUNCH_DELAY_MS = 5_000L
         private const val STALE_SCAN_FOR_REQUEST_MS = 60_000L
+        private const val FORCED_RESTART_MIN_GAP_MS = 20_000L
     }
 }

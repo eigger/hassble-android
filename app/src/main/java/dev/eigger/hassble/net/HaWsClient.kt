@@ -251,13 +251,19 @@ class HaWsClient(
         val deferred = CompletableDeferred<JsonObject>()
         pendingRequests[id] = deferred
         enqueueOrSend(buildJsonObject { put("id", id); put("type", type); build() }.toString())
-        return withTimeoutOrNull(10_000) { deferred.await() }
+        return try {
+            withTimeoutOrNull(10_000) { deferred.await() }
+        } finally {
+            // restampId가 id를 옮겼을 수 있어 값으로 찾아 지운다.
+            pendingRequests.values.remove(deferred)
+        }
     }
 
     private fun enqueueOrSend(text: String) {
         val dropped = pendingMessages.withLock {
             if (_connectionState.value == ConnectionState.Connected) {
-                send(text)
+                // id는 락 밖에서 발급되므로 전송 순서와 어긋날 수 있다. 락 안에서 다시 찍어 증가를 보장한다.
+                send(restampId(text))
                 0L
             } else {
                 pendingMessages.add(text)
@@ -301,6 +307,7 @@ class HaWsClient(
     }
 
     private fun subscribe() {
+        pendingMessages.withLock {
         val msgId = idGen.getAndIncrement()
         connectMessageId = msgId
         send(buildJsonObject {
@@ -313,6 +320,7 @@ class HaWsClient(
             put("model", android.os.Build.MODEL)
             put("hw_version", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
         }.toString())
+        }
         startBridgeTimeout()
     }
 
