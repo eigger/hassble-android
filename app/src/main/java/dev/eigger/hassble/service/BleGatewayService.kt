@@ -511,7 +511,10 @@ class BleGatewayService : Service() {
                         _advertisingDeviceIds.value = if (isAdv) cur + id else cur - id
                     },
                     onPipelineError = { runCatching { updateNotification() } },
-                ).also { it.start() }
+                ).also {
+                    it.resetBleUniqueId = resetBleUniqueId()
+                    it.start()
+                }
             }
 
             settingsJob = scope.launch {
@@ -582,7 +585,15 @@ class BleGatewayService : Service() {
             name = "Service Status", device = phoneDevice,
             deviceClass = "running", entityCategory = "diagnostic",
         ))
+        client.declareEntity(EntityMsg(
+            id = 0, uniqueId = resetBleUniqueId(), platform = "button",
+            name = "Restart BLE", device = phoneDevice,
+            icon = "mdi:restart", entityCategory = "config",
+        ))
     }
+
+    private fun resetBleUniqueId() = "${gatewayId()}_restart_ble"
+
 
     private fun publishGatewayStates(client: HaWsClient?) {
         val c = client ?: return

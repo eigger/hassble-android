@@ -27,6 +27,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -282,8 +283,21 @@ class HaWsClient(
             if (queued.isNotEmpty()) {
                 LiveEventLogger.log(LogType.LINK, "WS: flushing ${queued.size} queued message(s) after (re)connect")
             }
-            for (text in queued) send(text)
+            for (text in queued) send(restampId(text))
         }
+    }
+
+    /**
+     * 큐에 쌓이는 동안 발급된 id는 재접속 후 subscribe()가 받은 id보다 작다. HA는 연결마다 id가
+     * 증가해야 해서(id_reuse) 그대로 보내면 거절된다. flush 시점에 새 id로 바꾸고, 응답을 기다리는
+     * 요청이면 pendingRequests도 새 id로 옮긴다.
+     */
+    private fun restampId(text: String): String {
+        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return text
+        val oldId = obj["id"]?.jsonPrimitive?.intOrNull ?: return text
+        val newId = idGen.getAndIncrement()
+        pendingRequests.remove(oldId)?.let { pendingRequests[newId] = it }
+        return JsonObject(obj + ("id" to JsonPrimitive(newId))).toString()
     }
 
     private fun subscribe() {

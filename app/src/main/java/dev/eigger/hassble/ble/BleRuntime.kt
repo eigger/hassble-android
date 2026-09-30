@@ -604,6 +604,26 @@ class BleRuntime(
         relaunchScan(reason)
     }
 
+    /** 게이트웨이 장치의 "BLE 재시작" 버튼 unique_id. 서비스가 선언한 뒤 채워 준다. */
+    @Volatile var resetBleUniqueId: String? = null
+
+    /**
+     * 게이트웨이를 껐다 켤 때와 같은 효과를 BLE 쪽에만 낸다: 광고 송신 중단, 스캔 세션 재시작,
+     * GATT/OBD 연결 재수립. 스캐너가 콜백 없이 죽었을 때 HA에서 수동으로 복구하는 용도.
+     */
+    fun resetBle(reason: String) {
+        if (!::config.isInitialized || stopped) return
+        LiveEventLogger.log(LogType.LINK, "BLE reset requested: $reason")
+        advertiser?.stopAll()
+        relaunchScan("BLE reset: $reason")
+        for (d in config.devices) {
+            if (d.source != Source.gatt_notify && d.source != Source.obd) continue
+            if (deviceConnectionJobs[d.id]?.isActive != true) continue
+            stopDevice(d.id)
+            startDevice(d)
+        }
+    }
+
     /** 현재 세션을 취소 완료까지 기다린 뒤 새 세션을 띄운다. 연달아 불려도 mutex로 한 번에 하나씩. */
     private fun relaunchScan(reason: String) {
         scope.launch {
@@ -826,6 +846,10 @@ class BleRuntime(
         val cmd = json.decodeFromJsonElement(CommandPayload.serializer(), event)
         commandCount.incrementAndGet()
         lastCommandMs = System.currentTimeMillis()
+        if (cmd.uniqueId == resetBleUniqueId) {
+            if (cmd.action == "press") resetBle("HA button")
+            return
+        }
         val (d, c) = controls[cmd.uniqueId] ?: run {
             // 예전엔 조용히 버렸다. HA 버튼을 눌렀는데 아무 일도 없을 때 여기서 걸렸는지 로그로 가릴 수 있게 한다.
             LiveEventLogger.log(LogType.LINK,
@@ -910,6 +934,8 @@ class BleRuntime(
         val advConfig = d.advertise ?: return
         if (ConfigValidator.hasDeviceError(validationIssues, d.id)) return
         resetPublishFilters(d)
+        val requestStartMs = System.currentTimeMillis()
+        refreshStaleScanForRequest(d)
         val seed = when (advConfig.counterMode) {
             AdvertiseCounterMode.reset -> advConfig.counterStart and 0xFF
             AdvertiseCounterMode.persist -> {
@@ -927,12 +953,32 @@ class BleRuntime(
                     onAdvCounterChanged(d.id, newCounter)
                 }
             },
-            onStopped = { _ ->
+            onStopped = { reason ->
                 publishAdvertisingState(d, false)
+                if (reason == AdvertiseStopReason.Timeout && !gotResponseSince(d, requestStartMs)) {
+                    restartScan("no response to request for ${d.id} — scanner may be stalled")
+                }
             },
         ) ?: false
         if (started) {
             publishAdvertisingState(d, true)
+        }
+    }
+
+    /** [sinceMs] 이후 이 프로필의 인스턴스 중 하나라도 광고를 받았는가. */
+    private fun gotResponseSince(d: DeviceConfig, sinceMs: Long): Boolean =
+        InstanceIds.of(d.id, declaredAdvInstances).any { (latestSeenMs(it) ?: 0L) >= sinceMs }
+
+    /**
+     * 요청 응답을 기다리기 전에, 오래된 스캔 세션이면 새로 세운다. 장시간 뒤 스캐너가 콜백 없이
+     * 결과를 못 주는 상태가 되면 idle watchdog(최대 10분 백오프)이 돌기 전까지 응답을 놓친다.
+     * 광고 송신 시간(기본 15s)이 재시작 공백(~1s)보다 훨씬 길어 응답을 놓칠 위험은 작다.
+     */
+    private fun refreshStaleScanForRequest(d: DeviceConfig) {
+        val startedAt = BleScanHealth.state.value.sessionStartMs ?: return
+        val ageMs = System.currentTimeMillis() - startedAt
+        if (ageMs >= STALE_SCAN_FOR_REQUEST_MS) {
+            restartScan("request for ${d.id} with ${ageMs / 1000}s-old scan session")
         }
     }
 
@@ -1153,5 +1199,6 @@ class BleRuntime(
         private const val PRESENCE_TICK_MS = 10_000L
         private const val UI_REFRESH_MS = 1_000L
         private const val COLLECTOR_RELAUNCH_DELAY_MS = 5_000L
+        private const val STALE_SCAN_FOR_REQUEST_MS = 60_000L
     }
 }
