@@ -17,6 +17,7 @@ import dev.eigger.hassble.R
 import dev.eigger.hassble.ble.BleRuntime
 import dev.eigger.hassble.ble.BleScanHealth
 import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
+import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
 import dev.eigger.hassble.ble.haRemoveModeForDevice
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
@@ -77,7 +78,7 @@ class BleGatewayService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + coroutineExceptionHandler)
     private var ws: HaWsClient? = null
-    private var runtime: BleRuntime? = null
+    @Volatile private var runtime: BleRuntime? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private var configJob: Job? = null
     private var wsStateJob: Job? = null
@@ -311,6 +312,16 @@ class BleGatewayService : Service() {
         wsStateJob?.cancel()
         var lastIssue: ConnectionIssue = ConnectionIssue.None
         wsStateJob = scope.launch {
+            // "BLE 재시작" 버튼은 런타임이 없을 때(기동 중, 재시작 중, 설정 로드 실패)도 눌려야 하므로
+            // 런타임이 아니라 서비스가 직접 받는다.
+            launch {
+                client.events.collect { event -> guarded("gateway command") {
+                    val kind = (event["kind"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    val uid = (event["unique_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    val action = (event["action"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    if (kind == "command" && uid == resetBleUniqueId() && action == "press") resetBle("HA button")
+                } }
+            }
             launch {
                 client.bridgeConnected.collect { guarded("bridge (re)connect handling") {
                     declareGatewayEntities(client)
@@ -512,11 +523,7 @@ class BleGatewayService : Service() {
                         _advertisingDeviceIds.value = if (isAdv) cur + id else cur - id
                     },
                     onPipelineError = { runCatching { updateNotification() } },
-                ).also {
-                    it.resetBleUniqueId = resetBleUniqueId()
-                    it.onResetBleRequested = { resetBle("HA button") }
-                    it.start()
-                }
+                ).also { it.start() }
             }
 
             settingsJob = scope.launch {
@@ -599,7 +606,7 @@ class BleGatewayService : Service() {
     /**
      * 게이트웨이를 껐다 켤 때와 같게 BLE 쪽을 통째로 다시 만든다: 런타임(스캐너·advertiser·GATT/OBD
      * 소스 포함)을 버리고, 컨트롤러가 조용해질 시간을 준 뒤 설정을 다시 읽어 새로 세운다. WS는 유지한다.
-     * 버튼은 런타임의 명령 수집 안에서 오므로 별도 코루틴에서 처리한다.
+     * 버튼은 서비스의 WS 이벤트 수집에서 오지만 오래 걸리므로 별도 코루틴에서 처리한다.
      */
     private fun resetBle(reason: String) {
         scope.launch {
@@ -609,14 +616,41 @@ class BleGatewayService : Service() {
                     "BLE reset ($reason): recreating runtime — ${BleScanHealth.state.value.describe()}")
                 settingsJob?.cancel()
                 configJob?.cancel()
+                // 수동으로 연결해 둔 기기(자동 연결 꺼짐)는 재시작 뒤에도 다시 붙인다.
+                val autoConnectDisabled = runCatching {
+                    HassSettingsRepository(applicationContext).autoConnectDisabled.first()
+                }.getOrDefault(emptySet())
+                val manualReconnect = _deviceLinkStatuses.value
+                    .filter {
+                        (it.state == DeviceLinkState.Connected || it.state == DeviceLinkState.Polling) &&
+                            it.profileId in autoConnectDisabled
+                    }
+                    .map { it.profileId }
                 val old = runtime
                 runtime = null
                 old?.stop()
+                // stop()은 기기별 Disconnected를 내지 않는다. UI와 HA의 link_status가 남지 않게 여기서 정리한다.
+                _deviceLinkStatuses.value = _deviceLinkStatuses.value.map {
+                    it.copy(state = DeviceLinkState.Disconnected)
+                }
+                ws?.let { c ->
+                    val on = lastSentLinkConnected.filterValues { v -> v }.keys.toList()
+                    if (on.isNotEmpty() && c.connectionState.value == ConnectionState.Connected) {
+                        c.sendStates(on.map { id -> "${id}_link_status" to "off" })
+                    }
+                }
+                lastSentLinkConnected.clear()
                 BleScanHealth.reset()
                 _advertisingDeviceIds.value = emptySet()
                 runCatching { BluetoothAdapterNameGuard.resetToInitial(this@BleGatewayService, force = true) }
                 delay(BLE_RESET_QUIET_MS)
                 if (ws != null) reloadConfig()
+                if (manualReconnect.isNotEmpty()) {
+                    kotlinx.coroutines.withTimeoutOrNull(BLE_RESET_RECONNECT_WAIT_MS) {
+                        while (runtime?.isConfigured != true) delay(500)
+                    }
+                    manualReconnect.forEach { runtime?.connectDevice(it) }
+                }
             } finally {
                 bleResetInProgress.set(false)
             }
@@ -776,6 +810,7 @@ class BleGatewayService : Service() {
         const val EXTRA_GIT_TOKEN = "git_token"
         private const val EXTRA_DEVICE_ID = "device_id"
         private const val BLE_RESET_QUIET_MS = 1_500L
+        private const val BLE_RESET_RECONNECT_WAIT_MS = 30_000L
         private const val ACTION_RELOAD_CONFIG = "dev.eigger.hassble.RELOAD_CONFIG"
         private const val ACTION_REMOVE_DEVICE = "dev.eigger.hassble.REMOVE_DEVICE"
         private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"

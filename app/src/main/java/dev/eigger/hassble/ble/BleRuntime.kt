@@ -604,11 +604,8 @@ class BleRuntime(
         relaunchScan(reason)
     }
 
-    /** 게이트웨이 장치의 "BLE 재시작" 버튼 unique_id. 서비스가 선언한 뒤 채워 준다. */
-    @Volatile var resetBleUniqueId: String? = null
-
-    /** "BLE 재시작" 버튼이 눌렸을 때 서비스가 런타임을 통째로 다시 만들도록 요청하는 콜백. */
-    @Volatile var onResetBleRequested: (() -> Unit)? = null
+    /** [apply]가 한 번이라도 실행돼 connectDevice 등을 받을 수 있는 상태인가. */
+    val isConfigured: Boolean get() = ::config.isInitialized
 
     /** 현재 세션을 취소 완료까지 기다린 뒤 새 세션을 띄운다. 연달아 불려도 mutex로 한 번에 하나씩. */
     private fun relaunchScan(reason: String) {
@@ -832,10 +829,6 @@ class BleRuntime(
         val cmd = json.decodeFromJsonElement(CommandPayload.serializer(), event)
         commandCount.incrementAndGet()
         lastCommandMs = System.currentTimeMillis()
-        if (cmd.uniqueId == resetBleUniqueId) {
-            if (cmd.action == "press") onResetBleRequested?.invoke()
-            return
-        }
         val (d, c) = controls[cmd.uniqueId] ?: run {
             // 예전엔 조용히 버렸다. HA 버튼을 눌렀는데 아무 일도 없을 때 여기서 걸렸는지 로그로 가릴 수 있게 한다.
             LiveEventLogger.log(LogType.LINK,
@@ -941,7 +934,9 @@ class BleRuntime(
             },
             onStopped = { reason ->
                 publishAdvertisingState(d, false)
-                if (reason == AdvertiseStopReason.Timeout && !gotResponseSince(d, requestStartMs)) {
+                if (reason == AdvertiseStopReason.Timeout && d.source == Source.advertisement &&
+                    !gotResponseSince(d, requestStartMs)
+                ) {
                     logNoResponseDiagnostics(d, readingCount.get() - readingsAtStart)
                 }
             },
