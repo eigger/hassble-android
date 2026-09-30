@@ -27,10 +27,18 @@ interface AdvertisementScanner {
     fun scan(
         devices: List<DeviceConfig>,
         scanMode: BleScanModeOption = BleScanModeOption.BALANCED,
-        unfiltered: Boolean = false
+        unfiltered: Boolean = false,
+        /**
+         * OBD/GATT 재연결 대기용 MAC. 이 스캔 세션의 하드웨어 필터에 합쳐지고, 보이는 즉시 [scanForMac]
+         * 구독자에게 전달된다. 별도 스캔 세션을 띄우지 않는다.
+         */
+        waitMacs: Set<String> = emptySet(),
     ): Flow<RawReading>
-    /** 특정 MAC 주소의 BLE 광고가 수신될 때마다 Unit을 방출하는 플로우. */
-    fun scanForMac(mac: String, scanMode: BleScanModeOption = BleScanModeOption.BALANCED): Flow<Unit>
+    /**
+     * [scan]이 [waitMacs]로 받은 MAC의 광고를 본 때마다 Unit을 방출하는 플로우. 자체 스캔을 하지 않으므로
+     * 구독 이후에 본 광고만 전달한다.
+     */
+    fun scanForMac(mac: String): Flow<Unit>
     fun stop()
 }
 

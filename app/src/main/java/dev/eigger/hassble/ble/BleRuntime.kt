@@ -78,6 +78,8 @@ class BleRuntime(
     private var scanMode: BleScanModeOption = BleScanModeOption.BALANCED
     private var autoConnectDisabledIds: Set<String> = emptySet()
     private var unfilteredScan: Boolean = false
+    // 현재 스캔 세션의 필터에 들어간 재연결 대기 MAC. 바뀌면 세션을 다시 세운다.
+    private var lastWaitMacs: Set<String> = emptySet()
     private var advCounters: Map<String, Int> = emptyMap()
 
     // Cached states for change tracking between apply() calls
@@ -267,12 +269,16 @@ class BleRuntime(
         val newAdvDevices = config.devices.filter { it.source == Source.advertisement }
         val oldAdvDevices = oldConfig.devices.filter { it.source == Source.advertisement }
 
+        val newWaitMacs = ConnectionWaitMacs.of(config, boundDevices, autoConnectDisabledIds)
         val advChanged = scanMode != oldScanMode ||
+                newWaitMacs != lastWaitMacs ||
                 unfilteredScan != oldUnfilteredScan ||
                 newAdvDevices.size != oldAdvDevices.size ||
                 newAdvDevices.zip(oldAdvDevices).any { (newD, oldD) -> newD != oldD }
 
         if (advChanged) {
+            // launchScan()이 돌기 전에 apply()가 다시 불려도 같은 변경으로 세션을 또 세우지 않게 미리 기록한다.
+            lastWaitMacs = newWaitMacs
             relaunchScan("config changed")
         }
 
@@ -517,11 +523,9 @@ class BleRuntime(
                                 } else {
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
-                                    // 재연결 대기는 latency가 중요하지 않다(차가 다시 켜져야 광고가
-                                    // 뜨는데, 그건 초 단위가 아니라 분·시간 단위로 벌어지는 일).
-                                    // 사용자가 실시간 스캔용으로 고른 scanMode(BALANCED/LOW_LATENCY)를
-                                    // 그대로 쓰면 주차 내내 그 듀티사이클로 스캔이 돌아 배터리를 갉아먹는다.
-                                    scanner.scanForMac(mac, BleScanModeOption.LOW_POWER).first()
+                                    // 재연결 대기용 별도 스캔은 없다. 이 MAC은 메인 스캔의 필터(waitMacs)에 이미
+                                    // 들어 있어, 그 스캔이 광고를 보면 여기로 신호가 온다.
+                                    scanner.scanForMac(mac).first()
                                 }
                             }, autoReconnect = autoReconnect).collect { reading ->
                                 safeOnReading(reading)
@@ -549,8 +553,8 @@ class BleRuntime(
                                 } else {
                                     onLinkStatus(DeviceLinkStatus(resolved.id, DeviceLinkState.Scanning, mac))
                                     LiveEventLogger.log(LogType.LINK, "device=${resolved.id}: waiting for advertisement from $mac")
-                                    // 위 GATT notify 경로와 같은 이유로 재연결 대기는 LOW_POWER 고정.
-                                    scanner.scanForMac(mac, BleScanModeOption.LOW_POWER).first()
+                                    // 위 GATT notify 경로와 같다: 메인 스캔이 광고를 보면 신호가 온다.
+                                    scanner.scanForMac(mac).first()
                                 }
                             }, autoReconnect = autoReconnect).collect { reading ->
                                 safeOnReading(reading)
@@ -581,8 +585,10 @@ class BleRuntime(
 
     private fun launchScan() {
         val adv = config.devices.filter { it.source == Source.advertisement }
-        if (adv.isNotEmpty()) {
-            val job = scanner.scan(adv, scanMode, unfilteredScan).onEach(::safeOnReading).launchIn(scope)
+        val waitMacs = ConnectionWaitMacs.of(config, boundDevices, autoConnectDisabledIds)
+        lastWaitMacs = waitMacs
+        if (adv.isNotEmpty() || waitMacs.isNotEmpty()) {
+            val job = scanner.scan(adv, scanMode, unfilteredScan, waitMacs).onEach(::safeOnReading).launchIn(scope)
             scanJob = job
             watchCollector(job, "BLE scan collector", relaunchOnNormalEnd = true) {
                 // 교체된 옛 세션이면 건드리지 않는다(새 세션은 이미 떠 있다).
@@ -599,7 +605,8 @@ class BleRuntime(
      */
     fun restartScan(reason: String) {
         if (!::config.isInitialized) return
-        if (config.devices.none { it.source == Source.advertisement }) return
+        if (config.devices.none { it.source == Source.advertisement } &&
+            ConnectionWaitMacs.of(config, boundDevices, autoConnectDisabledIds).isEmpty()) return
         LiveEventLogger.log(LogType.LINK, "BLE scan restart requested: $reason")
         relaunchScan(reason)
     }
