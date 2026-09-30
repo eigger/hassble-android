@@ -20,6 +20,10 @@ object ConnectionWaitMacs {
             bound[d.id]?.takeIf { it.isNotBlank() }
                 ?: (if (d.source == Source.obd) d.obd?.mac else d.gatt?.mac)?.takeIf { it.isNotBlank() }
         }
-        .map { it.uppercase().replace("-", ":") }
+        .map { it.trim().uppercase().replace("-", ":") }
+        // 형식이 틀린 MAC은 ScanFilter가 IllegalArgumentException을 던져 광고 스캔 전체가 죽는다. 버린다.
+        .filter { VALID_MAC.matches(it) }
         .toSet()
+
+    private val VALID_MAC = Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
 }

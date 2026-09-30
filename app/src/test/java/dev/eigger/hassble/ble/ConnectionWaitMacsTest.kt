@@ -39,4 +39,13 @@ class ConnectionWaitMacsTest {
         val noMac = config.copy(devices = listOf(obd.copy(obd = ObdConfig(mac = null))))
         assertEquals(emptySet<String>(), ConnectionWaitMacs.of(noMac, emptyMap(), emptySet()))
     }
+
+    @Test
+    fun `malformed macs are dropped and whitespace is trimmed`() {
+        val bad = config.copy(devices = listOf(
+            obd.copy(obd = ObdConfig(mac = "AA:BB:CC:DD:EE")),
+            gatt.copy(gatt = GattConfig(mac = " aa:bb:cc:dd:ee:02 ", serviceUuid = "FFF0", notifyCharUuid = "FFF1")),
+        ))
+        assertEquals(setOf("AA:BB:CC:DD:EE:02"), ConnectionWaitMacs.of(bad, emptyMap(), emptySet()))
+    }
 }

@@ -196,6 +196,21 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             throw ScanRestartRequest(reason)
                         }
                     }
+                    // 필터 없는 스캔은 화면이 꺼진 동안 결과를 못 받는다. 그 상태로 재연결 대기 MAC을 합칠 수
+                    // 없으니, 이 경우에만 MAC 전용 필터 스캔을 곁들여 화면 꺼진 재연결을 지킨다.
+                    if (scanFilters.isEmpty() && normalizedWaitMacs.isNotEmpty()) {
+                        LiveEventLogger.log(LogType.LINK,
+                            "BLE scan is unfiltered — running a MAC-only scan for ${normalizedWaitMacs.size} reconnect-wait device(s)")
+                        launch {
+                            scanner.scan(
+                                filters = normalizedWaitMacs.map { BleScanFilter(deviceAddress = it) },
+                                settings = BleScannerSettings(scanMode = BleScanMode.SCAN_MODE_LOW_POWER, legacy = true),
+                            ).collect { result ->
+                                val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
+                                if (addr in normalizedWaitMacs) macSightings.tryEmit(addr)
+                            }
+                        }
+                    }
                     try {
                         scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
                             val now = System.currentTimeMillis()

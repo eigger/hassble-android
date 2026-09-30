@@ -79,7 +79,7 @@ class BleRuntime(
     private var autoConnectDisabledIds: Set<String> = emptySet()
     private var unfilteredScan: Boolean = false
     // 현재 스캔 세션의 필터에 들어간 재연결 대기 MAC. 바뀌면 세션을 다시 세운다.
-    private var lastWaitMacs: Set<String> = emptySet()
+    @Volatile private var lastWaitMacs: Set<String> = emptySet()
     private var advCounters: Map<String, Int> = emptyMap()
 
     // Cached states for change tracking between apply() calls
@@ -253,6 +253,7 @@ class BleRuntime(
             this.lastScanMode = scanMode
             this.lastAutoConnectDisabledIds = autoConnectDisabledIds
             this.lastUnfilteredScan = unfilteredScan
+            this.lastWaitMacs = ConnectionWaitMacs.of(config, boundDevices, autoConnectDisabledIds)
 
             devices.clear(); filters.clear(); obdIndex.clear(); controls.clear()
             declaredAdvInstances.clear()
@@ -588,7 +589,10 @@ class BleRuntime(
         val waitMacs = ConnectionWaitMacs.of(config, boundDevices, autoConnectDisabledIds)
         lastWaitMacs = waitMacs
         if (adv.isNotEmpty() || waitMacs.isNotEmpty()) {
-            val job = scanner.scan(adv, scanMode, unfilteredScan, waitMacs).onEach(::safeOnReading).launchIn(scope)
+            // 재연결 대기 MAC만 있으면 지연이 중요하지 않다(차가 켜져야 광고가 뜨는 건 분·시간 단위). 주차 내내
+            // 사용자의 실시간 scanMode로 돌면 배터리를 갉아먹으니 LOW_POWER로 돌린다.
+            val mode = if (adv.isEmpty()) BleScanModeOption.LOW_POWER else scanMode
+            val job = scanner.scan(adv, mode, unfilteredScan, waitMacs).onEach(::safeOnReading).launchIn(scope)
             scanJob = job
             watchCollector(job, "BLE scan collector", relaunchOnNormalEnd = true) {
                 // 교체된 옛 세션이면 건드리지 않는다(새 세션은 이미 떠 있다).
