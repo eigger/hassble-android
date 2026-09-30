@@ -214,19 +214,15 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                                     settings = BleScannerSettings(scanMode = BleScanMode.SCAN_MODE_LOW_POWER, legacy = true),
                                 ).collect { result ->
                                     val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
-                                    if (addr in normalizedWaitMacs) {
-                                        val now = System.currentTimeMillis()
-                                        lastResultMs.set(now)
-                                        gotResultThisSession = true
-                                        BleScanHealth.onResult(now)
-                                        macSightings.tryEmit(addr)
-                                    }
+                                    // 보조 스캔 결과는 watchdog·건강 상태에 세지 않는다. 세면 메인 스캔이
+                                    // 조용히 멈춰도 연결된 기기의 광고 때문에 복구 재시작이 일어나지 않는다.
+                                    if (addr in normalizedWaitMacs) macSightings.tryEmit(addr)
                                 }
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
                                 // 보조 스캔 실패가 메인 광고 스캔까지 끌고 내려가면 안 된다.
-                                LiveEventLogger.log(LogType.LINK, "BLE MAC-only scan failed: ${e.localizedMessage}")
+                                LiveEventLogger.log(LogType.LINK, "BLE MAC-only scan failed: ${e.localizedMessage} — retried on the next scan session restart")
                             }
                         }
                     } else null
