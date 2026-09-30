@@ -147,7 +147,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         val advFilters = if (unfiltered) emptyList() else buildScanFilters(devices)
         // 광고 프로필 중 필터로 못 바꾸는 것이 있으면(advFilters 빔) 스캔은 필터 없이 돈다. 이때 MAC 필터만
         // 덧붙이면 그 프로필의 광고가 걸러지므로 합치지 않는다 — 필터 없는 스캔은 MAC도 전부 본다.
-        val scanFilters = if (unfiltered || (devices.isNotEmpty() && advFilters.isEmpty())) {
+        // 광고 프로필이 없으면(OBD/GATT만) "필터 없는 스캔" 옵션과 무관하게 MAC 필터 스캔으로 돈다.
+        val scanFilters = if (devices.isNotEmpty() && (unfiltered || advFilters.isEmpty())) {
             emptyList()
         } else {
             advFilters + normalizedWaitMacs.map { BleScanFilter(deviceAddress = it) }
@@ -160,6 +161,9 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 "[Warning] BLE scan has no hardware filters — Android suppresses unfiltered scan results while the screen is off")
         }
 
+        // 필터 없는 스캔이면 화면 꺼진 재연결 대기를 위해 MAC 전용 보조 스캔을 곁들인다(startScan 2회).
+        val needsMacFallback = scanFilters.isEmpty() && normalizedWaitMacs.isNotEmpty()
+
         // 세션마다 결과가 한 건도 없이 끝난 횟수. 결과가 오면 0으로 돌아간다.
         var consecutiveIdleRestarts = 0
         // 스캐너 자신이 감지한 마지막 결과 시각. 세션 경계와 무관하게 이어진다.
@@ -168,6 +172,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         while (currentCoroutineContext().isActive) {
             awaitScanPrerequisites()
             awaitScanThrottleSlot()
+            // 보조 스캔의 startScan도 OS 한도(30초 5회)에 든다.
+            if (needsMacFallback) awaitScanThrottleSlot()
 
             val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
             val sessionStartMs = System.currentTimeMillis()
@@ -198,19 +204,32 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                     }
                     // 필터 없는 스캔은 화면이 꺼진 동안 결과를 못 받는다. 그 상태로 재연결 대기 MAC을 합칠 수
                     // 없으니, 이 경우에만 MAC 전용 필터 스캔을 곁들여 화면 꺼진 재연결을 지킨다.
-                    if (scanFilters.isEmpty() && normalizedWaitMacs.isNotEmpty()) {
+                    val macFallback: Job? = if (needsMacFallback) {
                         LiveEventLogger.log(LogType.LINK,
                             "BLE scan is unfiltered — running a MAC-only scan for ${normalizedWaitMacs.size} reconnect-wait device(s)")
                         launch {
-                            scanner.scan(
-                                filters = normalizedWaitMacs.map { BleScanFilter(deviceAddress = it) },
-                                settings = BleScannerSettings(scanMode = BleScanMode.SCAN_MODE_LOW_POWER, legacy = true),
-                            ).collect { result ->
-                                val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
-                                if (addr in normalizedWaitMacs) macSightings.tryEmit(addr)
+                            try {
+                                scanner.scan(
+                                    filters = normalizedWaitMacs.map { BleScanFilter(deviceAddress = it) },
+                                    settings = BleScannerSettings(scanMode = BleScanMode.SCAN_MODE_LOW_POWER, legacy = true),
+                                ).collect { result ->
+                                    val addr = result.device.address?.uppercase()?.replace("-", ":") ?: return@collect
+                                    if (addr in normalizedWaitMacs) {
+                                        val now = System.currentTimeMillis()
+                                        lastResultMs.set(now)
+                                        gotResultThisSession = true
+                                        BleScanHealth.onResult(now)
+                                        macSightings.tryEmit(addr)
+                                    }
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // 보조 스캔 실패가 메인 광고 스캔까지 끌고 내려가면 안 된다.
+                                LiveEventLogger.log(LogType.LINK, "BLE MAC-only scan failed: ${e.localizedMessage}")
                             }
                         }
-                    }
+                    } else null
                     try {
                         scanner.scan(filters = scanFilters, settings = scanSettings).collect { result ->
                             val now = System.currentTimeMillis()
@@ -353,6 +372,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                         }
                     } finally {
                         watchdog.cancel()
+                        macFallback?.cancel()
                     }
                 }
                 // Scan ended without exception — restart (throttle guard above handles rate)

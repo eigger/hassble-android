@@ -271,7 +271,7 @@ class BleRuntime(
         val oldAdvDevices = oldConfig.devices.filter { it.source == Source.advertisement }
 
         val newWaitMacs = ConnectionWaitMacs.of(config, boundDevices, autoConnectDisabledIds)
-        val advChanged = scanMode != oldScanMode ||
+        val advChanged = (scanMode != oldScanMode && newAdvDevices.isNotEmpty()) ||
                 newWaitMacs != lastWaitMacs ||
                 unfilteredScan != oldUnfilteredScan ||
                 newAdvDevices.size != oldAdvDevices.size ||
