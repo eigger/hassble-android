@@ -27,6 +27,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -250,13 +251,19 @@ class HaWsClient(
         val deferred = CompletableDeferred<JsonObject>()
         pendingRequests[id] = deferred
         enqueueOrSend(buildJsonObject { put("id", id); put("type", type); build() }.toString())
-        return withTimeoutOrNull(10_000) { deferred.await() }
+        return try {
+            withTimeoutOrNull(10_000) { deferred.await() }
+        } finally {
+            // restampId가 id를 옮겼을 수 있어 값으로 찾아 지운다.
+            pendingRequests.values.remove(deferred)
+        }
     }
 
     private fun enqueueOrSend(text: String) {
         val dropped = pendingMessages.withLock {
             if (_connectionState.value == ConnectionState.Connected) {
-                send(text)
+                // id는 락 밖에서 발급되므로 전송 순서와 어긋날 수 있다. 락 안에서 다시 찍어 증가를 보장한다.
+                send(restampId(text))
                 0L
             } else {
                 pendingMessages.add(text)
@@ -282,11 +289,25 @@ class HaWsClient(
             if (queued.isNotEmpty()) {
                 LiveEventLogger.log(LogType.LINK, "WS: flushing ${queued.size} queued message(s) after (re)connect")
             }
-            for (text in queued) send(text)
+            for (text in queued) send(restampId(text))
         }
     }
 
+    /**
+     * 큐에 쌓이는 동안 발급된 id는 재접속 후 subscribe()가 받은 id보다 작다. HA는 연결마다 id가
+     * 증가해야 해서(id_reuse) 그대로 보내면 거절된다. flush 시점에 새 id로 바꾸고, 응답을 기다리는
+     * 요청이면 pendingRequests도 새 id로 옮긴다.
+     */
+    private fun restampId(text: String): String {
+        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return text
+        val oldId = obj["id"]?.jsonPrimitive?.intOrNull ?: return text
+        val newId = idGen.getAndIncrement()
+        pendingRequests.remove(oldId)?.let { pendingRequests[newId] = it }
+        return JsonObject(obj + ("id" to JsonPrimitive(newId))).toString()
+    }
+
     private fun subscribe() {
+        pendingMessages.withLock {
         val msgId = idGen.getAndIncrement()
         connectMessageId = msgId
         send(buildJsonObject {
@@ -299,6 +320,7 @@ class HaWsClient(
             put("model", android.os.Build.MODEL)
             put("hw_version", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
         }.toString())
+        }
         startBridgeTimeout()
     }
 

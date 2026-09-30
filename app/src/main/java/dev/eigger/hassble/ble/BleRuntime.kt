@@ -604,6 +604,9 @@ class BleRuntime(
         relaunchScan(reason)
     }
 
+    /** [apply]가 한 번이라도 실행돼 connectDevice 등을 받을 수 있는 상태인가. */
+    val isConfigured: Boolean get() = ::config.isInitialized
+
     /** 현재 세션을 취소 완료까지 기다린 뒤 새 세션을 띄운다. 연달아 불려도 mutex로 한 번에 하나씩. */
     private fun relaunchScan(reason: String) {
         scope.launch {
@@ -910,6 +913,8 @@ class BleRuntime(
         val advConfig = d.advertise ?: return
         if (ConfigValidator.hasDeviceError(validationIssues, d.id)) return
         resetPublishFilters(d)
+        val requestStartMs = System.currentTimeMillis()
+        val readingsAtStart = readingCount.get()
         val seed = when (advConfig.counterMode) {
             AdvertiseCounterMode.reset -> advConfig.counterStart and 0xFF
             AdvertiseCounterMode.persist -> {
@@ -927,13 +932,33 @@ class BleRuntime(
                     onAdvCounterChanged(d.id, newCounter)
                 }
             },
-            onStopped = { _ ->
+            onStopped = { reason ->
                 publishAdvertisingState(d, false)
+                if (reason == AdvertiseStopReason.Timeout && d.source == Source.advertisement &&
+                    !gotResponseSince(d, requestStartMs)
+                ) {
+                    logNoResponseDiagnostics(d, readingCount.get() - readingsAtStart)
+                }
             },
         ) ?: false
         if (started) {
             publishAdvertisingState(d, true)
         }
+    }
+
+    /** [sinceMs] 이후 이 프로필의 인스턴스 중 하나라도 광고를 받았는가. */
+    private fun gotResponseSince(d: DeviceConfig, sinceMs: Long): Boolean =
+        InstanceIds.of(d.id, declaredAdvInstances).any { (latestSeenMs(it) ?: 0L) >= sinceMs }
+
+    /**
+     * 요청이 응답 없이 끝났을 때 원인을 가릴 수 있는 스냅샷을 남긴다: 스캐너가 살아 있는지, 요청 동안
+     * 수신이 있었는지, 무선을 나눠 쓰는 GATT/OBD 연결이 있었는지, 필터 없는 스캔인지.
+     */
+    private fun logNoResponseDiagnostics(d: DeviceConfig, readingsDuringRequest: Long) {
+        val links = deviceConnectionJobs.filterValues { it.isActive }.keys.joinToString().ifEmpty { "none" }
+        LiveEventLogger.log(LogType.LINK,
+            "device=${d.id}: request ended with no response — readings during request=$readingsDuringRequest, " +
+                "active connections=[$links], unfilteredScan=$unfilteredScan, ${BleScanHealth.state.value.describe()}")
     }
 
     private fun publishAdvertisingState(d: DeviceConfig, isAdvertising: Boolean) {
@@ -964,6 +989,8 @@ class BleRuntime(
     fun stop() {
         // relaunchScan()이 대기 중이어도 launchScan()으로 넘어가지 못하게 먼저 막는다.
         stopped = true
+        eventJob?.cancel()
+        eventJob = null
         scanJob?.cancel()
         scanJob = null
         presenceJob?.cancel()
