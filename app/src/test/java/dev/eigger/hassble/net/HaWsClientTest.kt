@@ -113,4 +113,52 @@ class HaWsClientTest {
         assertFalse("reconnectJob should be cancelled after disconnect()", reconnectJob?.isActive == true)
         assertEquals(0, client.pendingMessageCount)
     }
+
+    @Test
+    fun `connect with invalid url recovers to Disconnected and sets NetworkError`() {
+        val client = HaWsClient(
+            baseUrl = "http://invalid url:8123:not:valid",
+            token = "dummy_token",
+            gatewayId = "gw1",
+            gatewayName = "Gateway 1",
+            scope = scope,
+        )
+
+        client.connect()
+        // State should not remain Connecting
+        assertEquals(ConnectionState.Disconnected, client.connectionState.value)
+        assertEquals(ConnectionIssue.NetworkError, client.connectionIssue.value)
+    }
+
+    @Test
+    fun `Listener ignores callbacks from stale websocket`() {
+        val client = HaWsClient(
+            baseUrl = "http://127.0.0.1:8123",
+            token = "dummy_token",
+            gatewayId = "gw1",
+            gatewayName = "Gateway 1",
+            scope = scope,
+        )
+
+        // Reflection to get Listener inner class instance
+        val listenerClass = Class.forName("dev.eigger.hassble.net.HaWsClient\$Listener")
+        val constructor = listenerClass.getDeclaredConstructor(HaWsClient::class.java).apply { isAccessible = true }
+        val listener = constructor.newInstance(client) as okhttp3.WebSocketListener
+
+        val dummyWs = object : WebSocket {
+            override fun cancel() {}
+            override fun close(code: Int, reason: String?): Boolean = true
+            override fun queueSize(): Long = 0L
+            override fun request(): okhttp3.Request = okhttp3.Request.Builder().url("http://localhost").build()
+            override fun send(text: String): Boolean = true
+            override fun send(bytes: okio.ByteString): Boolean = true
+        }
+
+        // Since dummyWs !== client.ws (which is null), events should be ignored
+        listener.onClosed(dummyWs, 1000, "Normal closure")
+        assertEquals(ConnectionIssue.None, client.connectionIssue.value)
+
+        listener.onFailure(dummyWs, java.io.IOException("Socket failed"), null)
+        assertEquals(ConnectionIssue.None, client.connectionIssue.value)
+    }
 }

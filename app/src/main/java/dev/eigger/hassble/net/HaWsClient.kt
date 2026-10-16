@@ -111,11 +111,21 @@ class HaWsClient(
         _connectionIssue.value = ConnectionIssue.None
         _connectionState.value = ConnectionState.Connecting
 
-        val protocol = if (baseUrl.startsWith("https")) "wss" else "ws"
-        val cleanUrl = baseUrl.substringAfter("://").trimEnd('/')
-        val url = "$protocol://$cleanUrl/api/websocket"
+        ws?.cancel()
+        ws = null
 
-        ws = http.newWebSocket(Request.Builder().url(url).build(), Listener())
+        try {
+            val protocol = if (baseUrl.startsWith("https")) "wss" else "ws"
+            val cleanUrl = baseUrl.substringAfter("://").trimEnd('/')
+            val url = "$protocol://$cleanUrl/api/websocket"
+
+            ws = http.newWebSocket(Request.Builder().url(url).build(), Listener())
+        } catch (e: Exception) {
+            LiveEventLogger.log(LogType.LINK, "WS connect failed to parse URL or create socket: ${e.message}")
+            _connectionIssue.value = ConnectionIssue.NetworkError
+            _connectionState.value = ConnectionState.Disconnected
+            triggerReconnection()
+        }
     }
 
     fun close() {
@@ -433,7 +443,10 @@ class HaWsClient(
     }
 
     private inner class Listener : WebSocketListener() {
+        private fun isCurrent(webSocket: WebSocket): Boolean = (webSocket === this@HaWsClient.ws)
+
         override fun onMessage(webSocket: WebSocket, text: String) {
+            if (!isCurrent(webSocket)) return
             LiveEventLogger.log(LogType.RX, "WS: $text")
             val msg = json.parseToJsonElement(text).jsonObject
             when (msg["type"]?.jsonPrimitive?.content) {
@@ -483,6 +496,7 @@ class HaWsClient(
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            if (!isCurrent(webSocket)) return
             LiveEventLogger.log(LogType.LINK, "WS closed: code=$code, reason='$reason' — ${nextStepNote()}")
             if (code != 4000 && _connectionIssue.value == ConnectionIssue.None && !authFailed) {
                 _connectionIssue.value = ConnectionIssue.NetworkError
@@ -491,6 +505,7 @@ class HaWsClient(
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            if (!isCurrent(webSocket)) return
             LiveEventLogger.log(LogType.LINK, "WS failure: ${t::class.java.simpleName}: ${t.message} — ${nextStepNote()}")
             if (_connectionIssue.value == ConnectionIssue.None) {
                 _connectionIssue.value = ConnectionIssue.NetworkError
