@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.eigger.hassble.BuildConfig
 import dev.eigger.hassble.R
+import dev.eigger.hassble.config.ConfigLoader
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.withTimeoutOrNull
@@ -63,7 +64,7 @@ class HaWsClient(
     private val scope: CoroutineScope,
     private val refreshToken: String? = null,
     private val onTokenRefreshed: (suspend (String) -> Unit)? = null,
-    private val http: OkHttpClient = OkHttpClient.Builder()
+    private val http: OkHttpClient = ConfigLoader.sharedHttpClient.newBuilder()
         // 5초는 라디오를 절전 상태로 못 내려가게 만들 만큼 잦다(하루 종일, OBD 동작 여부와
         // 무관하게). 30초는 대부분의 통신사 NAT idle timeout보다 짧으면서 웨이크업 빈도를
         // 1/6로 줄인다.
