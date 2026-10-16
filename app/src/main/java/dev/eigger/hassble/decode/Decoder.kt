@@ -41,29 +41,58 @@ object Decoder {
     private val IDENTIFIER = Regex("[a-zA-Z_]+")
 
     private val ALL_BYTE_VARS = BYTE_NAMES.map { it.toString() }.toSet()
-    private val expressionCache = ConcurrentHashMap<String, Expression>()
+    private val BYTE_NAME_STRINGS = Array(BYTE_NAMES.length) { BYTE_NAMES[it].toString() }
+
+    private data class CachedFormula(
+        val expression: Expression,
+        val maxByteIndexNeeded: Int, // 수식이 요구하는 최대 바이트 인덱스 (a=0, b=1, ...) 없으면 -1
+        val usedByteIndices: List<Int>,
+    )
+
+    private val expressionCache = ConcurrentHashMap<String, CachedFormula>()
 
     fun evalFormula(formula: String, data: ByteArray): Double {
-        val vars = buildMap {
-            for (i in data.indices.take(BYTE_NAMES.length)) {
-                put(BYTE_NAMES[i].toString(), (data[i].toInt() and 0xFF).toDouble())
+        val cached = expressionCache.computeIfAbsent(formula) { f ->
+            val expr = ExpressionBuilder(f).variables(ALL_BYTE_VARS).build()
+            var maxIdx = -1
+            val usedIndices = mutableListOf<Int>()
+            for (m in IDENTIFIER.findAll(f)) {
+                val name = m.value
+                if (name.length == 1 && name[0] in BYTE_NAMES) {
+                    val idx = BYTE_NAMES.indexOf(name[0])
+                    if (idx !in usedIndices) {
+                        usedIndices.add(idx)
+                    }
+                    if (idx > maxIdx) {
+                        maxIdx = idx
+                    }
+                }
             }
+            CachedFormula(
+                expression = expr,
+                maxByteIndexNeeded = maxIdx,
+                usedByteIndices = usedIndices,
+            )
         }
+
         // exp4j는 e/pi/π/φ를 내장 상수로 등록한다. 응답이 짧아 'e'가 바인딩되지 않으면
         // 오일러 상수 2.718로 조용히 평가되므로, 미바인딩 바이트 변수는 명시적으로 거른다.
-        for (m in IDENTIFIER.findAll(formula)) {
-            val name = m.value
-            if (name.length == 1 && name[0] in BYTE_NAMES && name !in vars) {
-                throw IllegalArgumentException(
-                    "formula '$formula' needs byte '$name' but response has only ${data.size} byte(s)",
-                )
+        if (cached.maxByteIndexNeeded >= data.size) {
+            val neededIndex = cached.usedByteIndices.firstOrNull { it >= data.size } ?: cached.maxByteIndexNeeded
+            val neededChar = BYTE_NAMES[neededIndex]
+            throw IllegalArgumentException(
+                "formula '$formula' needs byte '$neededChar' but response has only ${data.size} byte(s)",
+            )
+        }
+
+        val vars = buildMap {
+            for (i in data.indices.take(BYTE_NAMES.length)) {
+                put(BYTE_NAME_STRINGS[i], (data[i].toInt() and 0xFF).toDouble())
             }
         }
-        val expr = expressionCache.computeIfAbsent(formula) { f ->
-            ExpressionBuilder(f).variables(ALL_BYTE_VARS).build()
-        }
-        return synchronized(expr) {
-            expr.setVariables(vars).evaluate()
+
+        return synchronized(cached.expression) {
+            cached.expression.setVariables(vars).evaluate()
         }
     }
 
