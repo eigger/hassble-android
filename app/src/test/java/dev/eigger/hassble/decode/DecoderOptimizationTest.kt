@@ -72,4 +72,23 @@ class DecoderOptimizationTest {
         val result = Decoder.decodeStructured(bytes, config)
         assertEquals("HELLO WORLD", result)
     }
+
+    @Test
+    fun `evalFormula correctly rejects missing byte with exact error message`() {
+        val formula = "g * 65536 + h * 256 + i"
+        val data = byteArrayOf(0x01, 0x02) // only a, b provided; needs g, h, i
+        try {
+            Decoder.evalFormula(formula, data)
+            org.junit.Assert.fail("Should throw IllegalArgumentException")
+        } catch (e: IllegalArgumentException) {
+            assertEquals("formula '$formula' needs byte 'g' but response has only 2 byte(s)", e.message)
+        }
+    }
+
+    @Test
+    fun `formula with no byte variables evaluates successfully`() {
+        val formula = "42 + 10"
+        val result = Decoder.evalFormula(formula, byteArrayOf())
+        assertEquals(52.0, result, 0.001)
+    }
 }
