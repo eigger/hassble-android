@@ -115,7 +115,7 @@ class HaWsClientTest {
     }
 
     @Test
-    fun `connect with invalid url recovers to Disconnected and sets NetworkError`() {
+    fun `connect with invalid url recovers to Disconnected, sets NetworkError, and schedules reconnect`() {
         val client = HaWsClient(
             baseUrl = "http://invalid url:8123:not:valid",
             token = "dummy_token",
@@ -128,10 +128,46 @@ class HaWsClientTest {
         // State should not remain Connecting
         assertEquals(ConnectionState.Disconnected, client.connectionState.value)
         assertEquals(ConnectionIssue.NetworkError, client.connectionIssue.value)
+
+        val reconnectJobField = getPrivateField(client, "reconnectJob")
+        val firstReconnectJob = reconnectJobField.get(client) as? Job
+        assertTrue("First reconnectJob should be scheduled", firstReconnectJob?.isActive == true)
+        client.close()
     }
 
     @Test
-    fun `Listener ignores callbacks from stale websocket`() {
+    fun `reconnect loop continues when connect fails inside reconnectJob coroutine`() {
+        val client = HaWsClient(
+            baseUrl = "http://invalid url:8123:not:valid",
+            token = "dummy_token",
+            gatewayId = "gw1",
+            gatewayName = "Gateway 1",
+            scope = scope,
+        )
+
+        val delayField = getPrivateField(client, "reconnectDelayMs")
+        val reconnectJobField = getPrivateField(client, "reconnectJob")
+
+        // reconnectImmediately() launches a reconnectJob coroutine that calls connect() from INSIDE the coroutine.
+        // Because baseUrl is invalid, connect() throws and calls triggerReconnection() while inside that coroutine.
+        // Previously, reconnectJob?.isActive == true blocked triggerReconnection() from scheduling the next retry.
+        client.reconnectImmediately()
+
+        val scheduledNextJob = reconnectJobField.get(client) as? Job
+        assertTrue(
+            "Next reconnectJob must be scheduled and active after connect() fails inside reconnectJob",
+            scheduledNextJob?.isActive == true,
+        )
+        assertEquals(
+            "reconnectDelayMs should advance from 500ms to 1000ms for the next retry",
+            1000L,
+            delayField.getLong(client),
+        )
+        client.close()
+    }
+
+    @Test
+    fun `Listener processes failure even if callback arrives before ws field assignment`() {
         val client = HaWsClient(
             baseUrl = "http://127.0.0.1:8123",
             token = "dummy_token",
@@ -140,10 +176,23 @@ class HaWsClientTest {
             scope = scope,
         )
 
-        // Reflection to get Listener inner class instance
+        val stateField = getPrivateField(client, "_connectionState")
+        @Suppress("UNCHECKED_CAST")
+        val stateFlow = stateField.get(client) as kotlinx.coroutines.flow.MutableStateFlow<ConnectionState>
+        stateFlow.value = ConnectionState.Connecting
+
+        val connectGenField = getPrivateField(client, "connectGen")
+        val connectGen = connectGenField.get(client) as java.util.concurrent.atomic.AtomicLong
+        val gen = connectGen.incrementAndGet()
+
+        // ws field is still null (simulating callback arriving before ws = http.newWebSocket(...) returns)
+        val wsField = getPrivateField(client, "ws")
+        assertEquals(null, wsField.get(client))
+
         val listenerClass = Class.forName("dev.eigger.hassble.net.HaWsClient\$Listener")
-        val constructor = listenerClass.getDeclaredConstructor(HaWsClient::class.java).apply { isAccessible = true }
-        val listener = constructor.newInstance(client) as okhttp3.WebSocketListener
+        val constructor = listenerClass.getDeclaredConstructor(HaWsClient::class.java, Long::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+        val currentListener = constructor.newInstance(client, gen) as okhttp3.WebSocketListener
 
         val dummyWs = object : WebSocket {
             override fun cancel() {}
@@ -154,12 +203,71 @@ class HaWsClientTest {
             override fun send(bytes: okio.ByteString): Boolean = true
         }
 
-        // Since dummyWs !== client.ws (which is null), events should be ignored
-        listener.onClosed(dummyWs, 1000, "Normal closure")
+        // Callback arrives before ws is assigned: must NOT be ignored!
+        currentListener.onFailure(dummyWs, java.io.IOException("Connection refused"), null)
+
+        assertEquals(
+            "State must transition to Disconnected instead of sticking in Connecting",
+            ConnectionState.Disconnected,
+            client.connectionState.value,
+        )
+        assertEquals(ConnectionIssue.NetworkError, client.connectionIssue.value)
+        client.close()
+    }
+
+    @Test
+    fun `Listener ignores callbacks from previous generation after new connect generation starts`() {
+        val client = HaWsClient(
+            baseUrl = "http://127.0.0.1:8123",
+            token = "dummy_token",
+            gatewayId = "gw1",
+            gatewayName = "Gateway 1",
+            scope = scope,
+        )
+
+        val connectGenField = getPrivateField(client, "connectGen")
+        val connectGen = connectGenField.get(client) as java.util.concurrent.atomic.AtomicLong
+
+        val listenerClass = Class.forName("dev.eigger.hassble.net.HaWsClient\$Listener")
+        val constructor = listenerClass.getDeclaredConstructor(HaWsClient::class.java, Long::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+
+        // Generation 1 listener
+        val gen1 = connectGen.incrementAndGet()
+        val staleListener = constructor.newInstance(client, gen1) as okhttp3.WebSocketListener
+
+        // Advance to Generation 2 (simulating a new connect() call)
+        val gen2 = connectGen.incrementAndGet()
+        val activeListener = constructor.newInstance(client, gen2) as okhttp3.WebSocketListener
+
+        val stateField = getPrivateField(client, "_connectionState")
+        @Suppress("UNCHECKED_CAST")
+        val stateFlow = stateField.get(client) as kotlinx.coroutines.flow.MutableStateFlow<ConnectionState>
+        stateFlow.value = ConnectionState.Connecting
+
+        val dummyWs = object : WebSocket {
+            override fun cancel() {}
+            override fun close(code: Int, reason: String?): Boolean = true
+            override fun queueSize(): Long = 0L
+            override fun request(): okhttp3.Request = okhttp3.Request.Builder().url("http://localhost").build()
+            override fun send(text: String): Boolean = true
+            override fun send(bytes: okio.ByteString): Boolean = true
+        }
+
+        // Stale listener (gen1) callbacks arrive late — must be completely ignored
+        staleListener.onClosed(dummyWs, 1000, "Late close from old socket")
+        assertEquals("Stale onClosed must not change Connecting state", ConnectionState.Connecting, client.connectionState.value)
         assertEquals(ConnectionIssue.None, client.connectionIssue.value)
 
-        listener.onFailure(dummyWs, java.io.IOException("Socket failed"), null)
+        staleListener.onFailure(dummyWs, java.io.IOException("Late failure from old socket"), null)
+        assertEquals("Stale onFailure must not change Connecting state", ConnectionState.Connecting, client.connectionState.value)
         assertEquals(ConnectionIssue.None, client.connectionIssue.value)
+
+        // Active listener (gen2) callback must be processed
+        activeListener.onFailure(dummyWs, java.io.IOException("Active socket failure"), null)
+        assertEquals(ConnectionState.Disconnected, client.connectionState.value)
+        assertEquals(ConnectionIssue.NetworkError, client.connectionIssue.value)
+        client.close()
     }
 
     @Test

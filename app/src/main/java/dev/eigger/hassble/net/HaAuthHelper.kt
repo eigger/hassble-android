@@ -1,5 +1,6 @@
 package dev.eigger.hassble.net
 
+import dev.eigger.hassble.config.ConfigLoader
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -10,7 +11,7 @@ import java.io.IOException
 import java.net.URLEncoder
 
 object HaAuthHelper {
-    private val client = OkHttpClient()
+    private val client: OkHttpClient = ConfigLoader.sharedHttpClient
     private val json = Json { ignoreUnknownKeys = true }
 
     // GitHub Pages serves <link rel="redirect_uri" href="hassble://oauth-callback" />
