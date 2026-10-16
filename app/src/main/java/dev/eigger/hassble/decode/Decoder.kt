@@ -3,8 +3,10 @@ package dev.eigger.hassble.decode
 import dev.eigger.hassble.config.DataType
 import dev.eigger.hassble.config.DecodeConfig
 import dev.eigger.hassble.config.Endian
+import net.objecthunter.exp4j.Expression
 import net.objecthunter.exp4j.ExpressionBuilder
 import java.util.Calendar
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 바이트 → 값 디코더 (앱 측). 광고/notify/OBD 공유.
@@ -19,10 +21,7 @@ object Decoder {
         if (c.type == DataType.string) {
             val end = if (c.length <= 0) bytes.size else minOf(c.offset + c.length, bytes.size)
             if (c.offset >= end) return null
-            return bytes.copyOfRange(c.offset, end)
-                .map { (it.toInt() and 0xFF).toChar() }
-                .joinToString("")
-                .trimEnd(' ', '\u0000')
+            return String(bytes, c.offset, end - c.offset, Charsets.US_ASCII).trimEnd(' ', '\u0000')
         }
         if (c.offset + c.length > bytes.size) return null
         val slice = bytes.copyOfRange(c.offset, c.offset + c.length)
@@ -41,6 +40,9 @@ object Decoder {
 
     private val IDENTIFIER = Regex("[a-zA-Z_]+")
 
+    private val ALL_BYTE_VARS = BYTE_NAMES.map { it.toString() }.toSet()
+    private val expressionCache = ConcurrentHashMap<String, Expression>()
+
     fun evalFormula(formula: String, data: ByteArray): Double {
         val vars = buildMap {
             for (i in data.indices.take(BYTE_NAMES.length)) {
@@ -57,7 +59,12 @@ object Decoder {
                 )
             }
         }
-        return ExpressionBuilder(formula).variables(vars.keys).build().setVariables(vars).evaluate()
+        val expr = expressionCache.computeIfAbsent(formula) { f ->
+            ExpressionBuilder(f).variables(ALL_BYTE_VARS).build()
+        }
+        return synchronized(expr) {
+            expr.setVariables(vars).evaluate()
+        }
     }
 
     /** ELM327 응답 hex → (mode, pid, dataBytes). ISO-TP 정규화 후 파싱. */
