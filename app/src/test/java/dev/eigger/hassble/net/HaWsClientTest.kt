@@ -161,4 +161,30 @@ class HaWsClientTest {
         listener.onFailure(dummyWs, java.io.IOException("Socket failed"), null)
         assertEquals(ConnectionIssue.None, client.connectionIssue.value)
     }
+
+    @Test
+    fun `HaWsClient default http client shares connectionPool and dispatcher with ConfigLoader`() {
+        val client = HaWsClient(
+            baseUrl = "http://127.0.0.1:8123",
+            token = "dummy_token",
+            gatewayId = "gw1",
+            gatewayName = "Gateway 1",
+            scope = scope,
+        )
+
+        val httpField = getPrivateField(client, "http")
+        val clientHttp = httpField.get(client) as OkHttpClient
+
+        // Shares thread pool and connection pool
+        assertTrue(
+            "ConnectionPool should be shared with ConfigLoader.sharedHttpClient",
+            clientHttp.connectionPool === dev.eigger.hassble.config.ConfigLoader.sharedHttpClient.connectionPool,
+        )
+        assertTrue(
+            "Dispatcher should be shared with ConfigLoader.sharedHttpClient",
+            clientHttp.dispatcher === dev.eigger.hassble.config.ConfigLoader.sharedHttpClient.dispatcher,
+        )
+        assertEquals(30_000, clientHttp.pingIntervalMillis)
+    }
 }
+
