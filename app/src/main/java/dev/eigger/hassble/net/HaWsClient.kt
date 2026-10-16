@@ -113,6 +113,7 @@ class HaWsClient(
         isClosedManually = false
         authFailed = false
         connectMessageId = null
+        resubscribePending.set(false)
         _connectionIssue.value = ConnectionIssue.None
         _connectionState.value = ConnectionState.Connecting
 
@@ -314,8 +315,26 @@ class HaWsClient(
     /** heartbeat 로그용. */
     val pendingMessageCount: Int get() = pendingMessages.size
 
+    private val sentCount = java.util.concurrent.atomic.AtomicLong(0)
+    private val failedSendCount = java.util.concurrent.atomic.AtomicLong(0)
+    private val reconnectCount = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** heartbeat 로그용: 전송 성공/실패 누적과 재연결 횟수. 실패가 늘면 "연결됨"인데 HA에 안 가는 상태다. */
+    fun sendStats(): String =
+        "sent=${sentCount.get()}, sendFailed=${failedSendCount.get()}, reconnects=${reconnectCount.get()}"
+
     private fun send(text: String) {
-        ws?.send(text)
+        val ok = ws?.send(text) == true
+        if (ok) {
+            sentCount.incrementAndGet()
+        } else {
+            // 소켓이 null이거나 닫히는 중이면 send()가 조용히 false를 준다. 예전엔 이 메시지가 그냥 사라졌다.
+            val failed = failedSendCount.incrementAndGet()
+            if (failed % DROP_LOG_EVERY == 1L) {
+                LiveEventLogger.log(LogType.LINK,
+                    "WS: send failed (socket ${if (ws == null) "null" else "closing"}, state=${_connectionState.value}) — total failed: $failed")
+            }
+        }
         LiveEventLogger.log(LogType.TX, "WS: $text")
     }
 
@@ -408,6 +427,11 @@ class HaWsClient(
         }
         _connectionIssue.value = ConnectionIssue.None
         reconnectDelayMs = 2000L
+        // 60초 주기 재구독은 로그를 남기지 않는다. 새 연결(재연결 포함)만 남겨 끊김 뒤 복구 여부를 로그로 본다.
+        if (!isResubscribe) {
+            LiveEventLogger.log(LogType.LINK,
+                "WS: connected and ws_bridge subscribed (connection #${reconnectCount.incrementAndGet()}, ${sendStats()})")
+        }
         _bridgeConnected.tryEmit(!isResubscribe)
         if (!isResubscribe) {
             resubscribeJob?.cancel()
@@ -427,6 +451,9 @@ class HaWsClient(
         resubscribeJob?.cancel()
         connectMessageId = null
         missedResubscribes.set(0)
+        // 끊긴 연결에서 응답을 못 받은 재구독이 남아 있으면 다음 연결의 첫 결과를 재구독으로 오인해
+        // 재구독 루프가 영영 다시 시작되지 않는다.
+        resubscribePending.set(false)
         _connectionState.value = ConnectionState.Disconnected
         val delayMs = reconnectDelayMs
         reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
@@ -528,6 +555,19 @@ class HaWsClient(
                     val event = msg["event"]?.jsonObject ?: return
                     _events.tryEmit(event)
                 }
+            }
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            // 우리가 먼저 닫은 연결(수동 close, 토큰 갱신 4000, 인증 실패)의 응답 프레임이면 할 일이 없다.
+            if (!isCurrent() || isClosedManually || authFailed) return
+            // 상대(HA)가 닫기 프레임을 보냈다. 이쪽에서 맞닫지 않으면 OkHttp는 읽기만 멈춘 채 send()를 계속 받아들여
+            // 메시지가 사라지고, 30초 뒤 ping 실패(Broken pipe)로야 끊김을 알게 된다. close()가 false면 우리가 이미
+            // 닫는 중이었다는 뜻이라 로그를 남기지 않는다(토큰 갱신 close(4000)에 HA가 1000으로 답하는 경우 등).
+            val validCode = code.takeIf { it in 1000..4999 && it !in setOf(1004, 1005, 1006, 1015) && !(it in 1016..2999) } ?: 1000
+            val closed = runCatching { webSocket.close(validCode, reason.take(100)) }.getOrDefault(false)
+            if (closed) {
+                LiveEventLogger.log(LogType.LINK, "WS closing requested by peer: code=$code, reason='$reason' — closed our side")
             }
         }
 

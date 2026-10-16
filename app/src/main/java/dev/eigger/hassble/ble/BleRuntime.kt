@@ -96,6 +96,8 @@ class BleRuntime(
     private val obdIndex = java.util.concurrent.ConcurrentHashMap<String, Map<Pair<String, String>, List<SensorConfig>>>()
     private val controls = java.util.concurrent.ConcurrentHashMap<String, Pair<DeviceConfig, ControlConfig>>()  // uniqueId →
     private val declaredAdvInstances = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    /** 새 연결 직후의 재선언만 로그로 남긴다(60초 재구독마다 남기면 로그가 넘친다). */
+    @Volatile private var verboseDeclareLogs = false
     private val discoveredAdvInstances = java.util.concurrent.ConcurrentHashMap<String, DiscoveredAdvInstance>()
     // instanceId → presence 상태. lastSeen을 여기 같이 들고 있어 discoveredAdvInstances(UI용)가
     // 비워져도 off 판정이 가능하다. HA 전송은 online 전이 때만.
@@ -191,8 +193,9 @@ class BleRuntime(
             "commandCollector=${if (eventJob?.isActive == true) "active" else "inactive"}"
     }
 
-    fun redeclareEntities() {
+    fun redeclareEntities(freshConnection: Boolean = false) {
         if (!::config.isInitialized) return
+        verboseDeclareLogs = freshConnection
         declaredAdvInstances.clear()
         for (d in config.devices) {
             declareAndPrepare(d)
@@ -445,6 +448,7 @@ class BleRuntime(
             ?: "${d.name} ($mac)"
         declareEntitiesForInstance(d, instanceId, label)
         ws.sendAvailability(instanceId, true)
+        if (verboseDeclareLogs) LiveEventLogger.log(LogType.LINK, "device=$instanceId: declared in HA and marked online")
     }
 
     private fun stopDevice(deviceId: String) {

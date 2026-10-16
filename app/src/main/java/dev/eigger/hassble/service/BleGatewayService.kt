@@ -355,7 +355,8 @@ class BleGatewayService : Service() {
         var lastIssue: ConnectionIssue = ConnectionIssue.None
         wsStateJob = scope.launch {
             launch {
-                client.bridgeConnected.collect { guarded("bridge (re)connect handling") {
+                client.bridgeConnected.collect { fresh -> guarded("bridge (re)connect handling") {
+                    if (fresh) LiveEventLogger.log(LogType.LINK, "Bridge connected: re-declaring gateway and device entities")
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
                     // 1.7.3~1.8.1-beta2가 등록해 둔 "Restart BLE" 버튼은 제거됐다. HA에 남아 "사용 불가"로 보이거나
@@ -385,7 +386,9 @@ class BleGatewayService : Service() {
                                 "Refreshed HA entities for: ${done.joinToString()}")
                         }
                     }
-                    runtime?.redeclareEntities()
+                    runtime?.redeclareEntities(freshConnection = fresh)
+                    if (fresh) LiveEventLogger.log(LogType.LINK,
+                        "Bridge entity re-declaration requested (runtime=${if (runtime != null) "ready" else "none"})")
                     // 성공적으로 선언 완료 → fingerprint 저장
                     currentConfig?.let { cfg ->
                         runCatching {
@@ -419,7 +422,7 @@ class BleGatewayService : Service() {
                 publishGatewayStates(ws)
                 LiveEventLogger.log(LogType.LINK,
                     "Heartbeat: fgs=running, ws=${ws?.connectionState?.value} (queued=${ws?.pendingMessageCount ?: 0}), " +
-                        "scan[${BleScanHealth.state.value.describe()}], power[${dev.eigger.hassble.ble.PowerDiagnostics.describe(this@BleGatewayService)}], pipeline[${runtime?.diagnostics() ?: "no runtime"}]")
+                        "ha[${ws?.sendStats() ?: "no ws"}], scan[${BleScanHealth.state.value.describe()}], power[${dev.eigger.hassble.ble.PowerDiagnostics.describe(this@BleGatewayService)}], pipeline[${runtime?.diagnostics() ?: "no runtime"}]")
             }
         }
     }
