@@ -491,10 +491,16 @@ private fun HomeScreen() {
         }
     }
 
+    var bgLocationMissing by remember { mutableStateOf(false) }
     fun refreshPermissions() {
         missingPermCount = permissionsToRequest.count {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }
+        // "앱 사용 중에만 허용"이면 앱이 안 보일 때 새로 시작한 BLE 스캔은 결과를 받지 못한다. 위치(전경) 권한을 받은
+        // 뒤에만 안내한다 — Android 11+는 "항상 허용"을 인앱 대화상자로 요청할 수 없어 설정으로 보낸다.
+        bgLocationMissing = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+            !dev.eigger.hassble.ble.PowerDiagnostics.hasBackgroundLocation(context)
     }
 
     val launcher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestMultiplePermissions()) {
@@ -555,6 +561,8 @@ private fun HomeScreen() {
         }
         if (missingPermCount > 0) {
             PermissionBanner(missingCount = missingPermCount)
+        } else if (bgLocationMissing) {
+            BackgroundLocationBanner()
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),

@@ -136,6 +136,31 @@ fun PermissionBanner(missingCount: Int) {
 }
 
 @Composable
+fun BackgroundLocationBanner() {
+    val context = LocalContext.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.bg_location_title), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(stringResource(R.string.bg_location_desc), color = Color.Gray, fontSize = 12.sp)
+            HassPrimaryButton(
+                text = stringResource(R.string.permissions_open_settings),
+                onClick = {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        },
+                    )
+                },
+            )
+        }
+    }
+}
+
+@Composable
 fun sensorDisplayLabel(sensor: SensorConfig): String {
     val keyLabel = sensor.key.replace('_', ' ').replaceFirstChar { it.uppercase() }
     return if (!sensor.unit.isNullOrBlank()) "$keyLabel (${sensor.unit})" else keyLabel

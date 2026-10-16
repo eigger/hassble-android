@@ -143,6 +143,8 @@
     <string name="permissions_missing_title">Permissions required</string>
     <string name="permissions_missing_desc">Bluetooth, location, and notification permissions are needed for BLE scanning, beacon tracking, and background service.</string>
     <string name="permissions_open_settings">Open app settings</string>
+    <string name="bg_location_title">Allow location all the time</string>
+    <string name="bg_location_desc">BLE scans started while the app is not on screen (after a reboot or update, or while the phone is locked) only receive data when Location is set to \"Allow all the time\". Open app settings, then Permissions > Location > Allow all the time.</string>
     <!-- Device link -->
     <string name="link_state_connecting">Connecting…</string>
     <string name="link_state_connected">Connected</string>

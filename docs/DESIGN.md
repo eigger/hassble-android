@@ -144,7 +144,7 @@ connect → notify char 구독 → raw 디코딩. write char 있으면 command �
 | 권한 ≤30 | ACCESS_FINE_LOCATION |
 | 스캔 스로틀 | 30초 5회 제한 → 지속 스캔 유지 |
 | 스캔 세션 1개 | OBD/GATT 재연결 대기는 별도 스캔을 띄우지 않는다. 자동 재연결 기기의 MAC(`ConnectionWaitMacs`)을 메인 스캔의 하드웨어 필터에 합치고, 스캐너가 그 MAC을 보면 `scanForMac()` 구독자(재연결 대기)에 신호를 준다. 필터는 스캔 중 바꿀 수 없어 연결 중에도 MAC을 유지하고, 설정·바인딩 변경 때만 세션을 교체한다. 메인 스캔이 필터 없이 도는 경우(화면 꺼지면 결과 없음)에만 MAC 전용 보조 스캔을 곁들인다. 광고 기기가 없으면 LOW_POWER로 돈다 |
-| 스캔 조용한 죽음 | Nordic flow는 `onScanFailed`가 올 때만 끝난다. AOSP 30분 opportunistic 강등·BT OFF·스택 재시작은 콜백이 없으므로 `ScanWatchdogPolicy`가 5분(연속 무결과 시 10분까지 백오프) 무결과일 때 `stopScan → 1s → startScan`. 세션 나이로는 재시작하지 않는다(35분 연속 세션 정상 수신 확인). 화면이 꺼졌거나 잠금화면이 떠 있는 동안은 재시작하지 않는다 — 그 상태에서 새로 시작한 세션은 시작 직후 몇 건만 받고 죽는 것이 삼성 단말에서 확인됐고, 그런 세션은 잠금이 풀릴 때 한 번 교체한다 |
+| 스캔 조용한 죽음 | Nordic flow는 `onScanFailed`가 올 때만 끝난다. AOSP 30분 opportunistic 강등·BT OFF·스택 재시작은 콜백이 없으므로 `ScanWatchdogPolicy`가 5분(연속 무결과 시 10분까지 백오프) 무결과일 때 `stopScan → 1s → startScan`. 세션 나이로는 재시작하지 않는다(35분 연속 세션 정상 수신 확인). 이 앱은 `neverForLocation`을 쓰지 않아 스캔에 위치 appop이 필요한데, 위치가 "앱 사용 중에만 허용"이면 앱이 화면에 보이지 않을 때(화면 꺼짐·잠금화면·홈 화면·부팅/업데이트 후 자동 시작) 새로 시작한 세션은 시작 직후 몇 건만 받고 죽는다(adb 실측; 화면에 보일 때 시작한 세션은 이후 숨겨져도 정상). 그래서 백그라운드 위치("항상 허용")가 없으면 앱이 안 보이는 동안은 재시작하지 않고, 안 보이는 채 시작한 세션은 앱이 보이는 순간 한 번 교체하며, 설정 화면이 "항상 허용"을 안내한다 |
 | BT OFF→ON / 권한 | 서비스의 `ACTION_STATE_CHANGED` 리시버가 `restartScan()`, 스캐너는 권한·BT ON이 갖춰질 때까지 대기 후 재개 |
 | sticky 재생성 | `onStartCommand(null)`이면 DataStore 저장값으로 게이트웨이 복원 (BootReceiver와 동일 경로) |
 | 광고 끊김 표시 | `presence_timeout`(기본 5m) 동안 광고 없으면 `{instance}_advertisement` binary_sensor off, 재수신 시 on. 센서 값·설정은 유지 |

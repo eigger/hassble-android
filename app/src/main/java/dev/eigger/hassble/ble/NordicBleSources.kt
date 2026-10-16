@@ -160,6 +160,11 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         scanFilters.forEachIndexed { i, f ->
             LiveEventLogger.log(LogType.LINK, "BLE scan filter[$i]: $f")
         }
+        if (!PowerDiagnostics.hasBackgroundLocation(context)) {
+            LiveEventLogger.log(LogType.LINK,
+                "[Warning] Background location is not allowed (\"Allow all the time\") — a scan started while the app is not visible " +
+                    "receives (almost) nothing; it is replaced when the app is opened. Set Location to \"Allow all the time\" in app settings.")
+        }
         if (scanFilters.isEmpty()) {
             // Android 8.1+는 필터 없는 스캔에 화면이 꺼진 동안 결과를 주지 않는다.
             LiveEventLogger.log(LogType.LINK,
@@ -182,8 +187,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
 
             val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
             val sessionStartMs = System.currentTimeMillis()
-            // 화면이 꺼졌거나 잠금화면이 떠 있는 채 시작한 세션은 죽은 스캔이 될 수 있어, 잠금이 풀리면 watchdog이 한 번 갈아 끼운다.
-            val startedInactive = !PowerDiagnostics.isUserActiveFresh(context)
+            // 백그라운드 위치 권한이 없을 때 앱이 안 보이는 채 시작한 세션은 죽은 스캔이 되므로, 앱이 보이면 watchdog이 한 번 갈아 끼운다.
+            val startedInactive = !PowerDiagnostics.canStartScanFresh(context)
             lastResultMs.set(sessionStartMs)
             var gotResultThisSession = false
             var resultCountThisSession = 0
@@ -209,7 +214,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                                 sessionStartMs = sessionStartMs,
                                 lastResultMs = lastResultMs.get(),
                                 idleLimitMs = idleLimitMs,
-                                active = PowerDiagnostics.isUserActive(context),
+                                active = PowerDiagnostics.canStartScan(context),
                                 startedInactive = startedInactive,
                             ) ?: continue
                             throw ScanRestartRequest(reason)
@@ -246,7 +251,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             gotResultThisSession = true
                             resultCountThisSession++
                             result.device.address?.let { if (addressesThisSession.size < 50) addressesThisSession.add(it) }
-                            if (!PowerDiagnostics.isUserActive(context)) inactiveResultsThisSession++
+                            if (!PowerDiagnostics.canStartScan(context)) inactiveResultsThisSession++
                             BleScanHealth.onResult(now)
                             val deviceName = result.device.name ?: ""
                             val deviceAddress = result.device.address
@@ -419,7 +424,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             LiveEventLogger.log(LogType.LINK,
                 "BLE scan session ended: rawResults=$resultCountThisSession (inactive=$inactiveResultsThisSession), " +
                     "uniqueDevices=${addressesThisSession.size}, reason='$stopReason', ${PowerDiagnostics.describe(context)}")
-            // 화면이 꺼졌거나 잠긴 채 시작해 결과가 없던 세션은 "잠금 해제 교체"일 뿐이라 유휴 백오프에 세지 않는다.
+            // 앱이 안 보이는 채 시작해 결과가 없던 세션은 "앱 표시 교체"일 뿐이라 유휴 백오프에 세지 않는다.
             consecutiveIdleRestarts = if (gotResultThisSession || startedInactive) 0 else consecutiveIdleRestarts + 1
             // 스택이 이전 세션을 정리할 시간을 준 뒤 startScan() 한다.
             delay(ScanWatchdogPolicy.RESTART_DELAY_MS)
