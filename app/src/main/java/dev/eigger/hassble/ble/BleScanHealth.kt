@@ -98,7 +98,7 @@ object ScanWatchdogPolicy {
     }
 
     /**
-     * 재시작해야 하면 이유 문자열, 아니면 null. 화면이 꺼졌거나 잠겨 있으면 항상 null.
+     * 재시작해야 하면 이유 문자열, 아니면 null. active가 아니면 항상 null.
      * [lastResultMs]는 세션 시작 시각으로 초기화돼 있어야 한다(결과가 한 번도 없어도 idle이 잰다).
      */
     fun restartReason(
@@ -109,15 +109,14 @@ object ScanWatchdogPolicy {
         active: Boolean = true,
         startedInactive: Boolean = false,
     ): String? {
-        // 화면이 꺼졌거나 잠금화면이 떠 있는 동안은 삼성 등이 스캔 듀티를 ~5%로 줄여 광고 사이 공백이 길어지는 게
-        // 정상이다. 그때 공백을 고장으로 보고 재시작하면, 그 상태에서 새로 시작한 세션은 시작 직후 2건만 받고
-        // 죽는 것이 실기기에서 확인됐다(화면이 켜졌어도 잠금화면이 떠 있으면 마찬가지; 잠금이 풀린 상태에서 시작한
-        // 세션은 이후 꺼지거나 잠겨도 정상). 그래서 이 동안은 재시작하지 않고, 잠금이 풀리는 순간에 한 번 갈아 끼운다.
-        // adb 재현: 화면이 꺼진 채 Bluetooth OFF→ON으로 스캔을 새로 시작시키면 직전까지 오던 광고가 3분 넘게
-        // 0건이었다. 또 age(25분) 선제 재시작은 두지 않는다 — 35분 연속 세션이 화면 꺼진 채 정상 수신해 OS의
-        // 30분 강등이 이 단말에선 일어나지 않았고, 재시작은 잠금화면에서 일어나면 스캔을 죽였다.
+        // active = 지금 스캔을 새로 시작해도 되는 상태(백그라운드 위치 "항상 허용"이거나 앱이 화면에 보임).
+        // 위치 권한이 "사용 중에만"이면 앱이 안 보일 때 새로 시작한 세션은 위치 appop 거부로 시작 직후 몇 건만
+        // 받고 죽는다(adb 실측: 홈 화면·잠금화면·화면 꺼짐에서 BT를 껐다 켜 새 세션을 시작하면 0건, 앱이 보일 때는
+        // 즉시 정상. 보일 때 시작한 세션은 이후 숨겨져도 정상). 그래서 active가 아닐 땐 재시작하지 않고(재시작해도
+        // 죽은 세션이 될 뿐이고, 살아 있는 세션을 광고 공백만으로 죽일 수 있다), 앱이 보이는 순간 한 번 갈아 끼운다.
+        // age(25분) 선제 재시작은 두지 않는다 — 35분 연속 세션이 정상 수신해 OS 30분 강등이 확인되지 않았다.
         if (!active) return null
-        if (startedInactive) return "session started while screen was off or locked — restarting now that the device is unlocked"
+        if (startedInactive) return "session started while the app was hidden — restarting now that scans can be started"
         val idle = nowMs - lastResultMs
         if (idle >= idleLimitMs) {
             return "no ScanResult for ${idle / 1000}s (limit ${idleLimitMs / 1000}s)"

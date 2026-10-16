@@ -45,7 +45,7 @@ class ScanWatchdogPolicyTest {
     }
 
     @Test
-    fun `never restarts while the screen is off or locked even when idle or old`() {
+    fun `never restarts while scans cannot be started (app hidden, no background location) even when idle or old`() {
         val now = start + 3 * 60 * 60_000L
         assertNull(
             ScanWatchdogPolicy.restartReason(
@@ -62,13 +62,13 @@ class ScanWatchdogPolicyTest {
     }
 
     @Test
-    fun `session started while locked is replaced once the device is unlocked`() {
+    fun `session started while the app was hidden is replaced once the app is visible`() {
         val reason = ScanWatchdogPolicy.restartReason(
             nowMs = start + 5_000, sessionStartMs = start, lastResultMs = start + 4_000,
             idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, active = true, startedInactive = true,
         )
         assertNotNull(reason)
-        assertTrue(reason!!.contains("screen"))
+        assertTrue(reason!!.contains("hidden"))
     }
 
     @Test

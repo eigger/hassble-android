@@ -17,6 +17,8 @@ object PowerDiagnostics {
         buildString {
             append("screenOn=${pm.isInteractive}")
             append(", keyguardLocked=${(context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked}")
+            append(", appVisible=${AppVisibility.isVisible}")
+            append(", bgLocation=${hasBackgroundLocation(context)}")
             append(", doze=${pm.isDeviceIdleMode}")
             append(", powerSave=${pm.isPowerSaveMode}")
             append(", ignoringBatteryOpt=${pm.isIgnoringBatteryOptimizations(context.packageName)}")
@@ -28,34 +30,38 @@ object PowerDiagnostics {
         }
     }.getOrElse { "power state unavailable: ${it.message}" }
 
+    /** 백그라운드 위치 권한("항상 허용")이 있는가. API 28 이하엔 이 권한이 없고 위치가 항상 유효하다. */
+    fun hasBackgroundLocation(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            context.checkSelfPermission(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     /**
-     * 화면이 켜져 있고 잠금화면(키가드)도 없는가. 삼성 단말에서 스캔은 "화면 켜짐"이 아니라 이 상태를 기준으로
-     * 동작한다 — 화면이 켜졌어도 잠금화면이 떠 있는 동안 새로 시작한 세션은 시작 직후 몇 건만 받고 죽고,
-     * 잠금이 풀린 상태에서 시작한 세션은 이후 화면이 꺼지거나 잠겨도 살아 있다(adb 실측).
+     * 지금 BLE 스캔 세션을 새로 시작해도 결과를 받을 수 있는가. 이 앱은 neverForLocation을 쓰지 않아 스캔에
+     * 위치 appop이 필요한데, "앱 사용 중에만 허용"이면 앱이 화면에 보이지 않을 때(화면 꺼짐·잠금화면·홈 화면
+     * 포함) 새로 시작한 세션은 거부돼 시작 직후 몇 건만 받고 죽는다. 화면에 보일 때 시작한 세션은 이후 앱이
+     * 숨겨져도 살아 있다(adb 실측). "항상 허용"이면 상태와 무관하게 시작할 수 있다.
      */
-    private fun readUserActive(context: Context): Boolean = runCatching {
-        val interactive = (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
-        val locked = (context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked ?: false
-        interactive && !locked
-    }.getOrDefault(true)
+    private fun readCanStartScan(context: Context): Boolean =
+        hasBackgroundLocation(context) || AppVisibility.isVisible
 
     @Volatile private var checkedMs = 0L
-    @Volatile private var userActive = true
+    @Volatile private var canStart = true
 
     /** 캐시를 거치지 않고 지금 상태를 읽는다(세션 시작처럼 한 번만 정확해야 할 때). 캐시도 갱신한다. */
-    fun isUserActiveFresh(context: Context): Boolean {
-        userActive = readUserActive(context)
+    fun canStartScanFresh(context: Context): Boolean {
+        canStart = readCanStartScan(context)
         checkedMs = SystemClock.elapsedRealtime()
-        return userActive
+        return canStart
     }
 
-    /** 스캔 결과마다 불려도 binder 호출이 1초에 한 번만 나가도록 캐시한다. */
-    fun isUserActive(context: Context): Boolean {
+    /** 스캔 결과마다 불려도 호출이 1초에 한 번만 나가도록 캐시한다. */
+    fun canStartScan(context: Context): Boolean {
         val now = SystemClock.elapsedRealtime()
         if (now - checkedMs >= 1_000L) {
-            userActive = readUserActive(context)
+            canStart = readCanStartScan(context)
             checkedMs = now
         }
-        return userActive
+        return canStart
     }
 }
