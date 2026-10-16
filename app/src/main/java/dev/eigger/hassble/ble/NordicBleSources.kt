@@ -182,20 +182,20 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
 
             val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
             val sessionStartMs = System.currentTimeMillis()
-            // 화면이 꺼진 채 시작한 세션은 죽은 스캔이 될 수 있어, 화면이 켜지면 watchdog이 한 번 갈아 끼운다.
-            val startedScreenOff = !PowerDiagnostics.isScreenOnFresh(context)
+            // 화면이 꺼졌거나 잠금화면이 떠 있는 채 시작한 세션은 죽은 스캔이 될 수 있어, 잠금이 풀리면 watchdog이 한 번 갈아 끼운다.
+            val startedInactive = !PowerDiagnostics.isUserActiveFresh(context)
             lastResultMs.set(sessionStartMs)
             var gotResultThisSession = false
             var resultCountThisSession = 0
             val addressesThisSession = HashSet<String>()
-            var screenOffResultsThisSession = 0
+            var inactiveResultsThisSession = 0
             var stopReason = "flow ended"
             var failureCode: Int? = null
             BleScanHealth.onScanStarted(sessionStartMs, scanFilters.size)
             LiveEventLogger.log(LogType.LINK, "BLE scan env: ${PowerDiagnostics.describe(context)}")
             LiveEventLogger.log(LogType.LINK,
                 "BLE scan start: session #${BleScanHealth.state.value.sessionCount}, mode=${scanMode.label}, " +
-                    "filters=${scanFilters.size}, idleLimit=${idleLimitMs / 1000}s, maxSession=${ScanWatchdogPolicy.MAX_SESSION_MS / 60_000}m")
+                    "filters=${scanFilters.size}, idleLimit=${idleLimitMs / 1000}s")
 
             try {
                 coroutineScope {
@@ -209,8 +209,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                                 sessionStartMs = sessionStartMs,
                                 lastResultMs = lastResultMs.get(),
                                 idleLimitMs = idleLimitMs,
-                                screenOn = PowerDiagnostics.isScreenOn(context),
-                                startedScreenOff = startedScreenOff,
+                                active = PowerDiagnostics.isUserActive(context),
+                                startedInactive = startedInactive,
                             ) ?: continue
                             throw ScanRestartRequest(reason)
                         }
@@ -246,7 +246,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             gotResultThisSession = true
                             resultCountThisSession++
                             result.device.address?.let { if (addressesThisSession.size < 50) addressesThisSession.add(it) }
-                            if (!PowerDiagnostics.isScreenOn(context)) screenOffResultsThisSession++
+                            if (!PowerDiagnostics.isUserActive(context)) inactiveResultsThisSession++
                             BleScanHealth.onResult(now)
                             val deviceName = result.device.name ?: ""
                             val deviceAddress = result.device.address
@@ -417,10 +417,10 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             }
             BleScanHealth.onScanStopped(stopReason, failureCode)
             LiveEventLogger.log(LogType.LINK,
-                "BLE scan session ended: rawResults=$resultCountThisSession (screen-off=$screenOffResultsThisSession), " +
+                "BLE scan session ended: rawResults=$resultCountThisSession (inactive=$inactiveResultsThisSession), " +
                     "uniqueDevices=${addressesThisSession.size}, reason='$stopReason', ${PowerDiagnostics.describe(context)}")
-            // 화면이 꺼진 채 시작해 결과가 없던 세션은 "화면 켜짐 교체"일 뿐이라 유휴 백오프에 세지 않는다.
-            consecutiveIdleRestarts = if (gotResultThisSession || startedScreenOff) 0 else consecutiveIdleRestarts + 1
+            // 화면이 꺼졌거나 잠긴 채 시작해 결과가 없던 세션은 "잠금 해제 교체"일 뿐이라 유휴 백오프에 세지 않는다.
+            consecutiveIdleRestarts = if (gotResultThisSession || startedInactive) 0 else consecutiveIdleRestarts + 1
             // 스택이 이전 세션을 정리할 시간을 준 뒤 startScan() 한다.
             delay(ScanWatchdogPolicy.RESTART_DELAY_MS)
         }

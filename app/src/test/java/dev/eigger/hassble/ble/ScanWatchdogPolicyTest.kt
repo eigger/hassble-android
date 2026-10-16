@@ -26,7 +26,7 @@ class ScanWatchdogPolicyTest {
     @Test
     fun `restarts when no result for the idle limit`() {
         val reason = ScanWatchdogPolicy.restartReason(
-            nowMs = start + 60_000, sessionStartMs = start, lastResultMs = start,
+            nowMs = start + ScanWatchdogPolicy.IDLE_LIMIT_MS, sessionStartMs = start, lastResultMs = start,
             idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS,
         )
         assertNotNull(reason)
@@ -34,54 +34,51 @@ class ScanWatchdogPolicyTest {
     }
 
     @Test
-    fun `restarts before the Android 30-minute downgrade even when results keep coming`() {
-        val now = start + ScanWatchdogPolicy.MAX_SESSION_MS
-        val reason = ScanWatchdogPolicy.restartReason(
-            nowMs = now, sessionStartMs = start, lastResultMs = now - 1_000,
-            idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS,
-        )
-        assertNotNull(reason)
-        assertTrue(reason!!.contains("session age"))
-        assertTrue(ScanWatchdogPolicy.MAX_SESSION_MS < 30 * 60_000L)
-    }
-
-    @Test
-    fun `never restarts while the screen is off even when idle or old`() {
-        val now = start + ScanWatchdogPolicy.MAX_SESSION_MS + 60_000
+    fun `old healthy session is never replaced just for its age`() {
+        val now = start + 3 * 60 * 60_000L
         assertNull(
             ScanWatchdogPolicy.restartReason(
-                nowMs = now, sessionStartMs = start, lastResultMs = start,
-                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, screenOn = false,
-            ),
-        )
-        assertNull(
-            ScanWatchdogPolicy.restartReason(
-                nowMs = now, sessionStartMs = start, lastResultMs = start,
-                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, screenOn = false, startedScreenOff = true,
+                nowMs = now, sessionStartMs = start, lastResultMs = now - 1_000,
+                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS,
             ),
         )
     }
 
     @Test
-    fun `session started with screen off is replaced once the screen turns on`() {
+    fun `never restarts while the screen is off or locked even when idle or old`() {
+        val now = start + 3 * 60 * 60_000L
+        assertNull(
+            ScanWatchdogPolicy.restartReason(
+                nowMs = now, sessionStartMs = start, lastResultMs = start,
+                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, active = false,
+            ),
+        )
+        assertNull(
+            ScanWatchdogPolicy.restartReason(
+                nowMs = now, sessionStartMs = start, lastResultMs = start,
+                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, active = false, startedInactive = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `session started while locked is replaced once the device is unlocked`() {
         val reason = ScanWatchdogPolicy.restartReason(
             nowMs = start + 5_000, sessionStartMs = start, lastResultMs = start + 4_000,
-            idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, screenOn = true, startedScreenOff = true,
+            idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, active = true, startedInactive = true,
         )
         assertNotNull(reason)
         assertTrue(reason!!.contains("screen"))
     }
 
     @Test
-    fun `idle limit backs off exponentially and caps`() {
-        assertEquals(60_000L, ScanWatchdogPolicy.idleLimitMs(0))
-        assertEquals(120_000L, ScanWatchdogPolicy.idleLimitMs(1))
-        assertEquals(240_000L, ScanWatchdogPolicy.idleLimitMs(2))
-        assertEquals(480_000L, ScanWatchdogPolicy.idleLimitMs(3))
-        assertEquals(ScanWatchdogPolicy.IDLE_LIMIT_MAX_MS, ScanWatchdogPolicy.idleLimitMs(4))
+    fun `idle limit backs off and caps`() {
+        assertEquals(5 * 60_000L, ScanWatchdogPolicy.idleLimitMs(0))
+        assertEquals(ScanWatchdogPolicy.IDLE_LIMIT_MAX_MS, ScanWatchdogPolicy.idleLimitMs(1))
+        assertEquals(ScanWatchdogPolicy.IDLE_LIMIT_MAX_MS, ScanWatchdogPolicy.idleLimitMs(2))
         // 아주 큰 값이 들어와도 오버플로 없이 상한에 머문다.
         assertEquals(ScanWatchdogPolicy.IDLE_LIMIT_MAX_MS, ScanWatchdogPolicy.idleLimitMs(100))
-        assertEquals(60_000L, ScanWatchdogPolicy.idleLimitMs(-1))
+        assertEquals(ScanWatchdogPolicy.IDLE_LIMIT_MS, ScanWatchdogPolicy.idleLimitMs(-1))
     }
 
     @Test
