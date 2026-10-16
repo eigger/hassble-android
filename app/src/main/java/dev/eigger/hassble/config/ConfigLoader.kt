@@ -15,7 +15,7 @@ import java.io.File
 class ConfigLoader(
     private val cacheDir: File,
     private val presets: ObdPresetStore,
-    private val http: OkHttpClient = OkHttpClient(),
+    private val http: OkHttpClient = sharedHttpClient,
 ) {
     init {
         cacheDir.mkdirs()
@@ -122,4 +122,11 @@ class ConfigLoader(
 
     private fun isYamlFile(name: String) =
         name.endsWith(".yaml", ignoreCase = true) || name.endsWith(".yml", ignoreCase = true)
+
+    companion object {
+        val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
 }
