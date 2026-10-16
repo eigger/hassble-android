@@ -413,7 +413,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             }
             BleScanHealth.onScanStopped(stopReason, failureCode)
             LiveEventLogger.log(LogType.LINK,
-                "BLE scan session ended: results=$resultCountThisSession (screen-off=$screenOffResultsThisSession), " +
+                "BLE scan session ended: rawResults=$resultCountThisSession (screen-off=$screenOffResultsThisSession), " +
                     "uniqueDevices=${addressesThisSession.size}, reason='$stopReason', ${PowerDiagnostics.describe(context)}")
             consecutiveIdleRestarts = if (gotResultThisSession) 0 else consecutiveIdleRestarts + 1
             // 스택이 이전 세션을 정리할 시간을 준 뒤 startScan() 한다.
@@ -489,9 +489,13 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             when {
                 match.mac != null ->
                     filters.add(BleScanFilter(deviceAddress = match.mac.uppercase()))
-                // 제조사 ID와 service UUID가 함께 있으면 제조사 ID로 거른다. 매처는 둘 다 요구하지만
-                // service UUID가 service data가 아니라 UUID 목록으로 광고되는 기기(Jaalee 등)는
-                // service-data 하드웨어 필터가 화면 꺼진 동안 광고를 전부 걸러낸다.
+                match.serviceDataUuid != null ->
+                    filters.add(BleScanFilter(
+                        serviceData = FilteredServiceData(
+                            uuid = android.os.ParcelUuid(uuidFrom(match.serviceDataUuid)),
+                            data = DataByteArray(ByteArray(0))
+                        )
+                    ))
                 match.manufacturerId != null -> {
                     // Empty data bytes (ByteArray(0)) is ambiguous: some BLE chips interpret it
                     // as "payload must be empty", silently dropping all non-empty payloads.
@@ -509,13 +513,6 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                         )
                     ))
                 }
-                match.serviceDataUuid != null ->
-                    filters.add(BleScanFilter(
-                        serviceData = FilteredServiceData(
-                            uuid = android.os.ParcelUuid(uuidFrom(match.serviceDataUuid)),
-                            data = DataByteArray(ByteArray(0))
-                        )
-                    ))
                 else -> return emptyList()
             }
         }
