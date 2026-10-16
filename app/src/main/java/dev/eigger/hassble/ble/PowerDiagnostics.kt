@@ -25,6 +25,15 @@ object PowerDiagnostics {
         }
     }.getOrElse { "power state unavailable: ${it.message}" }
 
+    /** 캐시를 거치지 않고 지금 화면 상태를 읽는다(세션 시작처럼 한 번만 정확해야 할 때). 캐시도 갱신한다. */
+    fun isScreenOnFresh(context: Context): Boolean {
+        screenOn = runCatching {
+            (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+        }.getOrDefault(true)
+        screenCheckedMs = System.currentTimeMillis()
+        return screenOn
+    }
+
     @Volatile private var screenCheckedMs = 0L
     @Volatile private var screenOn = true
 

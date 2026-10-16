@@ -116,6 +116,9 @@ object ScanWatchdogPolicy {
         // 공백을 고장으로 보고 재시작하면, 화면이 꺼진 채 새로 시작한 세션은 시작 직후 2건만 받고 죽는 것이
         // 실기기 로그로 확인됐다(화면이 켜진 채 시작한 세션은 꺼진 뒤에도 정상). 그래서 화면이 꺼진 동안은
         // 재시작하지 않고, 켜지는 순간에 한 번 갈아 끼운다.
+        // adb 재현: 화면이 꺼진 채 Bluetooth OFF→ON으로 스캔을 새로 시작시키면 직전까지 오던 광고가 3분 넘게
+        // 0건이었다. 그래서 age(25분) 선제 재시작도 화면이 꺼진 동안은 미룬다 — OS의 30분 강등 여부는 미확인이며,
+        // 강등이 실제로 있더라도 꺼진 채의 재시작은 죽은 스캔이 되므로 화면이 켜질 때 교체하는 쪽이 낫다.
         if (!screenOn) return null
         if (startedScreenOff) return "session started while screen was off — restarting now that it is on"
         val idle = nowMs - lastResultMs
