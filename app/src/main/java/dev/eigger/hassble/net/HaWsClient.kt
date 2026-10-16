@@ -79,6 +79,7 @@ class HaWsClient(
     private var ws: WebSocket? = null
     private var connectMessageId: Int? = null
     private var bridgeTimeoutJob: Job? = null
+    private var reconnectJob: Job? = null
     private val pendingMessages = PendingMessageQueue()
 
     private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 64)
@@ -107,7 +108,6 @@ class HaWsClient(
         isClosedManually = false
         authFailed = false
         connectMessageId = null
-        pendingMessages.clear()
         _connectionIssue.value = ConnectionIssue.None
         _connectionState.value = ConnectionState.Connecting
 
@@ -120,6 +120,7 @@ class HaWsClient(
 
     fun close() {
         isClosedManually = true
+        reconnectJob?.cancel()
         bridgeTimeoutJob?.cancel()
         resubscribeJob?.cancel()
         connectMessageId = null
@@ -130,11 +131,16 @@ class HaWsClient(
         ws = null
     }
 
+    fun disconnect() {
+        close()
+    }
+
     fun reconnectImmediately() {
         if (isClosedManually) return
         if (_connectionState.value == ConnectionState.Disconnected) {
+            reconnectJob?.cancel()
             reconnectDelayMs = 500L
-            scope.launch {
+            reconnectJob = scope.launch {
                 if (!refreshToken.isNullOrBlank() && HaAuthHelper.isTokenExpiringSoon(token)) {
                     val result = withContext(Dispatchers.IO) {
                         HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
@@ -359,6 +365,8 @@ class HaWsClient(
     }
 
     private fun onConnectResult() {
+        reconnectJob?.cancel()
+        reconnectJob = null
         bridgeTimeoutJob?.cancel()
         missedResubscribes.set(0)
         val isResubscribe = resubscribePending.getAndSet(false)
@@ -384,13 +392,13 @@ class HaWsClient(
 
     private fun triggerReconnection() {
         if (isClosedManually || authFailed) return
+        if (reconnectJob?.isActive == true) return
         bridgeTimeoutJob?.cancel()
         resubscribeJob?.cancel()
         connectMessageId = null
-        pendingMessages.clear()
         missedResubscribes.set(0)
         _connectionState.value = ConnectionState.Disconnected
-        scope.launch {
+        reconnectJob = scope.launch {
             delay(reconnectDelayMs)
             reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
             if (!refreshToken.isNullOrBlank() && HaAuthHelper.isTokenExpiringSoon(token)) {
@@ -409,6 +417,7 @@ class HaWsClient(
 
     private fun handleAuthFailed(webSocket: WebSocket) {
         authFailed = true
+        reconnectJob?.cancel()
         pendingMessages.clear()
         bridgeTimeoutJob?.cancel()
         _connectionIssue.value = ConnectionIssue.AuthFailed
