@@ -5,6 +5,7 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 
 /**
  * 화면 꺼짐·Doze·배터리 최적화·앱 대기 버킷을 한 줄로 요약한다. 백그라운드에서 광고 수신이
@@ -44,13 +45,13 @@ object PowerDiagnostics {
     /** 캐시를 거치지 않고 지금 상태를 읽는다(세션 시작처럼 한 번만 정확해야 할 때). 캐시도 갱신한다. */
     fun isUserActiveFresh(context: Context): Boolean {
         userActive = readUserActive(context)
-        checkedMs = System.currentTimeMillis()
+        checkedMs = SystemClock.elapsedRealtime()
         return userActive
     }
 
     /** 스캔 결과마다 불려도 binder 호출이 1초에 한 번만 나가도록 캐시한다. */
     fun isUserActive(context: Context): Boolean {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (now - checkedMs >= 1_000L) {
             userActive = readUserActive(context)
             checkedMs = now

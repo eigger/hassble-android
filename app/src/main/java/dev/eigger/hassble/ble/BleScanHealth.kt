@@ -80,11 +80,9 @@ object BleScanHealth {
  */
 object ScanWatchdogPolicy {
     /** 이 시간 동안 ScanResult가 한 건도 없으면 세션을 재시작한다. */
-    const val IDLE_LIMIT_MS = 60_000L
+    const val IDLE_LIMIT_MS = 5 * 60_000L
     /** 진짜로 주변에 광고가 없는 곳(심야 주차장 등)에서 무한 재시작하지 않도록 유휴 재시작은 여기까지 늘린다. */
     const val IDLE_LIMIT_MAX_MS = 10 * 60_000L
-    /** AOSP 30분 타임아웃보다 먼저 세션을 갈아 끼운다. */
-    const val MAX_SESSION_MS = 25 * 60_000L
     /** watchdog 점검 주기. */
     const val TICK_MS = 5_000L
     /** stopScan() 후 startScan()까지 쉬는 시간 — 스택이 이전 세션을 정리할 여유. */
@@ -92,7 +90,7 @@ object ScanWatchdogPolicy {
 
     /**
      * 유휴 재시작이 연속 [consecutiveIdleRestarts]번 이어졌을 때 다음 세션의 유휴 한도.
-     * 60s → 2m → 4m → 8m → 10m(상한). 결과가 한 건이라도 오면 카운터를 0으로 되돌린다.
+     * 5m → 10m(상한). 결과가 한 건이라도 오면 카운터를 0으로 되돌린다.
      */
     fun idleLimitMs(consecutiveIdleRestarts: Int): Long {
         val shift = consecutiveIdleRestarts.coerceIn(0, 10)
@@ -108,7 +106,6 @@ object ScanWatchdogPolicy {
         sessionStartMs: Long,
         lastResultMs: Long,
         idleLimitMs: Long,
-        maxSessionMs: Long = MAX_SESSION_MS,
         active: Boolean = true,
         startedInactive: Boolean = false,
     ): String? {
@@ -117,17 +114,13 @@ object ScanWatchdogPolicy {
         // 죽는 것이 실기기에서 확인됐다(화면이 켜졌어도 잠금화면이 떠 있으면 마찬가지; 잠금이 풀린 상태에서 시작한
         // 세션은 이후 꺼지거나 잠겨도 정상). 그래서 이 동안은 재시작하지 않고, 잠금이 풀리는 순간에 한 번 갈아 끼운다.
         // adb 재현: 화면이 꺼진 채 Bluetooth OFF→ON으로 스캔을 새로 시작시키면 직전까지 오던 광고가 3분 넘게
-        // 0건이었다. 그래서 age(25분) 선제 재시작도 이 동안은 미룬다 — OS의 30분 강등 여부는 미확인이며,
-        // 강등이 실제로 있더라도 비활성 상태의 재시작은 죽은 스캔이 되므로 잠금이 풀릴 때 교체하는 쪽이 낫다.
+        // 0건이었다. 또 age(25분) 선제 재시작은 두지 않는다 — 35분 연속 세션이 화면 꺼진 채 정상 수신해 OS의
+        // 30분 강등이 이 단말에선 일어나지 않았고, 재시작은 잠금화면에서 일어나면 스캔을 죽였다.
         if (!active) return null
         if (startedInactive) return "session started while screen was off or locked — restarting now that the device is unlocked"
         val idle = nowMs - lastResultMs
         if (idle >= idleLimitMs) {
             return "no ScanResult for ${idle / 1000}s (limit ${idleLimitMs / 1000}s)"
-        }
-        val age = nowMs - sessionStartMs
-        if (age >= maxSessionMs) {
-            return "session age ${age / 60_000}m reached ${maxSessionMs / 60_000}m (pre-empting Android 30-min scan downgrade)"
         }
         return null
     }

@@ -195,7 +195,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             LiveEventLogger.log(LogType.LINK, "BLE scan env: ${PowerDiagnostics.describe(context)}")
             LiveEventLogger.log(LogType.LINK,
                 "BLE scan start: session #${BleScanHealth.state.value.sessionCount}, mode=${scanMode.label}, " +
-                    "filters=${scanFilters.size}, idleLimit=${idleLimitMs / 1000}s, maxSession=${ScanWatchdogPolicy.MAX_SESSION_MS / 60_000}m")
+                    "filters=${scanFilters.size}, idleLimit=${idleLimitMs / 1000}s")
 
             try {
                 coroutineScope {
