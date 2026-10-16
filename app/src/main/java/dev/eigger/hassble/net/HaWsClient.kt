@@ -559,12 +559,16 @@ class HaWsClient(
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-            // 우리가 먼저 닫은 연결(수동 close, 토큰 갱신 4000)의 응답 프레임이면 할 일이 없다.
-            if (!isCurrent() || isClosedManually || code == 4000) return
+            // 우리가 먼저 닫은 연결(수동 close, 토큰 갱신 4000, 인증 실패)의 응답 프레임이면 할 일이 없다.
+            if (!isCurrent() || isClosedManually || authFailed) return
             // 상대(HA)가 닫기 프레임을 보냈다. 이쪽에서 맞닫지 않으면 OkHttp는 읽기만 멈춘 채 send()를 계속 받아들여
-            // 메시지가 사라지고, 30초 뒤 ping 실패(Broken pipe)로야 끊김을 알게 된다.
-            LiveEventLogger.log(LogType.LINK, "WS closing requested by peer: code=$code, reason='$reason' — closing")
-            webSocket.close(code.takeIf { it in 1000..4999 && it !in setOf(1005, 1006, 1015) } ?: 1000, reason.take(100))
+            // 메시지가 사라지고, 30초 뒤 ping 실패(Broken pipe)로야 끊김을 알게 된다. close()가 false면 우리가 이미
+            // 닫는 중이었다는 뜻이라 로그를 남기지 않는다(토큰 갱신 close(4000)에 HA가 1000으로 답하는 경우 등).
+            val validCode = code.takeIf { it in 1000..4999 && it !in setOf(1004, 1005, 1006, 1015) && !(it in 1016..2999) } ?: 1000
+            val closed = runCatching { webSocket.close(validCode, reason.take(100)) }.getOrDefault(false)
+            if (closed) {
+                LiveEventLogger.log(LogType.LINK, "WS closing requested by peer: code=$code, reason='$reason' — closed our side")
+            }
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {

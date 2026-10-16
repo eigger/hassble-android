@@ -195,9 +195,6 @@ class BleRuntime(
 
     fun redeclareEntities(freshConnection: Boolean = false) {
         if (!::config.isInitialized) return
-        // 재연결 직후에는 값이 안 바뀌어도 한 번은 HA에 보내야 한다. 발행 필터가 같은 값을 막으면 HA는 이 기기를
-        // 다시 보지 못해(sub-device는 선언이나 state를 받아야 online으로 돌아온다) 사용 불가로 남을 수 있다.
-        if (freshConnection) filters.values.forEach { it.reset() }
         verboseDeclareLogs = freshConnection
         declaredAdvInstances.clear()
         for (d in config.devices) {
