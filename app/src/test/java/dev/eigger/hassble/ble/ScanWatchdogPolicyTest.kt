@@ -46,27 +46,27 @@ class ScanWatchdogPolicyTest {
     }
 
     @Test
-    fun `never restarts while the screen is off even when idle or old`() {
+    fun `never restarts while the screen is off or locked even when idle or old`() {
         val now = start + ScanWatchdogPolicy.MAX_SESSION_MS + 60_000
         assertNull(
             ScanWatchdogPolicy.restartReason(
                 nowMs = now, sessionStartMs = start, lastResultMs = start,
-                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, screenOn = false,
+                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, active = false,
             ),
         )
         assertNull(
             ScanWatchdogPolicy.restartReason(
                 nowMs = now, sessionStartMs = start, lastResultMs = start,
-                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, screenOn = false, startedScreenOff = true,
+                idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, active = false, startedInactive = true,
             ),
         )
     }
 
     @Test
-    fun `session started with screen off is replaced once the screen turns on`() {
+    fun `session started while locked is replaced once the device is unlocked`() {
         val reason = ScanWatchdogPolicy.restartReason(
             nowMs = start + 5_000, sessionStartMs = start, lastResultMs = start + 4_000,
-            idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, screenOn = true, startedScreenOff = true,
+            idleLimitMs = ScanWatchdogPolicy.IDLE_LIMIT_MS, active = true, startedInactive = true,
         )
         assertNotNull(reason)
         assertTrue(reason!!.contains("screen"))
