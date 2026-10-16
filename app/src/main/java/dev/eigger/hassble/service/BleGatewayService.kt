@@ -428,7 +428,7 @@ class BleGatewayService : Service() {
                 publishGatewayStates(ws)
                 LiveEventLogger.log(LogType.LINK,
                     "Heartbeat: fgs=running, ws=${ws?.connectionState?.value} (queued=${ws?.pendingMessageCount ?: 0}), " +
-                        "scan[${BleScanHealth.state.value.describe()}], pipeline[${runtime?.diagnostics() ?: "no runtime"}]")
+                        "scan[${BleScanHealth.state.value.describe()}], power[${dev.eigger.hassble.ble.PowerDiagnostics.describe(this@BleGatewayService)}], pipeline[${runtime?.diagnostics() ?: "no runtime"}]")
             }
         }
     }
