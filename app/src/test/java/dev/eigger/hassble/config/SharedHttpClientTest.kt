@@ -31,4 +31,28 @@ class SharedHttpClientTest {
         assertSame("ConfigLoader default http should be sharedHttpClient", ConfigLoader.sharedHttpClient, loaderClient)
         assertSame("ConfigTemplatesLoader default http should be sharedHttpClient", ConfigLoader.sharedHttpClient, templatesClient)
     }
+
+    @Test
+    fun `All network helpers share connectionPool and dispatcher with ConfigLoader sharedHttpClient`() {
+        val shared = ConfigLoader.sharedHttpClient
+
+        val authClient = dev.eigger.hassble.net.HaAuthHelper::class.java
+            .getDeclaredField("client").apply { isAccessible = true }
+            .get(dev.eigger.hassble.net.HaAuthHelper) as okhttp3.OkHttpClient
+        val ghClient = dev.eigger.hassble.net.GitHubHelper::class.java
+            .getDeclaredField("client").apply { isAccessible = true }
+            .get(dev.eigger.hassble.net.GitHubHelper) as okhttp3.OkHttpClient
+        val updateClient = dev.eigger.hassble.net.UpdateChecker::class.java
+            .getDeclaredField("client").apply { isAccessible = true }
+            .get(dev.eigger.hassble.net.UpdateChecker) as okhttp3.OkHttpClient
+        val testerClient = dev.eigger.hassble.net.HaConnectionTester::class.java
+            .getDeclaredField("http").apply { isAccessible = true }
+            .get(dev.eigger.hassble.net.HaConnectionTester) as okhttp3.OkHttpClient
+
+        assertSame(shared, authClient)
+        assertSame(shared, ghClient)
+        assertSame(shared, updateClient)
+        assertSame(shared.connectionPool, testerClient.connectionPool)
+        assertSame(shared.dispatcher, testerClient.dispatcher)
+    }
 }

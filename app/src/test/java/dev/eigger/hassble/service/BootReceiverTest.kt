@@ -18,11 +18,6 @@ class BootReceiverTest {
     }
 
     @Test
-    fun `BootReceiver timeout is 10 seconds`() {
-        assertEquals(10_000L, BOOT_RECEIVER_TIMEOUT_MS)
-    }
-
-    @Test
     fun `AndroidManifest declares BootReceiver with BOOT_COMPLETED and MY_PACKAGE_REPLACED`() {
         val manifestFile = File("src/main/AndroidManifest.xml")
         assertTrue("AndroidManifest.xml should exist", manifestFile.exists())

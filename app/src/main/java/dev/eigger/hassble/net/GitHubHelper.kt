@@ -1,5 +1,6 @@
 package dev.eigger.hassble.net
 
+import dev.eigger.hassble.config.ConfigLoader
 import dev.eigger.hassble.config.HassBleDefaults
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -8,7 +9,7 @@ import okhttp3.Request
 import org.json.JSONObject
 
 object GitHubHelper {
-    private val client = OkHttpClient()
+    private val client: OkHttpClient = ConfigLoader.sharedHttpClient
 
     data class ParsedGitUrl(val repoShort: String, val branch: String, val file: String)
 

@@ -1,5 +1,6 @@
 package dev.eigger.hassble.net
 
+import dev.eigger.hassble.config.ConfigLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -7,7 +8,7 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 object HaConnectionTester {
-    private val http = OkHttpClient.Builder()
+    private val http = ConfigLoader.sharedHttpClient.newBuilder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
