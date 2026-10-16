@@ -16,7 +16,7 @@ class ConfigTemplatesLoader(
     private val cacheDir: File,
     private val bundled: ConfigTemplates,
     private val configLoader: ConfigLoader,
-    private val http: OkHttpClient = OkHttpClient(),
+    private val http: OkHttpClient = sharedHttpClient,
 ) {
     enum class Source { REMOTE, CACHE, BUNDLED }
 
@@ -81,6 +81,7 @@ class ConfigTemplatesLoader(
     }
 
     companion object {
+        val sharedHttpClient: OkHttpClient get() = ConfigLoader.sharedHttpClient
         val TEMPLATES_FILE: String get() = HassBleDefaults.TEMPLATES_FILE
     }
 

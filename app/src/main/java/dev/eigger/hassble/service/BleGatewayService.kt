@@ -10,8 +10,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.eigger.hassble.R
 import dev.eigger.hassble.ble.BleRuntime
@@ -80,6 +85,7 @@ class BleGatewayService : Service() {
     private var ws: HaWsClient? = null
     @Volatile private var runtime: BleRuntime? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     private var configJob: Job? = null
     private var wsStateJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -129,11 +135,49 @@ class BleGatewayService : Service() {
         }
     }
 
+    private fun acquireWakeLock() {
+        runCatching {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HassBle::BleGatewayWakeLock").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            LiveEventLogger.log(LogType.LINK, "Partial wake lock acquired")
+        }.onFailure { e ->
+            Log.e(TAG, "Failed to acquire wake lock", e)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching {
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            wakeLock = null
+            LiveEventLogger.log(LogType.LINK, "Partial wake lock released")
+        }.onFailure { e ->
+            Log.e(TAG, "Failed to release wake lock", e)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         _isServiceRunning.value = true
+        acquireWakeLock()
         registerNetworkCallback()
-        startForeground(NOTIF_ID, buildNotification())
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIF_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            )
+        } else {
+            startForeground(NOTIF_ID, notification)
+        }
         LiveEventLogger.log(LogType.LINK, "Foreground service started (type=connectedDevice)")
         // ACTION_STATE_CHANGED는 시스템 보호 브로드캐스트라 NOT_EXPORTED로도 받는다.
         ContextCompat.registerReceiver(
@@ -698,6 +742,7 @@ class BleGatewayService : Service() {
         _serviceError.value = null
         _usingCachedConfig.value = false
         scope.cancel()
+        releaseWakeLock()
         super.onDestroy()
     }
 
@@ -801,6 +846,7 @@ class BleGatewayService : Service() {
     }
 
     companion object {
+        private const val TAG = "BleGatewayService"
         private const val CHANNEL_ID = "ble_gateway"
         private const val NOTIF_ID = 1
         const val EXTRA_HA_URL = "ha_url"
@@ -848,61 +894,97 @@ class BleGatewayService : Service() {
         val usingCachedConfig: StateFlow<Boolean> = _usingCachedConfig.asStateFlow()
 
         fun start(context: Context, haUrl: String, token: String, refreshToken: String?, gitUrl: String, gitToken: String?) {
-            val i = Intent(context, BleGatewayService::class.java)
-                .putExtra(EXTRA_HA_URL, haUrl)
-                .putExtra(EXTRA_TOKEN, token)
-                .putExtra(EXTRA_REFRESH_TOKEN, refreshToken)
-                .putExtra(EXTRA_GIT_URL, gitUrl)
-                .putExtra(EXTRA_GIT_TOKEN, gitToken)
-            context.startForegroundService(i)
+            runCatching {
+                val i = Intent(context, BleGatewayService::class.java)
+                    .putExtra(EXTRA_HA_URL, haUrl)
+                    .putExtra(EXTRA_TOKEN, token)
+                    .putExtra(EXTRA_REFRESH_TOKEN, refreshToken)
+                    .putExtra(EXTRA_GIT_URL, gitUrl)
+                    .putExtra(EXTRA_GIT_TOKEN, gitToken)
+                context.startForegroundService(i)
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to start BleGatewayService", e)
+            }
         }
 
         fun reloadConfig(context: Context, gitUrl: String? = null, gitToken: String? = null) {
-            val i = Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_RELOAD_CONFIG)
-            gitUrl?.let { i.putExtra(EXTRA_GIT_URL, it) }
-            i.putExtra(EXTRA_GIT_TOKEN, gitToken)
-            context.startService(i)
+            runCatching {
+                val i = Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_RELOAD_CONFIG)
+                gitUrl?.let { i.putExtra(EXTRA_GIT_URL, it) }
+                i.putExtra(EXTRA_GIT_TOKEN, gitToken)
+                context.startService(i)
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to reloadConfig", e)
+            }
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, BleGatewayService::class.java))
+            runCatching {
+                context.stopService(Intent(context, BleGatewayService::class.java))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to stop BleGatewayService", e)
+            }
         }
 
         fun removeDevice(context: Context, deviceId: String) {
-            context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_REMOVE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
+            runCatching {
+                context.startService(Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_REMOVE_DEVICE).putExtra(EXTRA_DEVICE_ID, deviceId))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to removeDevice for $deviceId", e)
+            }
         }
 
         fun setAutoConnect(context: Context, deviceId: String, enabled: Boolean) {
-            context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_SET_AUTO_CONNECT)
-                .putExtra(EXTRA_DEVICE_ID, deviceId)
-                .putExtra(EXTRA_AUTO_CONNECT, enabled))
+            runCatching {
+                context.startService(Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_SET_AUTO_CONNECT)
+                    .putExtra(EXTRA_DEVICE_ID, deviceId)
+                    .putExtra(EXTRA_AUTO_CONNECT, enabled))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to setAutoConnect for $deviceId", e)
+            }
         }
 
         fun connectDevice(context: Context, deviceId: String) {
-            context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_CONNECT_DEVICE)
-                .putExtra(EXTRA_DEVICE_ID, deviceId))
+            runCatching {
+                context.startService(Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_CONNECT_DEVICE)
+                    .putExtra(EXTRA_DEVICE_ID, deviceId))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to connectDevice for $deviceId", e)
+            }
         }
 
         fun disconnectDevice(context: Context, deviceId: String) {
-            context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_DISCONNECT_DEVICE)
-                .putExtra(EXTRA_DEVICE_ID, deviceId))
+            runCatching {
+                context.startService(Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_DISCONNECT_DEVICE)
+                    .putExtra(EXTRA_DEVICE_ID, deviceId))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to disconnectDevice for $deviceId", e)
+            }
         }
 
         fun triggerAdvertise(context: Context, deviceId: String) {
-            context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_TRIGGER_ADVERTISE)
-                .putExtra(EXTRA_DEVICE_ID, deviceId))
+            runCatching {
+                context.startService(Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_TRIGGER_ADVERTISE)
+                    .putExtra(EXTRA_DEVICE_ID, deviceId))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to triggerAdvertise for $deviceId", e)
+            }
         }
 
         fun stopAdvertise(context: Context, deviceId: String) {
-            context.startService(Intent(context, BleGatewayService::class.java)
-                .setAction(ACTION_STOP_ADVERTISE)
-                .putExtra(EXTRA_DEVICE_ID, deviceId))
+            runCatching {
+                context.startService(Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_STOP_ADVERTISE)
+                    .putExtra(EXTRA_DEVICE_ID, deviceId))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to stopAdvertise for $deviceId", e)
+            }
         }
     }
 }

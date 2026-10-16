@@ -1,6 +1,7 @@
 package dev.eigger.hassble.net
 
 import dev.eigger.hassble.BuildConfig
+import dev.eigger.hassble.config.ConfigLoader
 import dev.eigger.hassble.config.HassBleDefaults
 import dev.eigger.hassble.config.HassSettingsRepository
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +20,7 @@ object UpdateChecker {
     /** 마지막 조회로부터 이 시간이 지나야 다시 물어본다. */
     const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
 
-    private val client = OkHttpClient()
+    private val client: OkHttpClient = ConfigLoader.sharedHttpClient
 
     data class Release(val version: String, val pageUrl: String)
 

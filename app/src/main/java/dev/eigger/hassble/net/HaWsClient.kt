@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.eigger.hassble.BuildConfig
 import dev.eigger.hassble.R
+import dev.eigger.hassble.config.ConfigLoader
 import dev.eigger.hassble.service.LiveEventLogger
 import dev.eigger.hassble.service.LogType
 import kotlinx.coroutines.withTimeoutOrNull
@@ -40,6 +41,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CoroutineStart
 
 enum class ConnectionState {
     Disconnected,
@@ -63,7 +66,7 @@ class HaWsClient(
     private val scope: CoroutineScope,
     private val refreshToken: String? = null,
     private val onTokenRefreshed: (suspend (String) -> Unit)? = null,
-    private val http: OkHttpClient = OkHttpClient.Builder()
+    private val http: OkHttpClient = ConfigLoader.sharedHttpClient.newBuilder()
         // 5초는 라디오를 절전 상태로 못 내려가게 만들 만큼 잦다(하루 종일, OBD 동작 여부와
         // 무관하게). 30초는 대부분의 통신사 NAT idle timeout보다 짧으면서 웨이크업 빈도를
         // 1/6로 줄인다.
@@ -76,9 +79,12 @@ class HaWsClient(
         explicitNulls = false
     }
     private val idGen = AtomicInteger(1)
+    private val connectGen = AtomicLong(0L)
+    @Volatile
     private var ws: WebSocket? = null
     private var connectMessageId: Int? = null
     private var bridgeTimeoutJob: Job? = null
+    private var reconnectJob: Job? = null
     private val pendingMessages = PendingMessageQueue()
 
     private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 64)
@@ -107,19 +113,40 @@ class HaWsClient(
         isClosedManually = false
         authFailed = false
         connectMessageId = null
-        pendingMessages.clear()
         _connectionIssue.value = ConnectionIssue.None
         _connectionState.value = ConnectionState.Connecting
 
-        val protocol = if (baseUrl.startsWith("https")) "wss" else "ws"
-        val cleanUrl = baseUrl.substringAfter("://").trimEnd('/')
-        val url = "$protocol://$cleanUrl/api/websocket"
+        val prev = ws
+        ws = null
+        prev?.cancel()
 
-        ws = http.newWebSocket(Request.Builder().url(url).build(), Listener())
+        val gen = connectGen.incrementAndGet()
+        try {
+            val protocol = if (baseUrl.startsWith("https")) "wss" else "ws"
+            val cleanUrl = baseUrl.substringAfter("://").trimEnd('/')
+            val url = "$protocol://$cleanUrl/api/websocket"
+
+            val socket = http.newWebSocket(Request.Builder().url(url).build(), Listener(gen))
+            if (connectGen.get() == gen) {
+                ws = socket
+            } else {
+                socket.cancel()
+            }
+        } catch (e: Exception) {
+            if (connectGen.compareAndSet(gen, gen + 1)) {
+                LiveEventLogger.log(LogType.LINK, "WS connect failed to parse URL or create socket: ${e.message}")
+                _connectionIssue.value = ConnectionIssue.NetworkError
+                _connectionState.value = ConnectionState.Disconnected
+                triggerReconnection()
+            }
+        }
     }
 
     fun close() {
         isClosedManually = true
+        connectGen.incrementAndGet()
+        reconnectJob?.cancel()
+        reconnectJob = null
         bridgeTimeoutJob?.cancel()
         resubscribeJob?.cancel()
         connectMessageId = null
@@ -130,11 +157,17 @@ class HaWsClient(
         ws = null
     }
 
+    fun disconnect() {
+        close()
+    }
+
     fun reconnectImmediately() {
         if (isClosedManually) return
         if (_connectionState.value == ConnectionState.Disconnected) {
+            reconnectJob?.cancel()
+            reconnectJob = null
             reconnectDelayMs = 500L
-            scope.launch {
+            val job = scope.launch(start = CoroutineStart.LAZY) {
                 if (!refreshToken.isNullOrBlank() && HaAuthHelper.isTokenExpiringSoon(token)) {
                     val result = withContext(Dispatchers.IO) {
                         HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
@@ -145,8 +178,11 @@ class HaWsClient(
                         onTokenRefreshed?.invoke(newToken)
                     }
                 }
+                reconnectJob = null
                 connect()
             }
+            reconnectJob = job
+            job.start()
         }
     }
 
@@ -359,6 +395,8 @@ class HaWsClient(
     }
 
     private fun onConnectResult() {
+        reconnectJob?.cancel()
+        reconnectJob = null
         bridgeTimeoutJob?.cancel()
         missedResubscribes.set(0)
         val isResubscribe = resubscribePending.getAndSet(false)
@@ -384,15 +422,16 @@ class HaWsClient(
 
     private fun triggerReconnection() {
         if (isClosedManually || authFailed) return
+        if (reconnectJob?.isActive == true) return
         bridgeTimeoutJob?.cancel()
         resubscribeJob?.cancel()
         connectMessageId = null
-        pendingMessages.clear()
         missedResubscribes.set(0)
         _connectionState.value = ConnectionState.Disconnected
-        scope.launch {
-            delay(reconnectDelayMs)
-            reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
+        val delayMs = reconnectDelayMs
+        reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            delay(delayMs)
             if (!refreshToken.isNullOrBlank() && HaAuthHelper.isTokenExpiringSoon(token)) {
                 val result = withContext(Dispatchers.IO) {
                     HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
@@ -403,16 +442,22 @@ class HaWsClient(
                     onTokenRefreshed?.invoke(newToken)
                 }
             }
+            reconnectJob = null
             connect()
         }
+        reconnectJob = job
+        job.start()
     }
 
     private fun handleAuthFailed(webSocket: WebSocket) {
         authFailed = true
+        reconnectJob?.cancel()
+        reconnectJob = null
         pendingMessages.clear()
         bridgeTimeoutJob?.cancel()
         _connectionIssue.value = ConnectionIssue.AuthFailed
         _connectionState.value = ConnectionState.Disconnected
+        ws = null
         webSocket.close(1000, "Auth failed")
     }
 
@@ -423,8 +468,19 @@ class HaWsClient(
         else -> "reconnecting"
     }
 
-    private inner class Listener : WebSocketListener() {
+    private inner class Listener(private val gen: Long) : WebSocketListener() {
+        private fun isCurrent(): Boolean = (connectGen.get() == gen)
+
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            if (!isCurrent()) {
+                webSocket.cancel()
+                return
+            }
+            ws = webSocket
+        }
+
         override fun onMessage(webSocket: WebSocket, text: String) {
+            if (!isCurrent()) return
             LiveEventLogger.log(LogType.RX, "WS: $text")
             val msg = json.parseToJsonElement(text).jsonObject
             when (msg["type"]?.jsonPrimitive?.content) {
@@ -447,8 +503,10 @@ class HaWsClient(
                                 onTokenRefreshed?.invoke(newToken)
                                 reconnectDelayMs = 500L
                                 LiveEventLogger.logRes(LogType.LINK, R.string.log_oauth_refresh_success)
-                                webSocket.close(4000, "Token refreshed, reconnecting")
-                            } else {
+                                if (isCurrent()) {
+                                    webSocket.close(4000, "Token refreshed, reconnecting")
+                                }
+                            } else if (isCurrent()) {
                                 LiveEventLogger.logRes(
                                     LogType.LINK,
                                     R.string.log_oauth_refresh_failed,
@@ -474,6 +532,8 @@ class HaWsClient(
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            if (!connectGen.compareAndSet(gen, gen + 1)) return
+            ws = null
             LiveEventLogger.log(LogType.LINK, "WS closed: code=$code, reason='$reason' — ${nextStepNote()}")
             if (code != 4000 && _connectionIssue.value == ConnectionIssue.None && !authFailed) {
                 _connectionIssue.value = ConnectionIssue.NetworkError
@@ -482,6 +542,8 @@ class HaWsClient(
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            if (!connectGen.compareAndSet(gen, gen + 1)) return
+            ws = null
             LiveEventLogger.log(LogType.LINK, "WS failure: ${t::class.java.simpleName}: ${t.message} — ${nextStepNote()}")
             if (_connectionIssue.value == ConnectionIssue.None) {
                 _connectionIssue.value = ConnectionIssue.NetworkError

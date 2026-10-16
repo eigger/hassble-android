@@ -15,6 +15,7 @@ import dev.eigger.hassble.decode.ObdResponseParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -551,7 +552,7 @@ class NordicGattNotifySource(
     private val scope: CoroutineScope,
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
 ) : GattNotifySource {
-    private val activeConnections = mutableMapOf<String, ClientBleGatt>()
+    private val activeConnections = ConcurrentHashMap<String, ClientBleGatt>()
 
     // BLUETOOTH_CONNECT is required for ClientBleGatt.connect() on API 31+. The app requests it
     // as part of its startup permission flow before the gateway service is allowed to run, and
@@ -569,6 +570,7 @@ class NordicGattNotifySource(
 
         try {
             while (currentCoroutineContext().isActive) {
+                activeConnections.remove(device.id)?.disconnect()
                 try {
                     // OBD 쪽과 같은 이유로 waitForDevice()도 try 안에 둔다.
                     // 스캔 실패가 while 밖으로 새면 자동 재연결이 영구히 멈춘다.
@@ -591,7 +593,7 @@ class NordicGattNotifySource(
                             emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
                         }
                         onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac))
-                        activeConnections.remove(device.id)
+                        activeConnections.remove(device.id)?.disconnect()
                         if (!autoReconnect) break
                         delay(3_000)
                     } else {
@@ -601,13 +603,14 @@ class NordicGattNotifySource(
                     throw e
                 } catch (e: DownstreamException) {
                     // 수신값 처리 쪽 예외 — 재연결로 삼키면 이후 모든 emit이 실패한다. 그대로 내보낸다.
+                    activeConnections.remove(device.id)?.disconnect()
                     throw e.cause
                 } catch (e: Exception) {
                     Log.w(TAG, "GATT session ended for ${device.id}: ${e.message}")
                     onLinkStatus(
                         DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = e.message),
                     )
-                    activeConnections.remove(device.id)
+                    activeConnections.remove(device.id)?.disconnect()
                     if (!autoReconnect) break
                     delay(3_000)
                 }
