@@ -156,6 +156,10 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         }
         LiveEventLogger.log(LogType.LINK,
             "BLE scan mode: ${scanMode.label}, filters: ${scanFilters.size} (reconnect-wait MACs: ${normalizedWaitMacs.size})")
+        // 화면 꺼진 상태에서 결과가 끊길 때 어떤 하드웨어 필터가 걸렸는지 로그만으로 확인한다.
+        scanFilters.forEachIndexed { i, f ->
+            LiveEventLogger.log(LogType.LINK, "BLE scan filter[$i]: $f")
+        }
         if (scanFilters.isEmpty()) {
             // Android 8.1+는 필터 없는 스캔에 화면이 꺼진 동안 결과를 주지 않는다.
             LiveEventLogger.log(LogType.LINK,
@@ -180,9 +184,13 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             val sessionStartMs = System.currentTimeMillis()
             lastResultMs.set(sessionStartMs)
             var gotResultThisSession = false
+            var resultCountThisSession = 0
+            val addressesThisSession = HashSet<String>()
+            var screenOffResultsThisSession = 0
             var stopReason = "flow ended"
             var failureCode: Int? = null
             BleScanHealth.onScanStarted(sessionStartMs, scanFilters.size)
+            LiveEventLogger.log(LogType.LINK, "BLE scan env: ${PowerDiagnostics.describe(context)}")
             LiveEventLogger.log(LogType.LINK,
                 "BLE scan start: session #${BleScanHealth.state.value.sessionCount}, mode=${scanMode.label}, " +
                     "filters=${scanFilters.size}, idleLimit=${idleLimitMs / 1000}s, maxSession=${ScanWatchdogPolicy.MAX_SESSION_MS / 60_000}m")
@@ -232,6 +240,9 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             val now = System.currentTimeMillis()
                             lastResultMs.set(now)
                             gotResultThisSession = true
+                            resultCountThisSession++
+                            result.device.address?.let { if (addressesThisSession.size < 50) addressesThisSession.add(it) }
+                            if (!PowerDiagnostics.isScreenOn(context)) screenOffResultsThisSession++
                             BleScanHealth.onResult(now)
                             val deviceName = result.device.name ?: ""
                             val deviceAddress = result.device.address
@@ -401,6 +412,9 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 LiveEventLogger.log(LogType.LINK, "BLE scan error: ${e.localizedMessage}, restarting...")
             }
             BleScanHealth.onScanStopped(stopReason, failureCode)
+            LiveEventLogger.log(LogType.LINK,
+                "BLE scan session ended: rawResults=$resultCountThisSession (screen-off=$screenOffResultsThisSession), " +
+                    "uniqueDevices=${addressesThisSession.size}, reason='$stopReason', ${PowerDiagnostics.describe(context)}")
             consecutiveIdleRestarts = if (gotResultThisSession) 0 else consecutiveIdleRestarts + 1
             // 스택이 이전 세션을 정리할 시간을 준 뒤 startScan() 한다.
             delay(ScanWatchdogPolicy.RESTART_DELAY_MS)
