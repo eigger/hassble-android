@@ -182,6 +182,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
 
             val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
             val sessionStartMs = System.currentTimeMillis()
+            // 화면이 꺼진 채 시작한 세션은 죽은 스캔이 될 수 있어, 화면이 켜지면 watchdog이 한 번 갈아 끼운다.
+            val startedScreenOff = !PowerDiagnostics.isScreenOnFresh(context)
             lastResultMs.set(sessionStartMs)
             var gotResultThisSession = false
             var resultCountThisSession = 0
@@ -207,6 +209,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                                 sessionStartMs = sessionStartMs,
                                 lastResultMs = lastResultMs.get(),
                                 idleLimitMs = idleLimitMs,
+                                screenOn = PowerDiagnostics.isScreenOn(context),
+                                startedScreenOff = startedScreenOff,
                             ) ?: continue
                             throw ScanRestartRequest(reason)
                         }
@@ -415,7 +419,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             LiveEventLogger.log(LogType.LINK,
                 "BLE scan session ended: rawResults=$resultCountThisSession (screen-off=$screenOffResultsThisSession), " +
                     "uniqueDevices=${addressesThisSession.size}, reason='$stopReason', ${PowerDiagnostics.describe(context)}")
-            consecutiveIdleRestarts = if (gotResultThisSession) 0 else consecutiveIdleRestarts + 1
+            // 화면이 꺼진 채 시작해 결과가 없던 세션은 "화면 켜짐 교체"일 뿐이라 유휴 백오프에 세지 않는다.
+            consecutiveIdleRestarts = if (gotResultThisSession || startedScreenOff) 0 else consecutiveIdleRestarts + 1
             // 스택이 이전 세션을 정리할 시간을 준 뒤 startScan() 한다.
             delay(ScanWatchdogPolicy.RESTART_DELAY_MS)
         }
