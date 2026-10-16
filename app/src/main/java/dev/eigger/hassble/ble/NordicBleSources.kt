@@ -182,6 +182,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
 
             val idleLimitMs = ScanWatchdogPolicy.idleLimitMs(consecutiveIdleRestarts)
             val sessionStartMs = System.currentTimeMillis()
+            // 화면이 꺼진 채 시작한 세션은 죽은 스캔이 될 수 있어, 화면이 켜지면 watchdog이 한 번 갈아 끼운다.
+            val startedScreenOff = !PowerDiagnostics.isScreenOn(context)
             lastResultMs.set(sessionStartMs)
             var gotResultThisSession = false
             var resultCountThisSession = 0
@@ -207,6 +209,8 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                                 sessionStartMs = sessionStartMs,
                                 lastResultMs = lastResultMs.get(),
                                 idleLimitMs = idleLimitMs,
+                                screenOn = PowerDiagnostics.isScreenOn(context),
+                                startedScreenOff = startedScreenOff,
                             ) ?: continue
                             throw ScanRestartRequest(reason)
                         }

@@ -100,7 +100,7 @@ object ScanWatchdogPolicy {
     }
 
     /**
-     * 재시작해야 하면 이유 문자열, 아니면 null.
+     * 재시작해야 하면 이유 문자열, 아니면 null. 화면이 꺼져 있으면 항상 null.
      * [lastResultMs]는 세션 시작 시각으로 초기화돼 있어야 한다(결과가 한 번도 없어도 idle이 잰다).
      */
     fun restartReason(
@@ -109,7 +109,15 @@ object ScanWatchdogPolicy {
         lastResultMs: Long,
         idleLimitMs: Long,
         maxSessionMs: Long = MAX_SESSION_MS,
+        screenOn: Boolean = true,
+        startedScreenOff: Boolean = false,
     ): String? {
+        // 화면이 꺼진 동안은 삼성 등이 스캔 듀티를 ~5%로 줄여 광고 사이 공백이 길어지는 게 정상이다. 그때
+        // 공백을 고장으로 보고 재시작하면, 화면이 꺼진 채 새로 시작한 세션은 시작 직후 2건만 받고 죽는 것이
+        // 실기기 로그로 확인됐다(화면이 켜진 채 시작한 세션은 꺼진 뒤에도 정상). 그래서 화면이 꺼진 동안은
+        // 재시작하지 않고, 켜지는 순간에 한 번 갈아 끼운다.
+        if (!screenOn) return null
+        if (startedScreenOff) return "session started while screen was off — restarting now that it is on"
         val idle = nowMs - lastResultMs
         if (idle >= idleLimitMs) {
             return "no ScanResult for ${idle / 1000}s (limit ${idleLimitMs / 1000}s)"
