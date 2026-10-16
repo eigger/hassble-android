@@ -445,6 +445,7 @@ class BleRuntime(
             ?: "${d.name} ($mac)"
         declareEntitiesForInstance(d, instanceId, label)
         ws.sendAvailability(instanceId, true)
+        LiveEventLogger.log(LogType.LINK, "device=$instanceId: declared in HA and marked online")
     }
 
     private fun stopDevice(deviceId: String) {

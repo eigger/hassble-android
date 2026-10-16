@@ -314,8 +314,26 @@ class HaWsClient(
     /** heartbeat 로그용. */
     val pendingMessageCount: Int get() = pendingMessages.size
 
+    private val sentCount = java.util.concurrent.atomic.AtomicLong(0)
+    private val failedSendCount = java.util.concurrent.atomic.AtomicLong(0)
+    private val reconnectCount = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** heartbeat 로그용: 전송 성공/실패 누적과 재연결 횟수. 실패가 늘면 "연결됨"인데 HA에 안 가는 상태다. */
+    fun sendStats(): String =
+        "sent=${sentCount.get()}, sendFailed=${failedSendCount.get()}, reconnects=${reconnectCount.get()}"
+
     private fun send(text: String) {
-        ws?.send(text)
+        val ok = ws?.send(text) == true
+        if (ok) {
+            sentCount.incrementAndGet()
+        } else {
+            // 소켓이 null이거나 닫히는 중이면 send()가 조용히 false를 준다. 예전엔 이 메시지가 그냥 사라졌다.
+            val failed = failedSendCount.incrementAndGet()
+            if (failed % DROP_LOG_EVERY == 1L) {
+                LiveEventLogger.log(LogType.LINK,
+                    "WS: send failed (socket ${if (ws == null) "null" else "closing"}, state=${_connectionState.value}) — total failed: $failed")
+            }
+        }
         LiveEventLogger.log(LogType.TX, "WS: $text")
     }
 
@@ -408,6 +426,11 @@ class HaWsClient(
         }
         _connectionIssue.value = ConnectionIssue.None
         reconnectDelayMs = 2000L
+        // 60초 주기 재구독은 로그를 남기지 않는다. 새 연결(재연결 포함)만 남겨 끊김 뒤 복구 여부를 로그로 본다.
+        if (!isResubscribe) {
+            LiveEventLogger.log(LogType.LINK,
+                "WS: connected and ws_bridge subscribed (connection #${reconnectCount.incrementAndGet()}, ${sendStats()})")
+        }
         _bridgeConnected.tryEmit(!isResubscribe)
         if (!isResubscribe) {
             resubscribeJob?.cancel()
