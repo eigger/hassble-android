@@ -451,7 +451,6 @@ class HaWsClient(
 
     private fun handleAuthFailed(webSocket: WebSocket) {
         authFailed = true
-        connectGen.incrementAndGet()
         reconnectJob?.cancel()
         reconnectJob = null
         pendingMessages.clear()
@@ -482,7 +481,6 @@ class HaWsClient(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (!isCurrent()) return
-            if (ws == null) ws = webSocket
             LiveEventLogger.log(LogType.RX, "WS: $text")
             val msg = json.parseToJsonElement(text).jsonObject
             when (msg["type"]?.jsonPrimitive?.content) {
@@ -499,15 +497,16 @@ class HaWsClient(
                         LiveEventLogger.logRes(LogType.LINK, R.string.log_oauth_token_expired_refreshing)
                         scope.launch(Dispatchers.IO) {
                             val result = HaAuthHelper.refreshAccessToken(baseUrl, refreshToken)
-                            if (!isCurrent()) return@launch
                             if (result.isSuccess) {
                                 val newToken = result.getOrThrow()
                                 token = newToken
                                 onTokenRefreshed?.invoke(newToken)
                                 reconnectDelayMs = 500L
                                 LiveEventLogger.logRes(LogType.LINK, R.string.log_oauth_refresh_success)
-                                webSocket.close(4000, "Token refreshed, reconnecting")
-                            } else {
+                                if (isCurrent()) {
+                                    webSocket.close(4000, "Token refreshed, reconnecting")
+                                }
+                            } else if (isCurrent()) {
                                 LiveEventLogger.logRes(
                                     LogType.LINK,
                                     R.string.log_oauth_refresh_failed,
