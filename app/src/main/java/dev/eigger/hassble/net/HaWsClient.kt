@@ -113,6 +113,7 @@ class HaWsClient(
         isClosedManually = false
         authFailed = false
         connectMessageId = null
+        resubscribePending.set(false)
         _connectionIssue.value = ConnectionIssue.None
         _connectionState.value = ConnectionState.Connecting
 
@@ -450,6 +451,9 @@ class HaWsClient(
         resubscribeJob?.cancel()
         connectMessageId = null
         missedResubscribes.set(0)
+        // 끊긴 연결에서 응답을 못 받은 재구독이 남아 있으면 다음 연결의 첫 결과를 재구독으로 오인해
+        // 재구독 루프가 영영 다시 시작되지 않는다.
+        resubscribePending.set(false)
         _connectionState.value = ConnectionState.Disconnected
         val delayMs = reconnectDelayMs
         reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(30000L)
@@ -552,6 +556,15 @@ class HaWsClient(
                     _events.tryEmit(event)
                 }
             }
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            // 우리가 먼저 닫은 연결(수동 close, 토큰 갱신 4000)의 응답 프레임이면 할 일이 없다.
+            if (!isCurrent() || isClosedManually || code == 4000) return
+            // 상대(HA)가 닫기 프레임을 보냈다. 이쪽에서 맞닫지 않으면 OkHttp는 읽기만 멈춘 채 send()를 계속 받아들여
+            // 메시지가 사라지고, 30초 뒤 ping 실패(Broken pipe)로야 끊김을 알게 된다.
+            LiveEventLogger.log(LogType.LINK, "WS closing requested by peer: code=$code, reason='$reason' — closing")
+            webSocket.close(code.takeIf { it in 1000..4999 && it !in setOf(1005, 1006, 1015) } ?: 1000, reason.take(100))
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
