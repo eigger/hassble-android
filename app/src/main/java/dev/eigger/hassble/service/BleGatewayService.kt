@@ -13,6 +13,7 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -84,6 +85,7 @@ class BleGatewayService : Service() {
     private var ws: HaWsClient? = null
     @Volatile private var runtime: BleRuntime? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     private var configJob: Job? = null
     private var wsStateJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -133,9 +135,37 @@ class BleGatewayService : Service() {
         }
     }
 
+    private fun acquireWakeLock() {
+        runCatching {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HassBle::BleGatewayWakeLock").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            LiveEventLogger.log(LogType.LINK, "Partial wake lock acquired")
+        }.onFailure { e ->
+            Log.e(TAG, "Failed to acquire wake lock", e)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching {
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            wakeLock = null
+            LiveEventLogger.log(LogType.LINK, "Partial wake lock released")
+        }.onFailure { e ->
+            Log.e(TAG, "Failed to release wake lock", e)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         _isServiceRunning.value = true
+        acquireWakeLock()
         registerNetworkCallback()
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -712,6 +742,7 @@ class BleGatewayService : Service() {
         _serviceError.value = null
         _usingCachedConfig.value = false
         scope.cancel()
+        releaseWakeLock()
         super.onDestroy()
     }
 
