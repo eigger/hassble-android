@@ -59,6 +59,12 @@ class BleRuntime(
     private val gatt: GattNotifySource,
     private val obd: Elm327Source,
     private val advertiser: BleAdvertiser? = null,
+    /** scan_on_request_only 프로필이 요청 동안만 쓰는 보조 스캐너(메인 스캔과 분리된 인스턴스). */
+    private val requestScanner: AdvertisementScanner? = null,
+    /** 숨은 상태에서 새로 시작한 스캔이 결과를 받을 수 있는가(백그라운드 위치 "항상 허용"). 아니면 상시 수신으로 되돌린다. */
+    private val canScanInBackground: () -> Boolean = { true },
+    /** 상시 wakelock 없이도 주어진 시간 동안 CPU가 깨어 있게 해 달라는 요청(요청 스캔의 종료 타이머용). */
+    private val keepAwakeFor: (Long) -> Unit = {},
     private val onDiscoveredAdvChanged: (List<DiscoveredAdvInstance>) -> Unit = {},
     private val onSensorValuesChanged: (List<SensorLastValue>) -> Unit = {},
     private val onLinkDataReceived: (String, Long) -> Unit = { _, _ -> },
@@ -70,6 +76,10 @@ class BleRuntime(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private var scanJob: Job? = null
+    // scan_on_request_only 프로필별 요청 스캔. 요청이 끝나면(타임아웃·응답·수동 중단) 닫힌다.
+    private val requestScanJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    // 마지막 launchScan()이 상시 스캔에서 뺀 프로필. 권한이 중간에 바뀌어도 상시 스캔과 요청 스캔이 겹치지 않게 이 집합으로만 판정한다.
+    @Volatile private var requestOnlyIds: Set<String> = emptySet()
     private val deviceConnectionJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     private lateinit var config: GatewayConfig
@@ -455,6 +465,7 @@ class BleRuntime(
         deviceConnectionJobs[deviceId]?.cancel()
         deviceConnectionJobs.remove(deviceId)
         advertiser?.stop(deviceId, AdvertiseStopReason.Shutdown)
+        requestScanJobs.remove(deviceId)?.cancel()
 
         val d = devices[deviceId]
         if (d != null) {
@@ -589,7 +600,8 @@ class BleRuntime(
     }
 
     private fun launchScan() {
-        val adv = config.devices.filter { it.source == Source.advertisement }
+        requestOnlyIds = config.devices.filter { wantsRequestOnly(it) }.map { it.id }.toSet()
+        val adv = config.devices.filter { it.source == Source.advertisement && it.id !in requestOnlyIds }
         val waitMacs = ConnectionWaitMacs.of(config, boundDevices, autoConnectDisabledIds)
         lastWaitMacs = waitMacs
         if (adv.isNotEmpty() || waitMacs.isNotEmpty()) {
@@ -604,6 +616,46 @@ class BleRuntime(
             }
         }
         startPresenceWatcher()
+    }
+
+    /** 상시 스캔에서 빼고 요청 동안만 보조 스캔으로 받는 프로필인가. */
+    private fun wantsRequestOnly(d: DeviceConfig): Boolean =
+        d.source == Source.advertisement && d.advertise?.scanOnRequestOnly == true &&
+            requestScanner != null && canScanInBackground()
+
+    private fun isRequestOnly(d: DeviceConfig): Boolean = d.id in requestOnlyIds
+
+    private fun startRequestScan(d: DeviceConfig): Job? {
+        val rs = requestScanner ?: return null
+        val advConfig = d.advertise ?: return null
+        requestScanJobs.remove(d.id)?.cancel()
+        // 송신 timeout 뒤 응답이 늦게 오는 경우를 위한 여유.
+        val totalMs = parseDurationMs(advConfig.timeout, 15_000) + REQUEST_SCAN_GRACE_MS
+        // 종료 타이머(delay)가 CPU suspend에 밀려 보조 스캔이 켜진 채 남지 않게 끝날 때까지 깨워 둔다.
+        keepAwakeFor(totalMs + REQUEST_SCAN_TAIL_MS)
+        LiveEventLogger.log(LogType.LINK, "device=${d.id}: request-only scan started (${totalMs / 1000}s)")
+        val job = scope.launch {
+            try {
+                kotlinx.coroutines.withTimeoutOrNull(totalMs) {
+                    rs.scan(listOf(d), BleScanModeOption.LOW_LATENCY, false, emptySet()).collect { safeOnReading(it) }
+                }
+            } finally {
+                rs.stop()
+                LiveEventLogger.log(LogType.LINK, "device=${d.id}: request-only scan stopped")
+            }
+        }
+        requestScanJobs[d.id] = job
+        job.invokeOnCompletion { requestScanJobs.remove(d.id, job) }
+        return job
+    }
+
+    /** 요청 송신이 끝났을 때. 마지막 패킷(스캔 응답 등)을 받도록 잠깐 두었다가 닫는다. */
+    private fun endRequestScanSoon(job: Job?) {
+        job ?: return
+        scope.launch {
+            delay(REQUEST_SCAN_TAIL_MS)
+            job.cancel()
+        }
     }
 
     /**
@@ -657,6 +709,10 @@ class BleRuntime(
 
     private fun startPresenceWatcher() {
         presenceJob?.cancel()
+        presenceJob = null
+        // presence_timeout이 있는 광고 프로필이 없고 off로 돌릴 online 인스턴스도 없으면 10초 깨어날 이유가 없다.
+        if (config.devices.none { it.source == Source.advertisement && presenceTimeoutMs(it) > 0 } &&
+            advertisementPresence.values.none { it.online }) return
         presenceJob = scope.launch {
             while (isActive) {
                 delay(PRESENCE_TICK_MS)
@@ -937,6 +993,8 @@ class BleRuntime(
                 if (current != null) AdvertisePayload.nextCounter(current) else (advConfig.counterStart and 0xFF)
             }
         }
+        // 이 요청이 만든 스캔만 이 요청의 종료로 닫는다(송신 중 재요청 시 이전 세션의 onStopped가 새 스캔을 닫지 않게).
+        val requestScan = if (isRequestOnly(d)) startRequestScan(d) else null
         val started = advertiser?.start(
             deviceId = d.id,
             config = advConfig,
@@ -949,6 +1007,7 @@ class BleRuntime(
             },
             onStopped = { reason ->
                 publishAdvertisingState(d, false)
+                endRequestScanSoon(requestScan)
                 if (reason == AdvertiseStopReason.Timeout && d.source == Source.advertisement &&
                     !gotResponseSince(d, requestStartMs)
                 ) {
@@ -958,6 +1017,8 @@ class BleRuntime(
         ) ?: false
         if (started) {
             publishAdvertisingState(d, true)
+        } else {
+            requestScan?.cancel()
         }
     }
 
@@ -1008,6 +1069,8 @@ class BleRuntime(
         eventJob = null
         scanJob?.cancel()
         scanJob = null
+        requestScanJobs.values.forEach { it.cancel() }
+        requestScanJobs.clear()
         presenceJob?.cancel()
         presenceJob = null
         advertisementPresence.clear()
@@ -1193,6 +1256,8 @@ class BleRuntime(
 
     companion object {
         private const val PRESENCE_TICK_MS = 10_000L
+        private const val REQUEST_SCAN_GRACE_MS = 10_000L
+        private const val REQUEST_SCAN_TAIL_MS = 5_000L
         private const val UI_REFRESH_MS = 1_000L
         private const val COLLECTOR_RELAUNCH_DELAY_MS = 5_000L
     }

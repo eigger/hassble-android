@@ -173,6 +173,12 @@ data class AdvertiseConfig(
     @SerialName("payload_phases") val payloadPhases: List<AdvertisePayloadPhase> = emptyList(),
     /** 이 device의 match에 걸리는 광고를 수신하면 즉시 송신 중단. */
     @SerialName("stop_on_response") val stopOnResponse: Boolean = true,
+    /**
+     * true면 이 프로필의 수신 필터를 상시 스캔에서 빼고, 요청(송신)이 진행되는 동안에만 보조 스캔으로 받는다.
+     * 요청에만 응답하는 기기(주차 위치 등)의 배터리 절감용. 백그라운드 위치 "항상 허용"이 없으면
+     * 숨은 상태에서 시작한 스캔이 결과를 못 받으므로 상시 수신으로 되돌아간다.
+     */
+    @SerialName("scan_on_request_only") val scanOnRequestOnly: Boolean = false,
     val connectable: Boolean = false,
     val scannable: Boolean = true,
     @SerialName("include_device_name") val includeDeviceName: Boolean = false,
