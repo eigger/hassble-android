@@ -175,7 +175,7 @@ object ConfigValidator {
         }
 
         // ── 예약 키 / presence_timeout ─────────────────────────────────────────────
-        // 앱이 자동으로 붙이는 진단 엔티티(`{instance}_link_status`, `_connection`, `_auto_connect`, `_advertising`, `_advertisement`)와
+        // 앱이 자동으로 붙이는 진단 엔티티(`{instance}_link_status`, `_advertising`, `_advertisement`)와
         // 같은 uniqueId가 되는 센서/컨트롤 키는 HA에서 서로 덮어쓴다. 해당 키만 비활성(ERROR).
         run {
             val id = device.id
@@ -447,7 +447,7 @@ object ConfigValidator {
             add("advertisement")
             if (d.advertise != null) add("advertising")
         }
-        Source.gatt_notify, Source.obd -> setOf("link_status", "connection", "auto_connect")
+        Source.gatt_notify, Source.obd -> setOf("link_status")
     }
 
     fun computeEffectiveFingerprint(d: DeviceConfig, issues: List<ValidationIssue>): String {

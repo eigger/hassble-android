@@ -89,6 +89,6 @@ class PresenceTimeoutTest {
         assertEquals(setOf("advertisement"), ConfigValidator.reservedKeys(adv))
         val gatt = adv.copy(source = Source.gatt_notify, match = null,
             gatt = GattConfig(serviceUuid = "180F", notifyCharUuid = "2A19"))
-        assertEquals(setOf("link_status", "connection", "auto_connect"), ConfigValidator.reservedKeys(gatt))
+        assertEquals(setOf("link_status"), ConfigValidator.reservedKeys(gatt))
     }
 }

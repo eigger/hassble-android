@@ -71,8 +71,6 @@ class BleRuntime(
     private val onLinkStatus: (DeviceLinkStatus) -> Unit = {},
     private val onAdvCounterChanged: (String, Int) -> Unit = { _, _ -> },
     private val onAdvertisingChanged: (String, Boolean) -> Unit = { _, _ -> },
-    /** HA의 `{id}_auto_connect` 스위치 명령. 서비스가 설정 저장소에 쓰고, apply()가 새 값으로 다시 불린다. */
-    private val onSetAutoConnect: (String, Boolean) -> Unit = { _, _ -> },
     /** 처리 오류 로그가 남을 때(새 종류 첫 발생·반복 N회마다). 서비스가 알림의 오류 건수를 갱신한다. */
     private val onPipelineError: () -> Unit = {},
 ) {
@@ -388,23 +386,7 @@ class BleRuntime(
             ))
             val currentStatus = BleGatewayService.deviceLinkStatuses.value.firstOrNull { it.profileId == instanceId }
             val isConnected = currentStatus?.state == DeviceLinkState.Connected || currentStatus?.state == DeviceLinkState.Polling
-            ws.declareEntity(EntityMsg(
-                id = 0, uniqueId = LinkSwitches.connectionUid(instanceId), platform = "switch",
-                name = "Connection", device = ref,
-                icon = "mdi:bluetooth-connect",
-                entityCategory = "config"
-            ))
-            ws.declareEntity(EntityMsg(
-                id = 0, uniqueId = LinkSwitches.autoConnectUid(instanceId), platform = "switch",
-                name = "Auto Connect", device = ref,
-                icon = "mdi:bluetooth-audio",
-                entityCategory = "config"
-            ))
-            ws.sendStates(listOf(
-                "${instanceId}_link_status" to if (isConnected) "on" else "off",
-                LinkSwitches.connectionUid(instanceId) to if (LinkSwitches.isActive(currentStatus?.state)) "on" else "off",
-                LinkSwitches.autoConnectUid(instanceId) to if (instanceId !in autoConnectDisabledIds) "on" else "off",
-            ))
+            ws.sendStates(listOf("${instanceId}_link_status" to if (isConnected) "on" else "off"))
         }
 
         if (d.advertise != null) {
@@ -918,12 +900,6 @@ class BleRuntime(
         val cmd = json.decodeFromJsonElement(CommandPayload.serializer(), event)
         commandCount.incrementAndGet()
         lastCommandMs = System.currentTimeMillis()
-        if (controls[cmd.uniqueId] == null) {
-            LinkSwitches.parse(cmd.uniqueId)?.let { (deviceId, kind) ->
-                onLinkSwitchCommand(deviceId, kind, cmd.action)
-                return
-            }
-        }
         val (d, c) = controls[cmd.uniqueId] ?: run {
             // 예전엔 조용히 버렸다. HA 버튼을 눌렀는데 아무 일도 없을 때 여기서 걸렸는지 로그로 가릴 수 있게 한다.
             LiveEventLogger.log(LogType.LINK,
@@ -961,24 +937,6 @@ class BleRuntime(
                 Source.obd -> obd.write(d, hex)
                 else -> {}
             }
-        }
-    }
-
-    private fun onLinkSwitchCommand(deviceId: String, kind: LinkSwitches.Kind, action: String) {
-        val d = if (::config.isInitialized) devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } else null
-        if (d == null || (d.source != Source.obd && d.source != Source.gatt_notify)) {
-            LiveEventLogger.log(LogType.LINK, "HA command ignored: no connection device for $deviceId (kind=$kind, action=$action)")
-            return
-        }
-        val on = when (action) {
-            "turn_on" -> true
-            "turn_off" -> false
-            else -> return
-        }
-        LiveEventLogger.log(LogType.LINK, "HA command: device=$deviceId, $kind -> ${if (on) "on" else "off"}")
-        when (kind) {
-            LinkSwitches.Kind.Connection -> if (on) connectDevice(deviceId) else disconnectDevice(deviceId)
-            LinkSwitches.Kind.AutoConnect -> onSetAutoConnect(deviceId, on)
         }
     }
 
