@@ -114,6 +114,7 @@ class BleGatewayService : Service() {
     // link_status는 폴링마다(초 단위) onLinkStatus가 여러 번 호출되지만 값은 대부분 "on"으로
     // 동일하다. 실제로 값이 바뀔 때만 WS로 보내 불필요한 프레임 전송을 없앤다.
     private val lastSentLinkConnected = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val lastSentLinkActive = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     // Bluetooth OFF→ON은 스캔 세션을 콜백 없이 죽인다. ON에서 스캐너를 바로 다시 세운다.
     // OFF에서는 건드리지 않는다 — 스캐너가 ON을 기다리는 루프에 스스로 들어가고, 어차피 ON에서 갈아 끼운다.
@@ -160,7 +161,7 @@ class BleGatewayService : Service() {
     /** 상시 wakelock이 없을 때 수신 처리(WS 전송 포함)가 끝날 때까지 CPU를 잠깐 붙든다. */
     @Synchronized
     private fun pulseWakeLock(ms: Long = PULSE_WAKELOCK_MS) {
-        if (wakeLockHeld) return
+        // 상시 lock 보유 여부와 무관하게 독립으로 잡는다: 상시 lock이 중간에 풀려도 요청 스캔 구간은 계속 보호된다.
         runCatching {
             val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
             val wl = pulseLock ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HassBle::BlePulse")
@@ -198,7 +199,6 @@ class BleGatewayService : Service() {
                 }
             }
             wakeLockHeld = false
-            pulseLock?.let { if (it.isHeld) it.release() }
             LiveEventLogger.log(LogType.LINK, "Partial wake lock released")
         }.onFailure { e ->
             Log.e(TAG, "Failed to release wake lock", e)
@@ -572,6 +572,12 @@ class BleGatewayService : Service() {
                                     "${status.profileId}_link_status" to if (isConnected) "on" else "off",
                                 ))
                             }
+                            val isActive = dev.eigger.hassble.ble.LinkSwitches.isActive(status.state)
+                            if (lastSentLinkActive.put(status.profileId, isActive) != isActive) {
+                                client.sendStates(listOf(
+                                    dev.eigger.hassble.ble.LinkSwitches.connectionUid(status.profileId) to if (isActive) "on" else "off",
+                                ))
+                            }
                         }
                     }
                 }
@@ -602,6 +608,9 @@ class BleGatewayService : Service() {
                         }
                     },
                     onLinkStatus = onLinkStatus,
+                    onSetAutoConnect = { id, enabled ->
+                        scope.launch { repository.setAutoConnectDisabled(id, !enabled) }
+                    },
                     onAdvCounterChanged = { id, value ->
                         scope.launch { repository.saveAdvCounter(id, value) }
                     },
@@ -713,6 +722,7 @@ class BleGatewayService : Service() {
         BleScanHealth.reset()
         pendingEntityCleanupDeviceIds = emptySet()
         lastSentLinkConnected.clear()
+        lastSentLinkActive.clear()
         _isServiceRunning.value = false
         _serviceConnectionState.value = ConnectionState.Disconnected
         _connectionIssue.value = ConnectionIssue.None
@@ -723,6 +733,8 @@ class BleGatewayService : Service() {
         _serviceError.value = null
         _usingCachedConfig.value = false
         scope.cancel()
+        pulseLock?.let { if (it.isHeld) it.release() }
+        pulseUntilMs = 0L
         releaseWakeLock()
         super.onDestroy()
     }
