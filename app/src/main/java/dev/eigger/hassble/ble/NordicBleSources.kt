@@ -65,10 +65,10 @@ private val sharedScanStartTimesMutex = Mutex()
 private val sharedScanStartTimes = ArrayDeque<Long>()
 /** 권한/Bluetooth ON을 기다리는 동안의 재확인 주기. */
 private const val PREREQ_POLL_MS = 2_000L
-/** OBD 세션이 이만큼 연속으로 무응답이고 이 시간 동안 값이 없으면 시동 꺼짐으로 보고 연결을 끊는다. */
-private const val OBD_IDLE_MIN_BAD_POLLS = 6
+/** 활성 센서가 모두 실패했고 이 시간 동안 값이 없으면 시동 꺼짐으로 보고 연결을 끊는다. */
 private const val OBD_IDLE_MIN_QUIET_MS = 3 * 60_000L
 private const val OBD_IDLE_BACKOFF_MS = 5 * 60_000L
+private const val OBD_IDLE_BACKOFF_MAX_MS = 30 * 60_000L
 
 /**
  * 경로 A: 광고 passive scan.
@@ -707,6 +707,8 @@ class NordicElm327Source(
     private val rxBuffers = java.util.concurrent.ConcurrentHashMap<String, StringBuilder>()
 
     /** 세션 내내 값이 안 나와(시동 꺼짐 추정) 스스로 연결을 끊을 때 던진다. */
+    private val idleBackoffCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     private class ObdIdleException(message: String) : RuntimeException(message)
 
     private data class PollTarget(
@@ -746,12 +748,16 @@ class NordicElm327Source(
                     // 배터리를 쓰지 않도록 연결을 끊고 오래 쉰다. 쉬는 동안에도 메인 스캔 필터는 그대로다.
                     LiveEventLogger.log(
                         LogType.LINK,
-                        "device=${device.id}: ${e.message} — disconnecting, retrying in ${OBD_IDLE_BACKOFF_MS / 60_000}min",
+                        "device=${device.id}: ${e.message} — disconnecting",
                     )
                     onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = e.message))
                     teardown(device.id)
                     if (!autoReconnect) break
-                    delay(OBD_IDLE_BACKOFF_MS)
+                    // 5 → 10 → 20 → 30분. 값을 다시 받으면 처음부터.
+                    val n = idleBackoffCount.merge(device.id, 1, Int::plus) ?: 1
+                    val backoffMs = (OBD_IDLE_BACKOFF_MS shl (n - 1).coerceAtMost(3)).coerceAtMost(OBD_IDLE_BACKOFF_MAX_MS)
+                    LiveEventLogger.log(LogType.LINK, "device=${device.id}: OBD idle backoff #$n — waiting ${backoffMs / 60_000}min")
+                    delay(backoffMs)
                 } catch (e: Exception) {
                     Log.w(TAG, "OBD session ended for ${device.id}: ${e.message}")
                     LiveEventLogger.log(
@@ -858,7 +864,9 @@ class NordicElm327Source(
             var lastTxAtMs = 0L
             var collectIdx = 0
             // 연속 무응답 폴 수와 마지막으로 값을 받은(또는 준비된) 시각. 값이 한 번도 안 나오는 세션을 끊는 데 쓴다.
-            var badStreak = 0
+            // 마지막 정상값 이후 실패한 센서들. 활성 센서가 전부 한 번씩 실패했을 때만 시동 꺼짐으로 본다
+            // (지원 안 하는 PID 하나가 짧은 주기로 NO DATA를 내도 주행 중 연결을 끊지 않게).
+            val failedSinceGood = HashSet<String>()
             var lastGoodOrReadyMs = System.currentTimeMillis()
 
             try {
@@ -890,14 +898,15 @@ class NordicElm327Source(
                             // 무응답(NO DATA·타임아웃)인지, ECU가 명시적으로 거부한 것인지.
                             val negative = hex?.let { ObdResponseParser.explainNegativeResponse(it) }
                             if (hex == null || negative != null) {
-                                badStreak++
+                                failedSinceGood.add(key)
                                 val quietMs = System.currentTimeMillis() - lastGoodOrReadyMs
-                                if (badStreak >= OBD_IDLE_MIN_BAD_POLLS && quietMs >= OBD_IDLE_MIN_QUIET_MS) {
-                                    throw ObdIdleException("no OBD data for ${quietMs / 1000}s ($badStreak polls) — ignition likely off")
+                                if (failedSinceGood.size >= targets.size && quietMs >= OBD_IDLE_MIN_QUIET_MS) {
+                                    throw ObdIdleException("no OBD data for ${quietMs / 1000}s (all ${targets.size} sensors failed) — ignition likely off")
                                 }
                             } else {
-                                badStreak = 0
+                                failedSinceGood.clear()
                                 lastGoodOrReadyMs = System.currentTimeMillis()
+                                idleBackoffCount.remove(device.id)
                             }
                             when {
                                 hex == null -> LiveEventLogger.log(
