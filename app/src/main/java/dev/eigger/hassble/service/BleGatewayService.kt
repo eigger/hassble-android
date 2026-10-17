@@ -158,17 +158,24 @@ class BleGatewayService : Service() {
     }
 
     /** 상시 wakelock이 없을 때 수신 처리(WS 전송 포함)가 끝날 때까지 CPU를 잠깐 붙든다. */
-    private fun pulseWakeLock() {
+    @Synchronized
+    private fun pulseWakeLock(ms: Long = PULSE_WAKELOCK_MS) {
         if (wakeLockHeld) return
         runCatching {
             val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
             val wl = pulseLock ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HassBle::BlePulse")
                 .apply { setReferenceCounted(false) }.also { pulseLock = it }
-            wl.acquire(PULSE_WAKELOCK_MS)
+            // acquire(timeout)은 남은 시간을 덮어쓰므로, 더 긴 보유가 이미 있으면 짧은 펄스로 줄이지 않는다.
+            val until = android.os.SystemClock.elapsedRealtime() + ms
+            if (until > pulseUntilMs) {
+                pulseUntilMs = until
+                wl.acquire(ms)
+            }
         }
     }
 
     private var pulseLock: PowerManager.WakeLock? = null
+    private var pulseUntilMs = 0L
 
     private fun acquireWakeLock() {
         runCatching {
@@ -584,6 +591,7 @@ class BleGatewayService : Service() {
                     obdSource,
                     advertiser = advertiser,
                     requestScanner = dev.eigger.hassble.ble.NordicAdvertisementScanner(this@BleGatewayService, trackHealth = false),
+                    keepAwakeFor = { ms -> pulseWakeLock(ms) },
                     canScanInBackground = { dev.eigger.hassble.ble.PowerDiagnostics.hasBackgroundLocation(this@BleGatewayService) },
                     onDiscoveredAdvChanged = { _discoveredAdvInstances.value = it },
                     onSensorValuesChanged = { _sensorLastValues.value = it; pulseWakeLock() },

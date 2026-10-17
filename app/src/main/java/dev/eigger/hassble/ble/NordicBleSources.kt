@@ -61,6 +61,8 @@ private fun uuidFrom(str: String): UUID {
 }
 
 private const val TAG = "HassBleSources"
+private val sharedScanStartTimesMutex = Mutex()
+private val sharedScanStartTimes = ArrayDeque<Long>()
 /** 권한/Bluetooth ON을 기다리는 동안의 재확인 주기. */
 private const val PREREQ_POLL_MS = 2_000L
 
@@ -93,8 +95,9 @@ class NordicAdvertisementScanner(
 
     // Throttle guard: Android counts scan starts per-app (5 starts per 30s). 스캔 세션은 scan() 하나뿐이라
     // 재시작 루프가 이 한도를 넘지 않게 한다.
-    private val scanStartTimesMutex = Mutex()
-    private val scanStartTimes = ArrayDeque<Long>()
+    // OS 한도는 앱 전체 기준이라 요청형 보조 스캐너 인스턴스와 공유한다(companion).
+    private val scanStartTimesMutex get() = sharedScanStartTimesMutex
+    private val scanStartTimes get() = sharedScanStartTimes
 
     private suspend fun awaitScanThrottleSlot() {
         scanStartTimesMutex.withLock {
