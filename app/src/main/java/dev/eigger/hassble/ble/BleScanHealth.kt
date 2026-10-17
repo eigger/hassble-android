@@ -84,7 +84,9 @@ object ScanWatchdogPolicy {
     /** 진짜로 주변에 광고가 없는 곳(심야 주차장 등)에서 무한 재시작하지 않도록 유휴 재시작은 여기까지 늘린다. */
     const val IDLE_LIMIT_MAX_MS = 10 * 60_000L
     /** watchdog 점검 주기. */
-    const val TICK_MS = 5_000L
+    const val TICK_MS = 30_000L
+    /** 앱이 숨은 채 시작한 세션은 앱이 보이는 순간 빨리 갈아 끼워야 하므로 더 촘촘히 본다. */
+    const val FAST_TICK_MS = 5_000L
     /** stopScan() 후 startScan()까지 쉬는 시간 — 스택이 이전 세션을 정리할 여유. */
     const val RESTART_DELAY_MS = 1_000L
 

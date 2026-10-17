@@ -69,7 +69,11 @@ private const val PREREQ_POLL_MS = 2_000L
  * BleScanner(context).scan() 결과를 설정 필터(namePrefix, serviceDataUuid 등)와 대조하여
  * 매칭되는 기기의 페이로드 데이터를 추출하여 방출합니다.
  */
-class NordicAdvertisementScanner(private val context: Context) : AdvertisementScanner {
+class NordicAdvertisementScanner(
+    private val context: Context,
+    /** false면 BleScanHealth(메인 스캔 진단)를 건드리지 않는다. 요청형 보조 스캔용. */
+    private val trackHealth: Boolean = true,
+) : AdvertisementScanner {
     private val scanner by lazy { BleScanner(context) }
 
     // Simple cache to merge ADV_IND and SCAN_RSP data per MAC address.
@@ -196,7 +200,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
             var inactiveResultsThisSession = 0
             var stopReason = "flow ended"
             var failureCode: Int? = null
-            BleScanHealth.onScanStarted(sessionStartMs, scanFilters.size)
+            if (trackHealth) BleScanHealth.onScanStarted(sessionStartMs, scanFilters.size)
             LiveEventLogger.log(LogType.LINK, "BLE scan env: ${PowerDiagnostics.describe(context)}")
             LiveEventLogger.log(LogType.LINK,
                 "BLE scan start: session #${BleScanHealth.state.value.sessionCount}, mode=${scanMode.label}, " +
@@ -208,7 +212,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                     // 이 coroutineScope(=collect)를 통째로 취소한다. 예외는 아래 catch가 받는다.
                     val watchdog = launch {
                         while (isActive) {
-                            delay(ScanWatchdogPolicy.TICK_MS)
+                            delay(if (startedInactive) ScanWatchdogPolicy.FAST_TICK_MS else ScanWatchdogPolicy.TICK_MS)
                             val reason = ScanWatchdogPolicy.restartReason(
                                 nowMs = System.currentTimeMillis(),
                                 sessionStartMs = sessionStartMs,
@@ -252,7 +256,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                             resultCountThisSession++
                             result.device.address?.let { if (addressesThisSession.size < 50) addressesThisSession.add(it) }
                             if (!PowerDiagnostics.canStartScan(context)) inactiveResultsThisSession++
-                            BleScanHealth.onResult(now)
+                            if (trackHealth) BleScanHealth.onResult(now)
                             val deviceName = result.device.name ?: ""
                             val deviceAddress = result.device.address
                             if (normalizedWaitMacs.isNotEmpty() &&
@@ -370,7 +374,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                                     Log.d(TAG, "  MATCHED ${d.id} addr=$deviceAddress but $primaryField is null (mfr=$manufacturerHex)")
                                     continue
                                 }
-                                Log.i(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
+                                Log.d(TAG, "MATCHED ${d.id} addr=$deviceAddress mfr=${manufacturerHex?.take(16)} svc=${serviceDataHex?.take(16)}")
         
                                 emitDownstream(
                                     RawReading(
@@ -396,13 +400,13 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 Log.w(TAG, "BLE scanner flow ended, restarting...")
                 LiveEventLogger.log(LogType.LINK, "BLE scan stop: flow ended, restarting...")
             } catch (e: CancellationException) {
-                BleScanHealth.onScanStopped("cancelled")
+                if (trackHealth) BleScanHealth.onScanStopped("cancelled")
                 LiveEventLogger.log(LogType.LINK, "BLE scan stop: cancelled")
                 throw e
             } catch (e: DownstreamException) {
                 // 수신값 처리(collector) 쪽 예외는 스캐너 문제가 아니다. 여기서 삼키면 이후 모든 emit이
                 // 실패해 수신이 영구히 멈추므로 그대로 내보낸다. BleRuntime이 collector를 다시 띄운다.
-                BleScanHealth.onScanStopped("downstream error: ${e.cause}")
+                if (trackHealth) BleScanHealth.onScanStopped("downstream error: ${e.cause}")
                 LiveEventLogger.log(LogType.LINK, "BLE scan stop: reading handler failed (${e.cause}) — propagating")
                 throw e.cause
             } catch (e: ScanRestartRequest) {
@@ -420,7 +424,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 Log.e(TAG, "Error in BleScanner stream, restarting...", e)
                 LiveEventLogger.log(LogType.LINK, "BLE scan error: ${e.localizedMessage}, restarting...")
             }
-            BleScanHealth.onScanStopped(stopReason, failureCode)
+            if (trackHealth) BleScanHealth.onScanStopped(stopReason, failureCode)
             LiveEventLogger.log(LogType.LINK,
                 "BLE scan session ended: rawResults=$resultCountThisSession (inactive=$inactiveResultsThisSession), " +
                     "uniqueDevices=${addressesThisSession.size}, reason='$stopReason', ${PowerDiagnostics.describe(context)}")
@@ -459,7 +463,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 LiveEventLogger.log(LogType.LINK, "BLE scan blocked: permission not granted ($names) — waiting for permission")
                 loggedPermission = true
             }
-            BleScanHealth.onScanStopped("waiting for permission: $names")
+            if (trackHealth) BleScanHealth.onScanStopped("waiting for permission: $names")
             delay(PREREQ_POLL_MS)
         }
         if (loggedPermission) LiveEventLogger.log(LogType.LINK, "Scan permissions granted — resuming scan")
@@ -470,7 +474,7 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
                 LiveEventLogger.log(LogType.LINK, "BLE scan blocked: Bluetooth is off — waiting for it to turn on")
                 loggedBluetooth = true
             }
-            BleScanHealth.onScanStopped("waiting for Bluetooth ON")
+            if (trackHealth) BleScanHealth.onScanStopped("waiting for Bluetooth ON")
             delay(PREREQ_POLL_MS)
         }
         if (loggedBluetooth) LiveEventLogger.log(LogType.LINK, "Bluetooth is on — resuming scan")
@@ -529,8 +533,13 @@ class NordicAdvertisementScanner(private val context: Context) : AdvertisementSc
         return filters
     }
 
+    @Volatile private var lastCacheCleanupMs = 0L
+
     private fun cleanupOldCaches() {
         val now = System.currentTimeMillis()
+        // 결과마다 맵 전체를 훑지 않고 10초에 한 번만 정리한다(만료 기준은 60초).
+        if (now - lastCacheCleanupMs < 10_000L) return
+        lastCacheCleanupMs = now
         val expiredThreshold = 60_000L // 1 minute
         val expiredAddresses = cacheTimestamps.filter { now - it.value > expiredThreshold }.keys
         if (expiredAddresses.isNotEmpty()) {

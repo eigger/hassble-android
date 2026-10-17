@@ -83,6 +83,7 @@ devices:
   #     timeout: 15s                     # 이 시간 지나면 자동 송신 중단
   #     repeat_interval: 1s              # (선택) 이 주기로 payload 갱신 = counter 증가. payload_phases가 있으면 무시
   #     stop_on_response: true           # 06 응답 수신 시 즉시 송신 중단
+  #     scan_on_request_only: true       # (선택) 상시 스캔에서 빼고 요청 중에만 수신 → 배터리 절감. 백그라운드 위치 '항상 허용'이 없으면 자동으로 상시 수신
   #     connectable: false
   #     scannable: true
   #     # local_name: "APT SmartKey"     # Complete Local Name. 송신 중 이 이름으로 바꾸고, 종료·재시작 때 초기값으로 되돌림

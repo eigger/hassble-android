@@ -133,13 +133,50 @@ class BleGatewayService : Service() {
         }
     }
 
+    // 배터리 최적화 예외 앱은 Doze가 타이머·네트워크를 막지 않으므로 상시 wakelock이 필요 없다. 이때는
+    // GATT/OBD 연결이 살아 있는 동안만 잡고, 평소엔 수신 처리 순간에만 짧게 잡아 CPU가 deep sleep에 들게 한다.
+    // 최적화 대상 앱은 예전처럼 상시 유지한다(#84: Doze에서 타이머·WS 끊김 방지).
+    @Volatile private var wakeLockHeld = false
+    private var wakeLockDecided = false
+
+    private fun needsContinuousWakeLock(): Boolean {
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return true
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) return true
+        return _deviceLinkStatuses.value.any {
+            it.state == dev.eigger.hassble.ble.DeviceLinkState.Connecting ||
+                it.state == dev.eigger.hassble.ble.DeviceLinkState.Connected ||
+                it.state == dev.eigger.hassble.ble.DeviceLinkState.Polling
+        }
+    }
+
+    @Synchronized
+    private fun updateWakeLock() {
+        val wantHeld = needsContinuousWakeLock()
+        if (wakeLockDecided && wantHeld == wakeLockHeld) return
+        wakeLockDecided = true
+        if (wantHeld) acquireWakeLock() else releaseWakeLock()
+    }
+
+    /** 상시 wakelock이 없을 때 수신 처리(WS 전송 포함)가 끝날 때까지 CPU를 잠깐 붙든다. */
+    private fun pulseWakeLock() {
+        if (wakeLockHeld) return
+        runCatching {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            val wl = pulseLock ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HassBle::BlePulse")
+                .apply { setReferenceCounted(false) }.also { pulseLock = it }
+            wl.acquire(PULSE_WAKELOCK_MS)
+        }
+    }
+
+    private var pulseLock: PowerManager.WakeLock? = null
+
     private fun acquireWakeLock() {
         runCatching {
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HassBle::BleGatewayWakeLock").apply {
-                setReferenceCounted(false)
-                acquire()
-            }
+            val wl = wakeLock ?: powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HassBle::BleGatewayWakeLock")
+                .apply { setReferenceCounted(false) }.also { wakeLock = it }
+            if (!wl.isHeld) wl.acquire()
+            wakeLockHeld = true
             LiveEventLogger.log(LogType.LINK, "Partial wake lock acquired")
         }.onFailure { e ->
             Log.e(TAG, "Failed to acquire wake lock", e)
@@ -153,7 +190,8 @@ class BleGatewayService : Service() {
                     it.release()
                 }
             }
-            wakeLock = null
+            wakeLockHeld = false
+            pulseLock?.let { if (it.isHeld) it.release() }
             LiveEventLogger.log(LogType.LINK, "Partial wake lock released")
         }.onFailure { e ->
             Log.e(TAG, "Failed to release wake lock", e)
@@ -163,7 +201,7 @@ class BleGatewayService : Service() {
     override fun onCreate() {
         super.onCreate()
         _isServiceRunning.value = true
-        acquireWakeLock()
+        updateWakeLock()
         registerNetworkCallback()
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -516,6 +554,7 @@ class BleGatewayService : Service() {
                 val onLinkStatus: (DeviceLinkStatus) -> Unit = { status ->
                     _deviceLinkStatuses.value = _deviceLinkStatuses.value
                         .filter { it.profileId != status.profileId } + status
+                    updateWakeLock()
                     LiveEventLogger.log(LogType.LINK, "device=${status.profileId}, state=${status.state}")
                     ws?.let { client ->
                         if (client.connectionState.value == ConnectionState.Connected) {
@@ -544,8 +583,10 @@ class BleGatewayService : Service() {
                     gattSource,
                     obdSource,
                     advertiser = advertiser,
+                    requestScanner = dev.eigger.hassble.ble.NordicAdvertisementScanner(this@BleGatewayService, trackHealth = false),
+                    canScanInBackground = { dev.eigger.hassble.ble.PowerDiagnostics.hasBackgroundLocation(this@BleGatewayService) },
                     onDiscoveredAdvChanged = { _discoveredAdvInstances.value = it },
-                    onSensorValuesChanged = { _sensorLastValues.value = it },
+                    onSensorValuesChanged = { _sensorLastValues.value = it; pulseWakeLock() },
                     onLinkDataReceived = { profileId, ts ->
                         val cur = _deviceLinkStatuses.value.firstOrNull { it.profileId == profileId }
                         if (cur != null) {
@@ -781,6 +822,7 @@ class BleGatewayService : Service() {
         private const val TAG = "BleGatewayService"
         private const val CHANNEL_ID = "ble_gateway"
         private const val NOTIF_ID = 1
+        private const val PULSE_WAKELOCK_MS = 5_000L
         const val EXTRA_HA_URL = "ha_url"
         const val EXTRA_TOKEN = "token"
         const val EXTRA_REFRESH_TOKEN = "refresh_token"
