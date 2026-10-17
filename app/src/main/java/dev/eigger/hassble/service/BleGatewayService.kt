@@ -387,10 +387,11 @@ class BleGatewayService : Service() {
                                 "Refreshed HA entities for: ${done.joinToString()}")
                         }
                     }
-                    // 끊긴 동안 건너뛴 값 때문에 중복 제거 맵이 HA가 보는 값과 어긋나 있을 수 있다. 재선언이 현재 값을 다시 보낸다.
+                    runtime?.redeclareEntities(freshConnection = fresh)
+                    // 끊긴 동안 건너뛴 값 때문에 중복 제거 맵이 HA가 보는 값과 어긋나 있을 수 있다. 재선언이 현재 값을 보냈으니
+                    // 그 뒤에 비운다(먼저 비우면 그 사이 도착한 상태 변화가 재선언의 오래된 값에 덮인다). 최악은 같은 값을 한 번 더 보내는 것.
                     lastSentLinkConnected.clear()
                     lastSentLinkActive.clear()
-                    runtime?.redeclareEntities(freshConnection = fresh)
                     if (fresh) LiveEventLogger.log(LogType.LINK,
                         "Bridge entity re-declaration requested (runtime=${if (runtime != null) "ready" else "none"})")
                     // 성공적으로 선언 완료 → fingerprint 저장

@@ -236,6 +236,7 @@ class BleRuntime(
         val oldAutoConnectDisabledIds = this.lastAutoConnectDisabledIds
         val oldUnfilteredScan = this.lastUnfilteredScan
 
+        val oldIssues = validationIssues
         if (config != oldConfig) runConfigValidation(config)
 
         this.config = config
@@ -318,7 +319,10 @@ class BleRuntime(
             val oldEnabledKeys = oldEnabled.filter { it.startsWith("$deviceId/") }.toSet()
             val sensorsChanged = newEnabledKeys != oldEnabledKeys
 
-            val needsRestart = isNewDevice || configChanged || boundMacChanged || autoConnectChanged || sensorsChanged
+            // 다른 기기가 추가돼 이 기기의 키가 새로 충돌(예: 연결 스위치 uniqueId)하면 이미 등록된 filters/controls를 걷어 내야 한다.
+            val errorsChanged = ConfigValidator.errorKeys(validationIssues, deviceId) != ConfigValidator.errorKeys(oldIssues, deviceId)
+
+            val needsRestart = isNewDevice || configChanged || boundMacChanged || autoConnectChanged || sensorsChanged || errorsChanged
 
             if (needsRestart) {
                 // async HA cleanup이 진행 중인 device는 그 완료를 기다리지 않고 skip
