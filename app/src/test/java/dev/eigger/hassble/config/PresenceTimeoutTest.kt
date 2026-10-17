@@ -89,6 +89,19 @@ class PresenceTimeoutTest {
         assertEquals(setOf("advertisement"), ConfigValidator.reservedKeys(adv))
         val gatt = adv.copy(source = Source.gatt_notify, match = null,
             gatt = GattConfig(serviceUuid = "180F", notifyCharUuid = "2A19"))
-        assertEquals(setOf("link_status"), ConfigValidator.reservedKeys(gatt))
+        assertEquals(setOf("link_status", "connection", "auto_connect"), ConfigValidator.reservedKeys(gatt))
+    }
+
+    @Test
+    fun `sensor of another device colliding with a connection switch is an error`() {
+        val cfg = GatewayConfig(devices = listOf(
+            ObdDeviceBuilder.create("car", "Car", listOf("rpm")).let { d ->
+                d.copy(sensors = d.sensors + d.sensors.first().copy(key = "x_connection"))
+            },
+            ObdDeviceBuilder.create("car_x", "Car X", listOf("rpm")),
+        ))
+        val errors = ConfigValidator.validate(cfg).filter { it.level == ValidationLevel.ERROR }
+        assertTrue(errors.any { it.deviceId == "car" && it.sensorKey == "x_connection" })
+        assertTrue(errors.none { it.deviceId == "car_x" })
     }
 }
