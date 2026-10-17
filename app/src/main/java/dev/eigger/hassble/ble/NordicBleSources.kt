@@ -706,9 +706,10 @@ class NordicElm327Source(
     // ELM327 수신 버퍼. 명령을 보내기 직전에 비워야 앞 명령의 늦은 응답이 섞이지 않는다.
     private val rxBuffers = java.util.concurrent.ConcurrentHashMap<String, StringBuilder>()
 
-    /** 세션 내내 값이 안 나와(시동 꺼짐 추정) 스스로 연결을 끊을 때 던진다. */
+    /** 기기별 연속 idle 백오프 횟수. 값을 다시 받으면 초기화된다. */
     private val idleBackoffCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
+    /** 세션 내내 값이 안 나와(시동 꺼짐 추정) 스스로 연결을 끊을 때 던진다. */
     private class ObdIdleException(message: String) : RuntimeException(message)
 
     private data class PollTarget(
@@ -863,10 +864,11 @@ class NordicElm327Source(
             var currentPreCommands: List<String> = emptyList()
             var lastTxAtMs = 0L
             var collectIdx = 0
-            // 연속 무응답 폴 수와 마지막으로 값을 받은(또는 준비된) 시각. 값이 한 번도 안 나오는 세션을 끊는 데 쓴다.
+            // 마지막으로 값을 받은(또는 준비된) 시각. 값이 한 번도 안 나오는 세션을 끊는 데 쓴다.
             // 마지막 정상값 이후 실패한 센서들. 활성 센서가 전부 한 번씩 실패했을 때만 시동 꺼짐으로 본다
             // (지원 안 하는 PID 하나가 짧은 주기로 NO DATA를 내도 주행 중 연결을 끊지 않게).
             val failedSinceGood = HashSet<String>()
+            val targetKeyCount = targets.map { it.sensor.key }.toSet().size
             var lastGoodOrReadyMs = System.currentTimeMillis()
 
             try {
@@ -900,7 +902,7 @@ class NordicElm327Source(
                             if (hex == null || negative != null) {
                                 failedSinceGood.add(key)
                                 val quietMs = System.currentTimeMillis() - lastGoodOrReadyMs
-                                if (failedSinceGood.size >= targets.size && quietMs >= OBD_IDLE_MIN_QUIET_MS) {
+                                if (failedSinceGood.size >= targetKeyCount && quietMs >= OBD_IDLE_MIN_QUIET_MS) {
                                     throw ObdIdleException("no OBD data for ${quietMs / 1000}s (all ${targets.size} sensors failed) — ignition likely off")
                                 }
                             } else {
