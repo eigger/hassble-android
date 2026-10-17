@@ -50,6 +50,33 @@ object ConfigValidator {
         for (device in config.devices) {
             issues += validateDevice(device, config.defaults.publish)
         }
+        issues += validateLinkSwitchCollisions(config)
+        return issues
+    }
+
+    /**
+     * 다른 기기의 센서/컨트롤 uniqueId(`{기기 id}_{key}`)가 연결 기기의 자동 스위치
+     * (`{id}_connection`, `{id}_auto_connect`)와 같으면 HA에서 한 엔티티로 합쳐지고 명령도 엉뚱한 곳으로 간다.
+     */
+    private fun validateLinkSwitchCollisions(config: GatewayConfig): List<ValidationIssue> {
+        val switchUids = config.devices
+            .filter { it.source == Source.obd || it.source == Source.gatt_notify }
+            .flatMap { listOf(it.id + "_connection", it.id + "_auto_connect") }
+            .toSet()
+        if (switchUids.isEmpty()) return emptyList()
+        val issues = mutableListOf<ValidationIssue>()
+        for (d in config.devices) {
+            for (s in d.sensors) {
+                if ("${d.id}_${s.key}" in switchUids) issues += ValidationIssue(ValidationLevel.ERROR, d.id, s.key,
+                    "sensor key '${s.key}' collides with another device's connection switch entity",
+                    sensorPath(d.id, s.key, "key"))
+            }
+            for (c in d.controls) {
+                if ("${d.id}_${c.key}" in switchUids) issues += ValidationIssue(ValidationLevel.ERROR, d.id, c.key,
+                    "control key '${c.key}' collides with another device's connection switch entity",
+                    controlPath(d.id, c.key, "key"))
+            }
+        }
         return issues
     }
 

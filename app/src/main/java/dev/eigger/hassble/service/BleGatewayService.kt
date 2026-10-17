@@ -387,6 +387,9 @@ class BleGatewayService : Service() {
                                 "Refreshed HA entities for: ${done.joinToString()}")
                         }
                     }
+                    // 끊긴 동안 건너뛴 값 때문에 중복 제거 맵이 HA가 보는 값과 어긋나 있을 수 있다. 재선언이 현재 값을 다시 보낸다.
+                    lastSentLinkConnected.clear()
+                    lastSentLinkActive.clear()
                     runtime?.redeclareEntities(freshConnection = fresh)
                     if (fresh) LiveEventLogger.log(LogType.LINK,
                         "Bridge entity re-declaration requested (runtime=${if (runtime != null) "ready" else "none"})")
