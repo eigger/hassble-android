@@ -258,13 +258,6 @@ class HaWsClient(
         }
     }
 
-    suspend fun removeEntity(uniqueId: String, mode: HaRemoveMode = HaRemoveMode.EXACT): JsonObject? {
-        if (_connectionState.value != ConnectionState.Connected) return null
-        return sendRequest("$WS_DOMAIN/remove") {
-            put("unique_id", uniqueId)
-            if (mode != HaRemoveMode.EXACT) put("mode", mode.wireName)
-        }
-    }
 
     suspend fun removeGateway(): JsonObject? {
         if (_connectionState.value != ConnectionState.Connected) return null
