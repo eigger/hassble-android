@@ -404,9 +404,6 @@ class BleGatewayService : Service() {
                     if (fresh) LiveEventLogger.log(LogType.LINK, "Bridge connected: re-declaring gateway and device entities")
                     declareGatewayEntities(client)
                     publishGatewayStates(client)
-                    // 1.7.3~1.8.1-beta2가 등록해 둔 "Restart BLE" 버튼은 제거됐다. HA에 남아 "사용 불가"로 보이거나
-                    // 눌러도 무시되지 않게 지운다(없으면 무시되는 호출).
-                    runCatching { client.removeEntity("${gatewayId()}_restart_ble") }
                     val repository = HassSettingsRepository(this@BleGatewayService)
                     val pendingFromStore = repository.consumePendingHaRemovals()
                     // 선언 내용이 바뀐 device의 HA 엔티티를 먼저 제거 후 재선언
