@@ -258,7 +258,6 @@ class HaWsClient(
         }
     }
 
-
     suspend fun removeGateway(): JsonObject? {
         if (_connectionState.value != ConnectionState.Connected) return null
         return sendRequest("$WS_DOMAIN/remove")
