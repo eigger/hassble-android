@@ -1235,6 +1235,14 @@ private fun GatewayTabContent(
                         modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                     )
                 }
+                if (urlError == null && urlInput.trim().startsWith("http://", ignoreCase = true) && urlInput.trim().length > "http://".length) {
+                    Text(
+                        text = stringResource(R.string.ha_url_http_warning),
+                        color = Color(0xFFFFB74D),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                    )
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 HassPrimaryButton(
                     text = stringResource(R.string.oauth_login_btn),
