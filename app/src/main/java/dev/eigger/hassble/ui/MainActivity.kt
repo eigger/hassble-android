@@ -330,6 +330,10 @@ private fun HomeScreen() {
         delay(1000)
         if (urlInput.isNotBlank()) {
             var correctedUrl = urlInput.trim()
+            if (correctedUrl.equals("https://", ignoreCase = true) || correctedUrl.equals("http://", ignoreCase = true)) {
+                correctedUrl = correctedUrl.lowercase()
+                if (correctedUrl != urlInput) urlInput = correctedUrl
+            }
             if (!correctedUrl.equals("https://", ignoreCase = true) && !correctedUrl.equals("http://", ignoreCase = true)) {
                 if (!correctedUrl.startsWith("http://", ignoreCase = true) && !correctedUrl.startsWith("https://", ignoreCase = true)) {
                     correctedUrl = "http://$correctedUrl"
