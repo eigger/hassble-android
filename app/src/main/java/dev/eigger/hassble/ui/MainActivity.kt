@@ -221,7 +221,7 @@ class MainActivity : ComponentActivity() {
                     }
                     repository.clearHaAuthState()
                     val haUrl = repository.haUrl.first()
-                    if (haUrl.isNotBlank() && haUrl != "https://") {
+                    if (haUrl.isNotBlank() && haUrl != "https://" && haUrl != "http://") {
                         Toast.makeText(applicationContext, getString(R.string.oauth_fetching_token_toast), Toast.LENGTH_SHORT).show()
                         val result = withContext(Dispatchers.IO) {
                             dev.eigger.hassble.net.HaAuthHelper.exchangeCodeForTokens(haUrl, code)
@@ -330,9 +330,17 @@ private fun HomeScreen() {
         delay(1000)
         if (urlInput.isNotBlank()) {
             var correctedUrl = urlInput.trim()
-            if (correctedUrl != "https://" && correctedUrl != "http://") {
-                if (!correctedUrl.startsWith("http://") && !correctedUrl.startsWith("https://")) {
+            if (correctedUrl.equals("https://", ignoreCase = true) || correctedUrl.equals("http://", ignoreCase = true)) {
+                correctedUrl = correctedUrl.lowercase()
+                if (correctedUrl != urlInput) urlInput = correctedUrl
+            }
+            if (!correctedUrl.equals("https://", ignoreCase = true) && !correctedUrl.equals("http://", ignoreCase = true)) {
+                if (!correctedUrl.startsWith("http://", ignoreCase = true) && !correctedUrl.startsWith("https://", ignoreCase = true)) {
                     correctedUrl = "http://$correctedUrl"
+                } else {
+                    // 모바일 키보드 자동 대문자(Http://) 등 스킴을 소문자로 정규화
+                    val schemeEnd = correctedUrl.indexOf("://")
+                    correctedUrl = correctedUrl.substring(0, schemeEnd).lowercase() + correctedUrl.substring(schemeEnd)
                 }
                 if (correctedUrl.endsWith("/")) {
                     correctedUrl = correctedUrl.trimEnd('/')
@@ -1231,6 +1239,14 @@ private fun GatewayTabContent(
                     Text(
                         text = it,
                         color = MaterialTheme.colorScheme.error,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                    )
+                }
+                if (validateHaUrl(context, urlInput.trim()) == null && urlInput.trim().startsWith("http://", ignoreCase = true) && urlInput.trim().length > "http://".length) {
+                    Text(
+                        text = stringResource(R.string.ha_url_http_warning),
+                        color = Color(0xFFFFB74D),
                         fontSize = 11.sp,
                         modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                     )
@@ -3415,7 +3431,7 @@ private fun saveLogsToDownloads(context: Context, logs: List<LogEntry>) {
 
 private fun validateHaUrl(context: Context, url: String): String? {
     if (url.isBlank() || url == "https://" || url == "http://") return null
-    val regex = "^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$".toRegex()
+    val regex = "^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$".toRegex(RegexOption.IGNORE_CASE)
     if (!regex.matches(url)) {
         return context.getString(R.string.invalid_url_format_error)
     }

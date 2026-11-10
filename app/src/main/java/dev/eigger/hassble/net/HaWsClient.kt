@@ -123,7 +123,7 @@ class HaWsClient(
 
         val gen = connectGen.incrementAndGet()
         try {
-            val protocol = if (baseUrl.startsWith("https")) "wss" else "ws"
+            val protocol = if (baseUrl.trim().startsWith("https", ignoreCase = true)) "wss" else "ws"
             val cleanUrl = baseUrl.substringAfter("://").trimEnd('/')
             val url = "$protocol://$cleanUrl/api/websocket"
 

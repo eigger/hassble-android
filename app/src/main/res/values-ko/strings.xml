@@ -307,6 +307,7 @@
     <string name="config_not_set_toast">센서 탭에서 설정 저장소를 먼저 지정해 주세요.</string>
     <string name="test_connection_oauth_hint">OAuth 활성 — 로그인 시 연결이 확인되었습니다.</string>
     <string name="git_private_repo_checkbox">Private 저장소 사용 (Github Token 입력)</string>
+    <string name="ha_url_http_warning">HTTP는 암호화되지 않습니다. VPN이나 사설망에서만 사용하세요. 액세스 토큰이 평문으로 전송됩니다.</string>
     <string name="invalid_url_format_error">올바른 URL 형식(예: http://192.168.1.100:8123)이 아닙니다.</string>
     <string name="validate_url_required_msg">HA URL이 설정되어 있지 않습니다.</string>
     <string name="time_no_record">기록 없음</string>

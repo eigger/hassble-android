@@ -41,6 +41,7 @@
     <application
         android:name=".HassBleApp"
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
         android:label="HassBle"
         android:supportsRtl="true"

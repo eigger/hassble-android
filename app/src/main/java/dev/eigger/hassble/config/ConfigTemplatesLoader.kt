@@ -49,7 +49,7 @@ class ConfigTemplatesLoader(
             runCatching {
                 val cacheFile = cacheFileFor(templatesUrl)
                 val req = Request.Builder().url(templatesUrl).apply {
-                    if (token != null) header("Authorization", "Bearer $token")
+                    if (token != null && ConfigLoader.isHttpsUrl(templatesUrl)) header("Authorization", "Bearer $token")
                 }.build()
                 http.newCall(req).execute().use { resp ->
                     check(resp.isSuccessful) { "HTTP ${resp.code}" }
