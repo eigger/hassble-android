@@ -353,7 +353,7 @@ class BleGatewayService : Service() {
             val repository = HassSettingsRepository(applicationContext)
             val haUrl = repository.haUrl.first()
             val token = repository.haToken.first()
-            if (haUrl.isBlank() || haUrl == "https://" || token.isBlank()) {
+            if (haUrl.isBlank() || haUrl == "https://" || haUrl == "http://" || token.isBlank()) {
                 LiveEventLogger.logRes(LogType.LINK, R.string.log_service_sticky_restart_no_settings)
                 stopSelf(startId)
                 return@launch

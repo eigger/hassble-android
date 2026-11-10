@@ -27,7 +27,7 @@ class ConfigLoader(
             runCatching {
                 val cacheFile = cacheFileFor(normalizedUrl)
                 val req = Request.Builder().url(normalizedUrl).apply {
-                    if (token != null) header("Authorization", "Bearer $token")
+                    if (token != null && isHttpsUrl(normalizedUrl)) header("Authorization", "Bearer $token")
                 }.build()
                 http.newCall(req).execute().use { resp ->
                     check(resp.isSuccessful) { "HTTP ${resp.code}" }
@@ -124,6 +124,8 @@ class ConfigLoader(
         name.endsWith(".yaml", ignoreCase = true) || name.endsWith(".yml", ignoreCase = true)
 
     companion object {
+        fun isHttpsUrl(url: String): Boolean = url.trim().startsWith("https://", ignoreCase = true)
+
         val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)

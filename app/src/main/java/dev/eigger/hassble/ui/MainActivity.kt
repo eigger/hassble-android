@@ -221,7 +221,7 @@ class MainActivity : ComponentActivity() {
                     }
                     repository.clearHaAuthState()
                     val haUrl = repository.haUrl.first()
-                    if (haUrl.isNotBlank() && haUrl != "https://") {
+                    if (haUrl.isNotBlank() && haUrl != "https://" && haUrl != "http://") {
                         Toast.makeText(applicationContext, getString(R.string.oauth_fetching_token_toast), Toast.LENGTH_SHORT).show()
                         val result = withContext(Dispatchers.IO) {
                             dev.eigger.hassble.net.HaAuthHelper.exchangeCodeForTokens(haUrl, code)
@@ -331,8 +331,12 @@ private fun HomeScreen() {
         if (urlInput.isNotBlank()) {
             var correctedUrl = urlInput.trim()
             if (correctedUrl != "https://" && correctedUrl != "http://") {
-                if (!correctedUrl.startsWith("http://") && !correctedUrl.startsWith("https://")) {
+                if (!correctedUrl.startsWith("http://", ignoreCase = true) && !correctedUrl.startsWith("https://", ignoreCase = true)) {
                     correctedUrl = "http://$correctedUrl"
+                } else {
+                    // 모바일 키보드 자동 대문자(Http://) 등 스킴을 소문자로 정규화
+                    val schemeEnd = correctedUrl.indexOf("://")
+                    correctedUrl = correctedUrl.substring(0, schemeEnd).lowercase() + correctedUrl.substring(schemeEnd)
                 }
                 if (correctedUrl.endsWith("/")) {
                     correctedUrl = correctedUrl.trimEnd('/')
@@ -3423,7 +3427,7 @@ private fun saveLogsToDownloads(context: Context, logs: List<LogEntry>) {
 
 private fun validateHaUrl(context: Context, url: String): String? {
     if (url.isBlank() || url == "https://" || url == "http://") return null
-    val regex = "^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$".toRegex()
+    val regex = "^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$".toRegex(RegexOption.IGNORE_CASE)
     if (!regex.matches(url)) {
         return context.getString(R.string.invalid_url_format_error)
     }
