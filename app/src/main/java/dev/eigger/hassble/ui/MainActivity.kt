@@ -330,7 +330,7 @@ private fun HomeScreen() {
         delay(1000)
         if (urlInput.isNotBlank()) {
             var correctedUrl = urlInput.trim()
-            if (correctedUrl != "https://" && correctedUrl != "http://") {
+            if (!correctedUrl.equals("https://", ignoreCase = true) && !correctedUrl.equals("http://", ignoreCase = true)) {
                 if (!correctedUrl.startsWith("http://", ignoreCase = true) && !correctedUrl.startsWith("https://", ignoreCase = true)) {
                     correctedUrl = "http://$correctedUrl"
                 } else {
@@ -1239,7 +1239,7 @@ private fun GatewayTabContent(
                         modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                     )
                 }
-                if (urlError == null && urlInput.trim().startsWith("http://", ignoreCase = true) && urlInput.trim().length > "http://".length) {
+                if (validateHaUrl(context, urlInput.trim()) == null && urlInput.trim().startsWith("http://", ignoreCase = true) && urlInput.trim().length > "http://".length) {
                     Text(
                         text = stringResource(R.string.ha_url_http_warning),
                         color = Color(0xFFFFB74D),
