@@ -55,7 +55,7 @@ object HaAuthHelper {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorBody = response.body?.string()
-                    throw IOException("HTTP ${response.code}: $errorBody")
+                    throw IOException("HTTP ${response.code}: ${errorBody?.let(LogRedactor::redact)}")
                 }
                 val bodyStr = response.body?.string() ?: throw IOException("Empty response body")
                 val jsonObj = json.parseToJsonElement(bodyStr).jsonObject
@@ -97,7 +97,7 @@ object HaAuthHelper {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorBody = response.body?.string()
-                    throw IOException("HTTP ${response.code}: $errorBody")
+                    throw IOException("HTTP ${response.code}: ${errorBody?.let(LogRedactor::redact)}")
                 }
                 val bodyStr = response.body?.string() ?: throw IOException("Empty response body")
                 val jsonObj = json.parseToJsonElement(bodyStr).jsonObject

@@ -327,7 +327,7 @@ class HaWsClient(
                     "WS: send failed (socket ${if (ws == null) "null" else "closing"}, state=${_connectionState.value}) — total failed: $failed")
             }
         }
-        LiveEventLogger.log(LogType.TX, "WS: $text")
+        LiveEventLogger.log(LogType.TX, "WS: ${LogRedactor.redact(text)}")
     }
 
     private fun flushPendingMessages() {
@@ -500,7 +500,7 @@ class HaWsClient(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (!isCurrent()) return
-            LiveEventLogger.log(LogType.RX, "WS: $text")
+            LiveEventLogger.log(LogType.RX, "WS: ${LogRedactor.redact(text)}")
             val msg = json.parseToJsonElement(text).jsonObject
             when (msg["type"]?.jsonPrimitive?.content) {
                 "auth_required" -> send(buildJsonObject {
