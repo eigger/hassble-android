@@ -19,3 +19,11 @@ internal fun isPollFinished(status: DeviceLinkStatus?, previous: DeviceLinkStatu
         else -> false
     }
 }
+
+/** POLL_DEVICE 요청 하나의 결과. [accepted]=false면 연결 요청 자체가 거절됨, [finished]=false면 시간 초과. */
+internal data class PollOutcome(
+    val deviceId: String,
+    val requestedAtMs: Long,
+    val accepted: Boolean,
+    val finished: Boolean,
+)

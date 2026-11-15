@@ -366,4 +366,22 @@
     <string name="github_error_404">Not Found: Repository or branch not found. Check repository path.</string>
     <string name="github_error_generic">GitHub API Error: HTTP %1$d</string>
     <string name="github_error_network">Network error: Check your internet connection.</string>
+    <string name="tasker_edit_title">HassBle action</string>
+    <string name="tasker_command">Command</string>
+    <string name="tasker_cmd_start">Start gateway</string>
+    <string name="tasker_cmd_stop">Stop gateway</string>
+    <string name="tasker_cmd_scan_mode">Set scan mode</string>
+    <string name="tasker_cmd_poll">Poll</string>
+    <string name="tasker_cmd_poll_option">Poll device</string>
+    <string name="tasker_scan_mode">Scan mode</string>
+    <string name="tasker_device">Device ID</string>
+    <string name="tasker_device_pick">Pick a device from the loaded config</string>
+    <string name="tasker_device_no_config">No config loaded yet. Open the app once so the device list is cached, or type the device id.</string>
+    <string name="tasker_device_required">Enter a device id.</string>
+    <string name="tasker_stop_after">Stop gateway after poll</string>
+    <string name="tasker_blurb_stop_after">stop after</string>
+    <string name="tasker_automation_off">Automation is off, so this action is ignored until you allow automation apps.</string>
+    <string name="tasker_enable_automation">Allow automation apps</string>
+    <string name="tasker_save">Save</string>
+    <string name="tasker_wait_note">Turn on \"Wait for completion\" in Tasker to continue only after the gateway is ready or the poll has finished.</string>
 </resources>

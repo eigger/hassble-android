@@ -179,21 +179,7 @@ class MainActivity : ComponentActivity() {
         BluetoothAdapterNameGuard.resetToInitial(this)
         handleDeepLink(intent)
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = Color(0xFF9E86FF),
-                    onPrimary = Color.Black,
-                    secondary = Color(0xFF00E676),
-                    background = Color(0xFF121214),
-                    surface = Color(0xFF1E1E22),
-                    error = Color(0xFFFF5252)
-                ),
-                shapes = Shapes(
-                    small = HassBleShapes.Button,
-                    medium = HassBleShapes.ButtonLarge,
-                    large = HassBleShapes.CardLarge,
-                ),
-            ) {
+            HassBleTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     HomeScreen()
                 }
