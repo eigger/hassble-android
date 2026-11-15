@@ -18,7 +18,7 @@ object LinkSwitches {
     /** 연결을 시도 중이거나 붙어 있으면 true. */
     fun isActive(state: DeviceLinkState?): Boolean = when (state) {
         DeviceLinkState.Connecting, DeviceLinkState.Scanning,
-        DeviceLinkState.Connected, DeviceLinkState.Polling -> true
+        DeviceLinkState.Connected, DeviceLinkState.Polling, DeviceLinkState.Idle -> true
         DeviceLinkState.Disconnected, DeviceLinkState.Error, null -> false
     }
 

@@ -1,5 +1,6 @@
 package dev.eigger.hassble.service
 
+import dev.eigger.hassble.ble.isLinkUp
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -146,7 +147,9 @@ class BleGatewayService : Service() {
         return _deviceLinkStatuses.value.any {
             it.state == dev.eigger.hassble.ble.DeviceLinkState.Connecting ||
                 it.state == dev.eigger.hassble.ble.DeviceLinkState.Connected ||
-                it.state == dev.eigger.hassble.ble.DeviceLinkState.Polling
+                it.state == dev.eigger.hassble.ble.DeviceLinkState.Polling ||
+                // poll 대기 중에도 다음 주기 타이머(delay)가 CPU 슬립에 밀리지 않게 유지한다.
+                it.state == dev.eigger.hassble.ble.DeviceLinkState.Idle
         }
     }
 
@@ -566,7 +569,7 @@ class BleGatewayService : Service() {
                     LiveEventLogger.log(LogType.LINK, "device=${status.profileId}, state=${status.state}")
                     ws?.let { client ->
                         if (client.connectionState.value == ConnectionState.Connected) {
-                            val isConnected = status.state == dev.eigger.hassble.ble.DeviceLinkState.Connected || status.state == dev.eigger.hassble.ble.DeviceLinkState.Polling
+                            val isConnected = status.state.isLinkUp()
                             val previous = lastSentLinkConnected.put(status.profileId, isConnected)
                             if (previous != isConnected) {
                                 client.sendStates(listOf(

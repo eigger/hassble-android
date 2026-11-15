@@ -63,3 +63,113 @@ templates:
         - { key: speed, preset: speed, update_interval: 1s }
         - { key: coolant_temp, preset: coolant_temp, update_interval: 10s }
         - { key: fuel_level, preset: fuel_level, update_interval: 30s }
+
+  - id: ancel_bm7
+    name: "Ancel BM300 Pro / BM7 battery monitor"
+    description: "Encrypted GATT battery monitor (polled every 60s) — voltage, temperature, SoC, state. Bind the device in the app scan dialog"
+    device:
+      id: ancel_bm7
+      name: "BM300 Pro"
+      source: gatt_notify
+      # 바인딩 스캔 목록 필터 전용 (참조 HA 통합 manifest의 iBeacon 매처: Apple 0x004C, UUID 3BA29CD9-A42C-8948-56BA-DAF2606EF777)
+      match:
+        manufacturer_id: 76
+        manufacturer_hex_prefix: "02153BA29CD9A42C894856BADAF2606EF777"
+      gatt:
+        service_uuid: "fff0"
+        notify_char_uuid: "fff4"
+        write_char_uuid: "fff3"
+        encryption:
+          type: aes128_cbc
+          key_hex: "6c656167656e64fffe30313030303040"
+        poll:
+          command: "d1550700000000000000000000000000"
+          interval: 60s
+          write_with_response: true
+          response_timeout: 10s
+        response_prefix: "d1550700"
+      sensors:
+        - key: voltage
+          device_class: voltage
+          unit: "V"
+          state_class: measurement
+          accuracy_decimals: 2
+          min_length: 9
+          decode: { offset: 7, length: 2, type: uint16, endian: big, scale: 0.01 }
+        - key: temperature
+          device_class: temperature
+          unit: "°C"
+          state_class: measurement
+          accuracy_decimals: 0
+          min_length: 9
+          formula: "(1-2*d)*e"   # d=부호 바이트(1=음수), e=크기(°C)
+        - key: battery
+          device_class: battery
+          unit: "%"
+          state_class: measurement
+          min_length: 9
+          decode: { offset: 6, length: 1, type: uint8 }
+        - key: state
+          platform: text_sensor
+          icon: mdi:car-battery
+          min_length: 9
+          decode:
+            offset: 5
+            length: 1
+            type: uint8
+            map: { "0": normal, "1": low_voltage, "2": charging }
+
+  - id: ancel_bm6
+    name: "Ancel BM6 battery monitor"
+    description: "Encrypted GATT battery monitor (polled every 60s) — voltage, temperature, SoC, state. Bind the device in the app scan dialog"
+    device:
+      id: ancel_bm6
+      name: "BM6"
+      source: gatt_notify
+      # 바인딩 스캔 목록 필터 전용 (참조 HA 통합 manifest의 iBeacon 매처: Apple 0x004C, UUID 3BA29CD9-A42C-8948-56BA-DAF2606EF777)
+      match:
+        manufacturer_id: 76
+        manufacturer_hex_prefix: "02153BA29CD9A42C894856BADAF2606EF777"
+      gatt:
+        service_uuid: "fff0"
+        notify_char_uuid: "fff4"
+        write_char_uuid: "fff3"
+        encryption:
+          type: aes128_cbc
+          key_hex: "6c656167656e64fffe30313030303039"
+        poll:
+          command: "d1550700000000000000000000000000"
+          interval: 60s
+          write_with_response: true
+          response_timeout: 10s
+        response_prefix: "d1550700"
+      sensors:
+        - key: voltage
+          device_class: voltage
+          unit: "V"
+          state_class: measurement
+          accuracy_decimals: 2
+          min_length: 9
+          decode: { offset: 7, length: 2, type: uint16, endian: big, scale: 0.01 }
+        - key: temperature
+          device_class: temperature
+          unit: "°C"
+          state_class: measurement
+          accuracy_decimals: 0
+          min_length: 9
+          formula: "(1-2*d)*e"   # d=부호 바이트(1=음수), e=크기(°C)
+        - key: battery
+          device_class: battery
+          unit: "%"
+          state_class: measurement
+          min_length: 9
+          decode: { offset: 6, length: 1, type: uint8 }
+        - key: state
+          platform: text_sensor
+          icon: mdi:car-battery
+          min_length: 9
+          decode:
+            offset: 5
+            length: 1
+            type: uint8
+            map: { "0": normal, "1": low_voltage, "2": charging }

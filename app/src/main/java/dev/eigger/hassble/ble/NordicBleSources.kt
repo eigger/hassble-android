@@ -607,6 +607,19 @@ class NordicGattNotifySource(
         val mac = device.gatt?.mac ?: return@flow
         val serviceUuidStr = device.gatt.serviceUuid
         val notifyCharUuidStr = device.gatt.notifyCharUuid
+        val encryption = device.gatt.encryption
+        val prefix = device.gatt.responsePrefix
+        val poll = device.gatt.poll
+        if (poll != null) {
+            try {
+                pollerFor(device, mac).run(waitForDevice, autoReconnect) { hex ->
+                    emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                }
+            } finally {
+                disconnect(device.id)
+            }
+            return@flow
+        }
 
         try {
             while (currentCoroutineContext().isActive) {
@@ -615,6 +628,7 @@ class NordicGattNotifySource(
                     // OBD 쪽과 같은 이유로 waitForDevice()도 try 안에 둔다.
                     // 스캔 실패가 while 밖으로 새면 자동 재연결이 영구히 멈춘다.
                     waitForDevice()
+
                     Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
                     onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
                     val client = ClientBleGatt.connect(context, mac, scope)
@@ -628,8 +642,14 @@ class NordicGattNotifySource(
                     if (characteristic != null) {
                         Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
                         characteristic.getNotifications().collect { bytes ->
+                            val plain = runCatching { GattCrypto.decryptIfNeeded(encryption, bytes.value) }.getOrNull()
+                            if (plain == null) {
+                                Log.w(TAG, "GATT ${device.id}: dropping undecryptable notify (${bytes.value.size} bytes)")
+                                return@collect
+                            }
+                            val hex = GattCrypto.bytesToHex(plain)
+                            if (!GattCrypto.matchesPrefix(hex, prefix)) return@collect
                             onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
-                            val hex = bytes.value.joinToString("") { String.format("%02X", it) }
                             emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
                         }
                         onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac))
@@ -660,20 +680,86 @@ class NordicGattNotifySource(
         }
     }
 
+    // poll 주기와 컨트롤 write가 같은 기기에 동시에 연결하지 않도록 기기별로 직렬화한다.
+    private val deviceLocks = ConcurrentHashMap<String, Mutex>()
+
+    private fun pollerFor(device: DeviceConfig, mac: String) = GattPoller(
+        deviceId = device.id,
+        mac = mac,
+        gatt = device.gatt!!,
+        link = NordicPollLink(device, mac),
+        lock = deviceLocks.getOrPut(device.id) { Mutex() },
+        onLinkStatus = onLinkStatus,
+        log = { Log.d(TAG, "GATT poll ${device.id}: $it") },
+    )
+
+    /** [GattPollLink]의 Nordic 구현. 열린 연결은 activeConnections에 올려 disconnect()로도 끊을 수 있게 한다. */
+    private inner class NordicPollLink(private val device: DeviceConfig, private val mac: String) : GattPollLink {
+        // BLUETOOTH_CONNECT: connect()와 같은 이유로 생략 (권한 철회는 주기 실패로 처리됨).
+        @SuppressLint("MissingPermission")
+        override suspend fun open(): GattPollSession {
+            val gatt = device.gatt!!
+            val writeCharUuid = gatt.writeCharUuid
+                ?: throw IllegalStateException("poll requires write_char_uuid")
+            Log.d(TAG, "Connecting to GATT device ${device.id} at $mac (poll)")
+            val client = ClientBleGatt.connect(context, mac, scope)
+            activeConnections[device.id] = client
+            try {
+                val service = client.discoverServices().findService(uuidFrom(gatt.serviceUuid))
+                    ?: throw IllegalStateException("Service ${gatt.serviceUuid} not found")
+                val notifyChar = service.findCharacteristic(uuidFrom(gatt.notifyCharUuid))
+                    ?: throw IllegalStateException("Notify characteristic ${gatt.notifyCharUuid} not found")
+                val writeChar = service.findCharacteristic(uuidFrom(writeCharUuid))
+                    ?: throw IllegalStateException("Write characteristic $writeCharUuid not found")
+                return object : GattPollSession {
+                    override suspend fun notifications(): Flow<ByteArray> =
+                        notifyChar.getNotifications().map { it.value }
+
+                    @SuppressLint("MissingPermission")
+                    override suspend fun write(bytes: ByteArray, withResponse: Boolean) {
+                        writeChar.write(
+                            DataByteArray(bytes),
+                            if (withResponse) BleWriteType.DEFAULT else BleWriteType.NO_RESPONSE,
+                        )
+                    }
+
+                    override fun close() {
+                        activeConnections.remove(device.id, client)
+                        client.disconnect()
+                    }
+                }
+            } catch (e: Throwable) {
+                activeConnections.remove(device.id, client)
+                client.disconnect()
+                throw e
+            }
+        }
+    }
+
     // BLUETOOTH_CONNECT is required for BluetoothGattCharacteristic.write() on API 31+, satisfied
     // the same way as connect() above; any revocation is caught below like any other write failure.
     @SuppressLint("MissingPermission")
     override suspend fun write(device: DeviceConfig, hex: String) {
-        val client = activeConnections[device.id] ?: return
-        val serviceUuidStr = device.gatt?.serviceUuid ?: return
-        val writeCharUuidStr = device.gatt.writeCharUuid ?: return
-        val bytes = hexToBytes(hex) ?: return
-
+        val gatt = device.gatt ?: return
+        val writeCharUuidStr = gatt.writeCharUuid ?: return
+        val plain = hexToBytes(hex) ?: return
         try {
-            val services = client.discoverServices()
-            val service = services.findService(uuidFrom(serviceUuidStr))
+            if (gatt.poll != null) {
+                // poll 기기는 주기 사이에 연결이 없다. 폴링과 겹치지 않게 잠근 뒤 1회 연결해서 쓰고 끊는다.
+                val mac = gatt.mac ?: return
+                pollerFor(device, mac).writeControl(plain)
+                return
+            }
+            val client = activeConnections[device.id] ?: return
+            val bytes = GattCrypto.encryptIfNeeded(gatt.encryption, plain)
+            val service = client.discoverServices().findService(uuidFrom(gatt.serviceUuid))
             val characteristic = service?.findCharacteristic(uuidFrom(writeCharUuidStr))
-            characteristic?.write(DataByteArray(bytes), BleWriteType.NO_RESPONSE)
+                ?: throw IllegalStateException("Write characteristic $writeCharUuidStr not found")
+            characteristic.write(DataByteArray(bytes), BleWriteType.NO_RESPONSE)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "GATT ${device.id}: control payload not encryptable: ${e.message}")
         } catch (e: Exception) {
             Log.e(TAG, "Error writing to GATT device ${device.id}", e)
         }

@@ -22,11 +22,21 @@ class LinkSwitchesTest {
 
     @Test
     fun `connection switch is on while connecting so automations can cancel`() {
-        for (s in listOf(DeviceLinkState.Scanning, DeviceLinkState.Connecting, DeviceLinkState.Connected, DeviceLinkState.Polling)) {
+        for (s in listOf(DeviceLinkState.Scanning, DeviceLinkState.Connecting, DeviceLinkState.Connected, DeviceLinkState.Polling, DeviceLinkState.Idle)) {
             assertTrue("$s", LinkSwitches.isActive(s))
         }
         for (s in listOf(DeviceLinkState.Disconnected, DeviceLinkState.Error, null)) {
             assertFalse("$s", LinkSwitches.isActive(s))
+        }
+    }
+
+    @Test
+    fun `link status is up while connected or idle between polls`() {
+        for (s in listOf(DeviceLinkState.Connected, DeviceLinkState.Polling, DeviceLinkState.Idle)) {
+            assertTrue("$s", s.isLinkUp())
+        }
+        for (s in listOf(DeviceLinkState.Scanning, DeviceLinkState.Connecting, DeviceLinkState.Disconnected, DeviceLinkState.Error, null)) {
+            assertFalse("$s", s.isLinkUp())
         }
     }
 }

@@ -391,7 +391,7 @@ class BleRuntime(
                 entityCategory = "diagnostic"
             ))
             val currentStatus = BleGatewayService.deviceLinkStatuses.value.firstOrNull { it.profileId == instanceId }
-            val isConnected = currentStatus?.state == DeviceLinkState.Connected || currentStatus?.state == DeviceLinkState.Polling
+            val isConnected = currentStatus?.state.isLinkUp()
             ws.declareEntity(EntityMsg(
                 id = 0, uniqueId = LinkSwitches.connectionUid(instanceId), platform = "switch",
                 name = "Connection", device = ref,
@@ -868,14 +868,21 @@ class BleRuntime(
                 val bytes = Decoder.hexToBytes(r.rawHex) ?: return
                 onLinkDataReceived(d.id, System.currentTimeMillis())
                 for (s in d.sensors) {
-                    if (!isEnabled(d.id, s.key) || s.decode == null) continue
+                    if (!isEnabled(d.id, s.key) || (s.decode == null && s.formula == null)) continue
                     if (s.length != null) {
                         if (bytes.size != s.length) continue
                     } else {
-                        val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
+                        val minLen = s.minLength ?: (s.decode?.let { it.offset + it.length } ?: 0)
                         if (bytes.size < minLen) continue
                     }
-                    emit(d, d.id, s, Decoder.decodeStructured(bytes, s.decode), out)
+                    // decode가 있으면 우선한다. formula는 OBD와 같은 변수(a=0번째 … t=19번째 바이트).
+                    // 예: 부호 바이트(d)+크기 바이트(e) → "(1-2*d)*e"
+                    val value = if (s.decode != null) {
+                        Decoder.decodeStructured(bytes, s.decode)
+                    } else {
+                        runCatching { Decoder.evalFormula(s.formula!!, bytes) }.getOrNull()
+                    }
+                    emit(d, d.id, s, value, out)
                 }
             }
         }
@@ -961,7 +968,8 @@ class BleRuntime(
         LiveEventLogger.log(LogType.TX, "BLE Write: device=${d.id}, action=${cmd.action}, hex=$hex")
         scope.launch {
             when (d.source) {
-                Source.gatt_notify -> gatt.write(d, hex)
+                // poll 기기는 주기 사이에 1회 연결해서 쓰므로 바인딩된 MAC이 필요하다.
+                Source.gatt_notify -> gatt.write(resolveDeviceMac(d), hex)
                 Source.obd -> obd.write(d, hex)
                 else -> {}
             }

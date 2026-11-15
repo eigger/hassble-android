@@ -130,6 +130,7 @@ import android.net.Uri
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import dev.eigger.hassble.ble.BindScanFilter
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.AdvertisementInstanceMode
@@ -149,6 +150,7 @@ import dev.eigger.hassble.config.ValidationLevel
 import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
+import dev.eigger.hassble.ble.isLinkUp
 import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
 import dev.eigger.hassble.ble.haRemoveModeForDevice
 import dev.eigger.hassble.net.ConnectionIssue
@@ -2267,8 +2269,7 @@ private fun DeviceConfigCard(
                         discoveredInstances = discoveredInstances,
                     )
 
-                    val isConnected = linkStatus?.state == DeviceLinkState.Connected ||
-                            linkStatus?.state == DeviceLinkState.Polling
+                    val isConnected = linkStatus?.state.isLinkUp()
                     val isActive = isConnected ||
                             linkStatus?.state == DeviceLinkState.Connecting ||
                             linkStatus?.state == DeviceLinkState.Scanning
@@ -2577,7 +2578,10 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
                 val address = result.device.address
                 val rssi = result.rssi
                 val uuids = result.scanRecord?.serviceUuids?.map { it.uuid.toString().uppercase() } ?: emptyList()
-                val matchesFilter = !applyFilter || targetServiceUuid == null || uuids.any { it.contains(targetServiceUuid.uppercase()) } || name.contains(deviceConfig.name, ignoreCase = true)
+                val matchesFilter = !applyFilter || BindScanFilter.matches(
+                    deviceConfig, address, name, uuids,
+                    manufacturerPayload = { id -> result.scanRecord?.getManufacturerSpecificData(id) },
+                )
                 if (matchesFilter) {
                     val existingIndex = devicesList.indexOfFirst { it.address == address }
                     if (existingIndex != -1) devicesList[existingIndex] = ScannedDevice(name, address, rssi) else devicesList.add(ScannedDevice(name, address, rssi))
