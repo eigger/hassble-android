@@ -80,6 +80,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- Tasker 등 자동화 앱용. 설정에서 허용(기본 꺼짐)해야 동작한다. -->
+        <receiver
+            android:name=".service.AutomationReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.eigger.hassble.action.START_GATEWAY" />
+                <action android:name="dev.eigger.hassble.action.STOP_GATEWAY" />
+                <action android:name="dev.eigger.hassble.action.SET_SCAN_MODE" />
+                <action android:name="dev.eigger.hassble.action.POLL_DEVICE" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

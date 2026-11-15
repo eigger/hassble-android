@@ -33,6 +33,7 @@ class HassSettingsRepository(private val context: Context) {
         private val KEY_GIT_TOKEN = stringPreferencesKey("git_token")
         private val KEY_BOUND_DEVICES = stringPreferencesKey("bound_devices")
         private val KEY_START_ON_BOOT = booleanPreferencesKey("start_on_boot")
+        private val KEY_ALLOW_AUTOMATION = booleanPreferencesKey("allow_automation")
         private val KEY_ENABLED_SENSORS = stringPreferencesKey("enabled_sensors")
         private val KEY_ENABLED_SENSORS_INITIALIZED = booleanPreferencesKey("enabled_sensors_initialized")
         private val KEY_ALL_KNOWN_SENSORS = stringPreferencesKey("all_known_sensors")
@@ -58,6 +59,11 @@ class HassSettingsRepository(private val context: Context) {
 
     val startOnBoot: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[KEY_START_ON_BOOT] ?: true
+    }
+
+    /** Tasker 등 외부 자동화 앱의 브로드캐스트 허용 여부. 보안상 기본 꺼짐. */
+    val allowAutomation: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_ALLOW_AUTOMATION] ?: false
     }
 
     val haToken: Flow<String> = context.dataStore.data.map { prefs ->
@@ -286,6 +292,12 @@ class HassSettingsRepository(private val context: Context) {
     suspend fun saveStartOnBoot(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[KEY_START_ON_BOOT] = enabled
+        }
+    }
+
+    suspend fun saveAllowAutomation(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_ALLOW_AUTOMATION] = enabled
         }
     }
 

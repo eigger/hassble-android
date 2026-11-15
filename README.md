@@ -87,6 +87,31 @@ docs/CONFIG_SCHEMA.md       Git config & templates YAML schema
 
 No MQTT broker is required.
 
+## Automation (Tasker)
+
+Automation apps such as Tasker can control the gateway with broadcast intents. This is **off by default**: enable **Settings > Allow automation apps (Tasker)** in the app first, otherwise every intent is ignored (a warning is written to the Logs tab). Intents never carry Home Assistant credentials; the gateway always uses the settings saved in the app.
+
+| Action | Extras | Effect |
+|--------|--------|--------|
+| `dev.eigger.hassble.action.START_GATEWAY` | none | Start the gateway with the saved settings. |
+| `dev.eigger.hassble.action.STOP_GATEWAY` | none | Stop the gateway (this also stops BLE scanning). |
+| `dev.eigger.hassble.action.SET_SCAN_MODE` | `mode` (String): `LOW_POWER`, `BALANCED`, `LOW_LATENCY` (case-insensitive; aliases `power_saving`, `high_performance`) | Save the BLE scan mode. Applied live if the gateway is running, and kept across restarts. |
+| `dev.eigger.hassble.action.POLL_DEVICE` | `device_id` (String, required); `stop_after` (boolean, default `false`) | Connect to / read one GATT or OBD device right now (poll-type GATT devices read immediately). With `stop_after=true` the gateway stops once the read finishes or after 60 s, whichever comes first. Ignored if the gateway is not running. |
+
+**Tasker "Send Intent" example** (Action > System > Send Intent):
+
+- Action: `dev.eigger.hassble.action.SET_SCAN_MODE`
+- Cat: `None`
+- Extra: `mode:LOW_LATENCY`
+- Package: `dev.eigger.hassble`
+- Target: `Broadcast Receiver`
+
+The **Package** must be set: Android drops implicit broadcasts to manifest receivers, so the intent has to name the app. The same works with `adb shell am broadcast -a dev.eigger.hassble.action.START_GATEWAY -p dev.eigger.hassble`.
+
+**Example: car audio.** Profile "Bluetooth Connected: Car Audio" > enter task `START_GATEWAY` then `SET_SCAN_MODE` with `mode:LOW_LATENCY`. Exit task: `SET_SCAN_MODE` with `mode:LOW_POWER`, then `STOP_GATEWAY`. To read a sensor once and shut down: `POLL_DEVICE` with `device_id:my_device` and `stop_after:true` (send `START_GATEWAY` first and allow a few seconds for it to come up).
+
+**Background start requirements.** Starting the foreground service from a background broadcast only works if HassBle is exempt from battery optimization (set it to Unrestricted / Don't optimize); BLE scanning in the background also needs location set to "Allow all the time". If the system blocks the start, the Logs tab shows a message saying the exemption is required.
+
 ## Status
 
 Core BLE paths (advertisement, GATT notify, OBD), config loading from Git, sensor selection, value filtering, OAuth, local draft devices, YAML export, and background service are implemented.
