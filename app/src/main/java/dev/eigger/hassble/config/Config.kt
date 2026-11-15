@@ -62,6 +62,29 @@ data class GattConfig(
     @SerialName("notify_char_uuid") val notifyCharUuid: String,
     @SerialName("write_char_uuid") val writeCharUuid: String? = null,
     @SerialName("auto_connect") val autoConnect: Boolean = true,
+    // 암호화 GATT 기기(예: Ancel BM6/BM7). 설정하면 notify는 복호화 후, write/poll 명령은 암호화 후 전송한다.
+    val encryption: GattEncryption? = null,
+    // 설정하면 상시 구독 대신 연결-폴링-해제 주기를 반복한다(연결당 1회 write → 응답 1건).
+    val poll: GattPoll? = null,
+    // (복호화된) notify hex가 이 접두사(대소문자 무시)로 시작하지 않으면 버린다. 예: ack 응답 제외.
+    @SerialName("response_prefix") val responsePrefix: String? = null,
+)
+
+/** 지원 type: aes128_cbc (패딩 없음, 16바이트 블록 1개 단위). iv_hex 생략 시 0x00 * 16. */
+@Serializable
+data class GattEncryption(
+    val type: String = "aes128_cbc",
+    @SerialName("key_hex") val keyHex: String,
+    @SerialName("iv_hex") val ivHex: String? = null,
+)
+
+@Serializable
+data class GattPoll(
+    /** 평문 hex. encryption이 있으면 암호화해서 write_char에 쓴다. */
+    val command: String,
+    val interval: String = "60s",
+    @SerialName("write_with_response") val writeWithResponse: Boolean = true,
+    @SerialName("response_timeout") val responseTimeout: String = "10s",
 )
 
 @Serializable

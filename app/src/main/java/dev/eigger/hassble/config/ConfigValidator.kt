@@ -1,6 +1,7 @@
 package dev.eigger.hassble.config
 
 import dev.eigger.hassble.ble.AdvertisePayload
+import dev.eigger.hassble.ble.GattCrypto
 
 enum class ValidationLevel { WARNING, ERROR }
 
@@ -80,6 +81,49 @@ object ConfigValidator {
         return issues
     }
 
+    /** gatt_notify의 암호화/폴링 설정 검증. 오류가 있으면 기기 전체가 동작하지 않으므로 ERROR. */
+    private fun validateGatt(device: DeviceConfig): List<ValidationIssue> {
+        val g = device.gatt ?: return emptyList()
+        val id = device.id
+        val issues = mutableListOf<ValidationIssue>()
+        fun err(field: String, msg: String) {
+            issues += ValidationIssue(ValidationLevel.ERROR, id, null, msg, devicePath(id, "gatt.$field"))
+        }
+        val enc = g.encryption
+        if (enc != null) {
+            if (enc.type != "aes128_cbc") err("encryption.type", "unsupported encryption type '${enc.type}' — only aes128_cbc is supported")
+            if (GattCrypto.hexToBytes(enc.keyHex)?.size != GattCrypto.BLOCK)
+                err("encryption.key_hex", "key_hex must be 32 hex characters (AES-128 key)")
+            if (enc.ivHex != null && GattCrypto.hexToBytes(enc.ivHex)?.size != GattCrypto.BLOCK)
+                err("encryption.iv_hex", "iv_hex must be 32 hex characters (16 bytes)")
+        }
+        val poll = g.poll
+        if (poll != null) {
+            if (g.writeCharUuid.isNullOrBlank())
+                err("write_char_uuid", "poll requires write_char_uuid — the poll command is written to it")
+            val cmd = GattCrypto.hexToBytes(poll.command)
+            if (cmd == null || cmd.isEmpty()) err("poll.command", "poll.command must be non-empty hex")
+            else if (enc != null && cmd.size % GattCrypto.BLOCK != 0)
+                err("poll.command", "poll.command must be a multiple of 16 bytes when encryption is set (was ${cmd.size} bytes)")
+            for ((field, value) in listOf("interval" to poll.interval, "response_timeout" to poll.responseTimeout)) {
+                if (parseDurationMs(value, -1) <= 0) err("poll.$field", "poll.$field '$value' is not a valid duration (e.g. 60s, 500ms, 5m)")
+            }
+        }
+        g.responsePrefix?.let { p ->
+            if (p.isNotBlank() && GattCrypto.hexToBytes(p) == null) err("response_prefix", "response_prefix must be hex")
+        }
+        if (enc != null) {
+            for (c in device.controls) {
+                val hexes = c.command.values
+                if (c.action == null && hexes.any { v -> !v.contains('{') && (GattCrypto.hexToBytes(v)?.size ?: 0) % GattCrypto.BLOCK != 0 })
+                    issues += ValidationIssue(ValidationLevel.WARNING, id, c.key,
+                        "encryption is set: control commands must be 16-byte multiples or the write is dropped",
+                        controlPath(id, c.key, "command"))
+            }
+        }
+        return issues
+    }
+
     private fun validateDevice(
         device: DeviceConfig,
         defaultPublish: PublishRule = PublishRule(),
@@ -87,6 +131,8 @@ object ConfigValidator {
         val issues = mutableListOf<ValidationIssue>()
         val isText = { s: SensorConfig -> s.platform == "text_sensor" }
         val isEvent = { s: SensorConfig -> s.platform == "event" }
+
+        issues += validateGatt(device)
 
         // ── 센서 검증 ──────────────────────────────────────────────────────────
         for (s in device.sensors) {
@@ -195,7 +241,8 @@ object ConfigValidator {
                     sensorPath(id, key, "formula"))
 
             // advertisement/gatt_notify 센서는 decode가 있어야 값 추출 가능
-            if (device.source != Source.obd && s.decode == null && s.platform != "binary_sensor")
+            if (device.source != Source.obd && s.decode == null && s.platform != "binary_sensor" &&
+                !(device.source == Source.gatt_notify && s.formula != null))
                 issues += ValidationIssue(ValidationLevel.WARNING, id, key,
                     "no decode config — sensor will never produce a value",
                     sensorPath(id, key, "decode"))

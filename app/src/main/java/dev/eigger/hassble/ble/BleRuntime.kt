@@ -868,14 +868,21 @@ class BleRuntime(
                 val bytes = Decoder.hexToBytes(r.rawHex) ?: return
                 onLinkDataReceived(d.id, System.currentTimeMillis())
                 for (s in d.sensors) {
-                    if (!isEnabled(d.id, s.key) || s.decode == null) continue
+                    if (!isEnabled(d.id, s.key) || (s.decode == null && s.formula == null)) continue
                     if (s.length != null) {
                         if (bytes.size != s.length) continue
                     } else {
-                        val minLen = s.minLength ?: (s.decode.offset + s.decode.length)
+                        val minLen = s.minLength ?: (s.decode?.let { it.offset + it.length } ?: 0)
                         if (bytes.size < minLen) continue
                     }
-                    emit(d, d.id, s, Decoder.decodeStructured(bytes, s.decode), out)
+                    // decode가 있으면 우선한다. formula는 OBD와 같은 변수(a=0번째 … t=19번째 바이트).
+                    // 예: 부호 바이트(d)+크기 바이트(e) → "(1-2*d)*e"
+                    val value = if (s.decode != null) {
+                        Decoder.decodeStructured(bytes, s.decode)
+                    } else {
+                        runCatching { Decoder.evalFormula(s.formula!!, bytes) }.getOrNull()
+                    }
+                    emit(d, d.id, s, value, out)
                 }
             }
         }

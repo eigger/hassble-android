@@ -158,6 +158,47 @@ devices: [ ... ]                    # 아래 참조
       command: { on: "A10100", off: "A10000" }   # write_char로 전송할 hex (또는 action 필드 사용)
 ```
 
+### 암호화 / 폴링 GATT (선택)
+
+데이터가 광고에 없고, 연결 후 명령을 써야 응답(notify)이 오며, 페이로드가 AES로 암호화된 기기용
+(예: Ancel BM300 Pro / BM7, BM6 배터리 모니터). 모든 필드는 선택이며 생략하면 기존 동작(상시 구독) 그대로다.
+
+```yaml
+- id: bm7
+  name: "BM300 Pro"                 # 스캔 다이얼로그의 이름 매칭에도 쓰인다 (광고 이름과 일치시킬 것)
+  source: gatt_notify
+  gatt:
+    service_uuid: "fff0"
+    notify_char_uuid: "fff4"
+    write_char_uuid: "fff3"
+    encryption:                      # notify는 복호화 후 처리, write/poll 명령은 암호화 후 전송
+      type: aes128_cbc               # 현재 지원: aes128_cbc (패딩 없음, 16바이트 1블록 단위)
+      key_hex: "6c656167656e64fffe30313030303040"   # 32 hex (16바이트)
+      iv_hex: "00000000000000000000000000000000"    # 선택, 생략 시 0x00 * 16
+    poll:                            # 설정하면 상시 구독 대신 연결-폴링-해제를 반복
+      command: "d1550700000000000000000000000000"   # 평문 hex (encryption 있으면 암호화 후 write)
+      interval: 60s                  # 주기 (기본 60s)
+      write_with_response: true      # 기본 true
+      response_timeout: 10s          # 기본 10s. 이 안에 유효 응답이 없으면 이번 주기는 건너뜀
+    response_prefix: "d1550700"      # (복호화된) notify hex가 이 접두사로 시작해야 함(대소문자 무시). ack(d15507ff…) 제외용
+  sensors:
+    - { key: voltage, device_class: voltage, unit: "V", state_class: measurement, accuracy_decimals: 2,
+        min_length: 9, decode: { offset: 7, length: 2, type: uint16, endian: big, scale: 0.01 } }
+    - { key: temperature, device_class: temperature, unit: "°C", state_class: measurement,
+        min_length: 9, formula: "(1-2*d)*e" }    # d=바이트3(부호, 1=음수), e=바이트4(크기)
+    - { key: battery, device_class: battery, unit: "%", state_class: measurement,
+        min_length: 9, decode: { offset: 6, length: 1, type: uint8 } }
+    - { key: state, platform: text_sensor, min_length: 9,
+        decode: { offset: 5, length: 1, type: uint8, map: { "0": normal, "1": low_voltage, "2": charging } } }
+```
+
+- poll 사이클: 광고 대기 → 연결 → 서비스 탐색 → notify 구독 → 명령 write → 필터를 통과한 첫 응답 emit → 연결 해제 → 다음 주기까지 대기. 한 주기가 실패해도 루프는 계속된다.
+- 검증: `key_hex`/`iv_hex`는 32 hex, `poll`은 `write_char_uuid` 필요, `poll.command`는 hex(암호화 시 16바이트 배수), `interval`/`response_timeout`은 시간 형식. 위반 시 기기 단위 ERROR.
+- 암호화 사용 시 컨트롤 `command`도 16바이트 배수여야 한다(아니면 write 생략).
+- gatt_notify/obd 기기에 `match`(광고 매칭 블록)를 넣으면 런타임에는 쓰이지 않고, 앱의 바인딩 스캔 목록 필터에만 쓰인다.
+  BM6/BM7 템플릿은 iBeacon 매처(`manufacturer_id: 76`, `manufacturer_hex_prefix: "02153BA29CD9A42C894856BADAF2606EF777"`)를 넣어 둔다.
+- gatt_notify 센서는 `decode` 대신 `formula`(OBD와 동일: a=0번째 … t=19번째 바이트)도 쓸 수 있다. 둘 다 있으면 `decode`가 우선.
+
 컨트롤 필드 `action`:
 - `advertise`: HA button press/switch turn_on 시 `advertise` 블록의 광고 송신을 시작합니다.
 - `stop_advertise`: 광고 송신을 중단합니다.

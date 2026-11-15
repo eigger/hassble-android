@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.eigger.hassble.config.DeviceConfig
+import dev.eigger.hassble.config.GattPoll
 import dev.eigger.hassble.config.SensorConfig
 import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.config.SourceField
@@ -14,6 +15,9 @@ import dev.eigger.hassble.config.parseDurationMs
 import dev.eigger.hassble.decode.ObdResponseParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -607,6 +611,12 @@ class NordicGattNotifySource(
         val mac = device.gatt?.mac ?: return@flow
         val serviceUuidStr = device.gatt.serviceUuid
         val notifyCharUuidStr = device.gatt.notifyCharUuid
+        val encryption = device.gatt.encryption
+        val prefix = device.gatt.responsePrefix
+        val poll = device.gatt.poll
+        val pollIntervalMs = poll?.let { parseDurationMs(it.interval, 60_000).coerceAtLeast(1_000) }
+        // 실패 후 재시도 간격: poll 기기는 폴링 주기를 따르고, 상시 구독은 종전대로 3초.
+        val retryDelayMs = pollIntervalMs ?: 3_000L
 
         try {
             while (currentCoroutineContext().isActive) {
@@ -615,6 +625,28 @@ class NordicGattNotifySource(
                     // OBD 쪽과 같은 이유로 waitForDevice()도 try 안에 둔다.
                     // 스캔 실패가 while 밖으로 새면 자동 재연결이 영구히 멈춘다.
                     waitForDevice()
+
+                    if (poll != null && pollIntervalMs != null) {
+                        // 연결-폴링-해제 주기: 연결 1회당 write 1회 → 응답 1건 → 해제 후 다음 주기까지 대기
+                        val cycleStartMs = System.currentTimeMillis()
+                        val hex = pollOnce(device, mac, poll)
+                        activeConnections.remove(device.id)?.disconnect()
+                        if (hex != null) {
+                            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
+                            emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, System.currentTimeMillis()))
+                        } else {
+                            Log.w(TAG, "GATT poll for ${device.id}: no valid response")
+                            onLinkStatus(
+                                DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = "no response"),
+                            )
+                        }
+                        if (!autoReconnect) break
+                        val elapsed = System.currentTimeMillis() - cycleStartMs
+                        delay((pollIntervalMs - elapsed).coerceAtLeast(1_000))
+                        continue
+                    }
+
                     Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
                     onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
                     val client = ClientBleGatt.connect(context, mac, scope)
@@ -628,8 +660,14 @@ class NordicGattNotifySource(
                     if (characteristic != null) {
                         Log.d(TAG, "Subscribing to notifications on $notifyCharUuidStr")
                         characteristic.getNotifications().collect { bytes ->
+                            val plain = runCatching { GattCrypto.decryptIfNeeded(encryption, bytes.value) }.getOrNull()
+                            if (plain == null) {
+                                Log.w(TAG, "GATT ${device.id}: dropping undecryptable notify (${bytes.value.size} bytes)")
+                                return@collect
+                            }
+                            val hex = GattCrypto.bytesToHex(plain)
+                            if (!GattCrypto.matchesPrefix(hex, prefix)) return@collect
                             onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
-                            val hex = bytes.value.joinToString("") { String.format("%02X", it) }
                             emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
                         }
                         onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac))
@@ -652,11 +690,60 @@ class NordicGattNotifySource(
                     )
                     activeConnections.remove(device.id)?.disconnect()
                     if (!autoReconnect) break
-                    delay(3_000)
+                    delay(retryDelayMs)
                 }
             }
         } finally {
             disconnect(device.id)
+        }
+    }
+
+    /**
+     * poll 한 주기: 연결 → 서비스 탐색 → notify 구독 → (암호화된) 명령 write → prefix를 통과하는
+     * 첫 응답 대기. 응답 hex(복호화됨)를 돌려주고, 시간 초과면 null. 연결 해제는 호출 쪽이 한다.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun pollOnce(device: DeviceConfig, mac: String, poll: GattPoll): String? = coroutineScope {
+        val gatt = device.gatt!!
+        val writeCharUuid = gatt.writeCharUuid
+            ?: throw IllegalStateException("poll requires write_char_uuid")
+        val command = GattCrypto.hexToBytes(poll.command)
+            ?: throw IllegalStateException("poll.command is not valid hex")
+        val payload = GattCrypto.encryptIfNeeded(gatt.encryption, command)
+
+        Log.d(TAG, "Connecting to GATT device ${device.id} at $mac (poll)")
+        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
+        val client = ClientBleGatt.connect(context, mac, scope)
+        activeConnections[device.id] = client
+        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+
+        val service = client.discoverServices().findService(uuidFrom(gatt.serviceUuid))
+        val notifyChar = service?.findCharacteristic(uuidFrom(gatt.notifyCharUuid))
+            ?: throw IllegalStateException("Notify characteristic ${gatt.notifyCharUuid} not found")
+        val writeChar = service?.findCharacteristic(uuidFrom(writeCharUuid))
+            ?: throw IllegalStateException("Write characteristic $writeCharUuid not found")
+
+        // notify 활성화(CCCD write)를 write보다 먼저 끝내고, 수집도 write 전에 시작해 응답을 놓치지 않는다.
+        // 응답 대기는 채널로 받는다.
+        val notifications = notifyChar.getNotifications()
+        val channel = Channel<ByteArray>(Channel.UNLIMITED)
+        val notifyJob = launch(start = CoroutineStart.UNDISPATCHED) {
+            notifications.collect { channel.trySend(it.value) }
+        }
+        try {
+            val writeType = if (poll.writeWithResponse) BleWriteType.DEFAULT else BleWriteType.NO_RESPONSE
+            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
+            writeChar.write(DataByteArray(payload), writeType)
+            GattCrypto.awaitResponse(
+                notifications = channel.receiveAsFlow(),
+                enc = gatt.encryption,
+                prefix = gatt.responsePrefix,
+                timeoutMs = parseDurationMs(poll.responseTimeout, 10_000),
+                onDropped = { Log.d(TAG, "GATT poll ${device.id}: $it") },
+            )
+        } finally {
+            notifyJob.cancel()
+            channel.close()
         }
     }
 
@@ -667,7 +754,13 @@ class NordicGattNotifySource(
         val client = activeConnections[device.id] ?: return
         val serviceUuidStr = device.gatt?.serviceUuid ?: return
         val writeCharUuidStr = device.gatt.writeCharUuid ?: return
-        val bytes = hexToBytes(hex) ?: return
+        val plain = hexToBytes(hex) ?: return
+        val bytes = try {
+            GattCrypto.encryptIfNeeded(device.gatt.encryption, plain)
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "GATT ${device.id}: control payload not encryptable: ${e.message}")
+            return
+        }
 
         try {
             val services = client.discoverServices()

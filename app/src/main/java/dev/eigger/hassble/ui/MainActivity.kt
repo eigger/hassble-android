@@ -130,6 +130,7 @@ import android.net.Uri
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import dev.eigger.hassble.ble.BindScanFilter
 import dev.eigger.hassble.ble.DiscoveredAdvInstance
 import dev.eigger.hassble.ble.SensorLastValue
 import dev.eigger.hassble.config.AdvertisementInstanceMode
@@ -2577,7 +2578,10 @@ private fun BleScanDialog(deviceConfig: DeviceConfig, onDismiss: () -> Unit, onD
                 val address = result.device.address
                 val rssi = result.rssi
                 val uuids = result.scanRecord?.serviceUuids?.map { it.uuid.toString().uppercase() } ?: emptyList()
-                val matchesFilter = !applyFilter || targetServiceUuid == null || uuids.any { it.contains(targetServiceUuid.uppercase()) } || name.contains(deviceConfig.name, ignoreCase = true)
+                val matchesFilter = !applyFilter || BindScanFilter.matches(
+                    deviceConfig, address, name, uuids,
+                    manufacturerPayload = { id -> result.scanRecord?.getManufacturerSpecificData(id) },
+                )
                 if (matchesFilter) {
                     val existingIndex = devicesList.indexOfFirst { it.address == address }
                     if (existingIndex != -1) devicesList[existingIndex] = ScannedDevice(name, address, rssi) else devicesList.add(ScannedDevice(name, address, rssi))
