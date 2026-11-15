@@ -93,6 +93,27 @@
             </intent-filter>
         </receiver>
 
+        <!-- Tasker/Locale 플러그인: Action > Plugin > HassBle. 실행은 AutomationExecutor를 공유하며 같은 허용 설정이 필요하다. -->
+        <activity
+            android:name=".ui.TaskerEditActivity"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="HassBle"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="com.twofortyfouram.locale.intent.action.EDIT_SETTING" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".service.TaskerFireReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.twofortyfouram.locale.intent.action.FIRE_SETTING" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

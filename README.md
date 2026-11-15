@@ -89,14 +89,30 @@ No MQTT broker is required.
 
 ## Automation (Tasker)
 
-Automation apps such as Tasker can control the gateway with broadcast intents. This is **off by default**: enable **Settings > Allow automation apps (Tasker)** in the app first, otherwise every intent is ignored (a warning is written to the Logs tab). Intents never carry Home Assistant credentials; the gateway always uses the settings saved in the app.
+Automation apps such as Tasker can control the gateway. This is **off by default**: enable **Settings > Allow automation apps (Tasker)** in the app first, otherwise every request is ignored (a warning is written to the Logs tab). Requests never carry Home Assistant credentials; the gateway always uses the settings saved in the app.
+
+### Tasker plugin
+
+In Tasker, add an action with **Action > Plugin > HassBle** and tap the configuration button. Pick a command from the dropdown:
+
+- **Start gateway** / **Stop gateway**
+- **Set scan mode**: Power Saving, Balanced or High Performance
+- **Poll device**: pick a GATT/OBD device from your loaded config (or type its id) and optionally tick **Stop gateway after poll**
+
+The configuration screen also offers a button to turn on **Allow automation apps** if it is still off.
+
+Turn on **Wait for completion** in the Tasker action so the task continues only when the work is done: **Start gateway** completes once the gateway is ready (up to 15 s), and **Poll device** completes when the read has finished (up to 90 s). If the gateway is still starting when a poll arrives, HassBle waits up to 15 s for it instead of rejecting the poll. A failure (for example the system blocks the background start) sets Tasker's error flag, and the plugin returns `%hb_result` (and `%errmsg` on failure).
+
+### Raw intents (other apps)
+
+Any app can also send broadcast intents directly. The same wait-for-gateway behaviour applies to `POLL_DEVICE`.
 
 | Action | Extras | Effect |
 |--------|--------|--------|
 | `dev.eigger.hassble.action.START_GATEWAY` | none | Start the gateway with the saved settings. |
 | `dev.eigger.hassble.action.STOP_GATEWAY` | none | Stop the gateway (this also stops BLE scanning). |
 | `dev.eigger.hassble.action.SET_SCAN_MODE` | `mode` (String): `LOW_POWER`, `BALANCED`, `LOW_LATENCY` (case-insensitive; aliases `power_saving`, `high_performance`) | Save the BLE scan mode. Applied live if the gateway is running, and kept across restarts. |
-| `dev.eigger.hassble.action.POLL_DEVICE` | `device_id` (String, required); `stop_after` (boolean, default `false`) | Connect to / read one GATT or OBD device right now (poll-type GATT devices read immediately). With `stop_after=true` the gateway stops once the read finishes or after 60 s, whichever comes first. Ignored if the gateway is not running. |
+| `dev.eigger.hassble.action.POLL_DEVICE` | `device_id` (String, required); `stop_after` (boolean, default `false`) | Connect to / read one GATT or OBD device right now (poll-type GATT devices read immediately). With `stop_after=true` the gateway stops once the read finishes or after 60 s, whichever comes first. Ignored if the gateway is neither running nor starting (if it is still starting, HassBle waits up to 15 s for it). |
 
 **Tasker "Send Intent" example** (Action > System > Send Intent):
 
@@ -108,7 +124,7 @@ Automation apps such as Tasker can control the gateway with broadcast intents. T
 
 The **Package** must be set: Android drops implicit broadcasts to manifest receivers, so the intent has to name the app. The same works with `adb shell am broadcast -a dev.eigger.hassble.action.START_GATEWAY -p dev.eigger.hassble`.
 
-**Example: car audio.** Profile "Bluetooth Connected: Car Audio" > enter task `START_GATEWAY` then `SET_SCAN_MODE` with `mode:LOW_LATENCY`. Exit task: `SET_SCAN_MODE` with `mode:LOW_POWER`, then `STOP_GATEWAY`. To read a sensor once and shut down: `POLL_DEVICE` with `device_id:my_device` and `stop_after:true` (send `START_GATEWAY` first and allow a few seconds for it to come up).
+**Example: car audio** (works with the plugin actions or the raw intents). Profile "Bluetooth Connected: Car Audio" > enter task: `START_GATEWAY`, then `SET_SCAN_MODE` with `BALANCED`. Exit task: `POLL_DEVICE` for your car/OBD device with `stop_after` enabled, which reads the device once and then stops the gateway by itself (no separate `STOP_GATEWAY` needed).
 
 **Background start requirements.** Starting the foreground service from a background broadcast only works if HassBle is exempt from battery optimization (set it to Unrestricted / Don't optimize); BLE scanning in the background also needs location set to "Allow all the time". If the system blocks the start, the Logs tab shows a message saying the exemption is required.
 

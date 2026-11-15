@@ -49,7 +49,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -338,21 +342,27 @@ class BleGatewayService : Service() {
         val accepted = rt?.connectDevice(deviceId) == true
         if (!accepted) {
             LiveEventLogger.log(LogType.LINK, "Automation POLL_DEVICE: device=$deviceId cannot be polled (gateway not ready, unknown device, or not a GATT/OBD device)")
+            _pollOutcomes.tryEmit(PollOutcome(deviceId, requestedAt, accepted = false, finished = false))
             if (stopAfter) stopSelf()
             return
         }
         LiveEventLogger.log(LogType.LINK, "Automation POLL_DEVICE: device=$deviceId, stopAfter=$stopAfter")
-        if (!stopAfter) return
-        pollStopJob?.cancel()
-        pollStopJob = scope.launch {
+        val job = scope.launch {
             val finished = withTimeoutOrNull(AutomationActions.STOP_AFTER_TIMEOUT_MS) {
                 _deviceLinkStatuses
                     .map { list -> list.firstOrNull { it.profileId == deviceId } }
                     .first { isPollFinished(it, before, requestedAt) }
             } != null
-            LiveEventLogger.log(LogType.LINK,
-                "Automation POLL_DEVICE: device=$deviceId ${if (finished) "finished" else "timed out"} — stopping gateway")
-            stopSelf()
+            _pollOutcomes.tryEmit(PollOutcome(deviceId, requestedAt, accepted = true, finished = finished))
+            if (stopAfter) {
+                LiveEventLogger.log(LogType.LINK,
+                    "Automation POLL_DEVICE: device=$deviceId ${if (finished) "finished" else "timed out"} — stopping gateway")
+                stopSelf()
+            }
+        }
+        if (stopAfter) {
+            pollStopJob?.cancel()
+            pollStopJob = job
         }
     }
 
@@ -662,6 +672,7 @@ class BleGatewayService : Service() {
                     },
                     onPipelineError = { runCatching { updateNotification() } },
                 ).also { it.start() }
+                _runtimeReady.value = true
             }
 
             settingsJob = scope.launch {
@@ -761,6 +772,7 @@ class BleGatewayService : Service() {
         runtime?.stop()
         ws?.close()
         runtime = null
+        _runtimeReady.value = false
         ws = null
         BleScanHealth.reset()
         pendingEntityCleanupDeviceIds = emptySet()
@@ -923,6 +935,14 @@ class BleGatewayService : Service() {
 
         private val _deviceLinkStatuses = MutableStateFlow<List<DeviceLinkStatus>>(emptyList())
         val deviceLinkStatuses: StateFlow<List<DeviceLinkStatus>> = _deviceLinkStatuses.asStateFlow()
+
+        /** BleRuntime이 만들어져 POLL/연결 요청을 받을 수 있는 상태. 자동화(Tasker)의 완료 판정에 쓴다. */
+        private val _runtimeReady = MutableStateFlow(false)
+        val runtimeReady: StateFlow<Boolean> = _runtimeReady.asStateFlow()
+
+        /** POLL_DEVICE 요청의 결과(수락 여부/완료 여부). 자동화 실행기가 동기 완료 신호에 쓴다. */
+        private val _pollOutcomes = MutableSharedFlow<PollOutcome>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        internal val pollOutcomes: SharedFlow<PollOutcome> = _pollOutcomes.asSharedFlow()
 
         private val _advertisingDeviceIds = MutableStateFlow<Set<String>>(emptySet())
         val advertisingDeviceIds: StateFlow<Set<String>> = _advertisingDeviceIds.asStateFlow()

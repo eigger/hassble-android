@@ -359,4 +359,22 @@
     <string name="github_error_404">찾을 수 없음: 저장소나 브랜치를 찾을 수 없습니다. 경로를 확인하세요 (404).</string>
     <string name="github_error_generic">GitHub API 오류: HTTP %1$d</string>
     <string name="github_error_network">네트워크 오류: 인터넷 연결을 확인해 주세요.</string>
+    <string name="tasker_edit_title">HassBle 액션</string>
+    <string name="tasker_command">명령</string>
+    <string name="tasker_cmd_start">게이트웨이 시작</string>
+    <string name="tasker_cmd_stop">게이트웨이 중지</string>
+    <string name="tasker_cmd_scan_mode">스캔 모드 설정</string>
+    <string name="tasker_cmd_poll">폴링</string>
+    <string name="tasker_cmd_poll_option">기기 폴링</string>
+    <string name="tasker_scan_mode">스캔 모드</string>
+    <string name="tasker_device">기기 ID</string>
+    <string name="tasker_device_pick">불러온 설정에서 기기 선택</string>
+    <string name="tasker_device_no_config">아직 불러온 설정이 없습니다. 앱을 한 번 열어 기기 목록을 저장하거나 기기 ID를 직접 입력하세요.</string>
+    <string name="tasker_device_required">기기 ID를 입력하세요.</string>
+    <string name="tasker_stop_after">폴링 후 게이트웨이 중지</string>
+    <string name="tasker_blurb_stop_after">종료 후 중지</string>
+    <string name="tasker_automation_off">자동화가 꺼져 있어 자동화 앱을 허용하기 전까지 이 액션은 무시됩니다.</string>
+    <string name="tasker_enable_automation">자동화 앱 허용</string>
+    <string name="tasker_save">저장</string>
+    <string name="tasker_wait_note">Tasker에서 \"완료 대기\"를 켜면 게이트웨이가 준비되거나 폴링이 끝난 뒤에 다음 액션으로 넘어갑니다.</string>
 </resources>
