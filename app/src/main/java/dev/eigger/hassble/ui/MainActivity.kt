@@ -150,6 +150,7 @@ import dev.eigger.hassble.config.ValidationLevel
 import dev.eigger.hassble.config.Source
 import dev.eigger.hassble.ble.DeviceLinkState
 import dev.eigger.hassble.ble.DeviceLinkStatus
+import dev.eigger.hassble.ble.isLinkUp
 import dev.eigger.hassble.ble.BluetoothAdapterNameGuard
 import dev.eigger.hassble.ble.haRemoveModeForDevice
 import dev.eigger.hassble.net.ConnectionIssue
@@ -2268,8 +2269,7 @@ private fun DeviceConfigCard(
                         discoveredInstances = discoveredInstances,
                     )
 
-                    val isConnected = linkStatus?.state == DeviceLinkState.Connected ||
-                            linkStatus?.state == DeviceLinkState.Polling
+                    val isConnected = linkStatus?.state.isLinkUp()
                     val isActive = isConnected ||
                             linkStatus?.state == DeviceLinkState.Connecting ||
                             linkStatus?.state == DeviceLinkState.Scanning

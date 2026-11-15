@@ -391,7 +391,7 @@ class BleRuntime(
                 entityCategory = "diagnostic"
             ))
             val currentStatus = BleGatewayService.deviceLinkStatuses.value.firstOrNull { it.profileId == instanceId }
-            val isConnected = currentStatus?.state == DeviceLinkState.Connected || currentStatus?.state == DeviceLinkState.Polling
+            val isConnected = currentStatus?.state.isLinkUp()
             ws.declareEntity(EntityMsg(
                 id = 0, uniqueId = LinkSwitches.connectionUid(instanceId), platform = "switch",
                 name = "Connection", device = ref,
@@ -968,7 +968,8 @@ class BleRuntime(
         LiveEventLogger.log(LogType.TX, "BLE Write: device=${d.id}, action=${cmd.action}, hex=$hex")
         scope.launch {
             when (d.source) {
-                Source.gatt_notify -> gatt.write(d, hex)
+                // poll 기기는 주기 사이에 1회 연결해서 쓰므로 바인딩된 MAC이 필요하다.
+                Source.gatt_notify -> gatt.write(resolveDeviceMac(d), hex)
                 Source.obd -> obd.write(d, hex)
                 else -> {}
             }

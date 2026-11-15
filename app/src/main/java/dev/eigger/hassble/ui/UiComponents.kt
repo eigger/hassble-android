@@ -172,6 +172,7 @@ fun linkStateLabel(state: DeviceLinkState): String = when (state) {
     DeviceLinkState.Connecting -> stringResource(R.string.link_state_connecting)
     DeviceLinkState.Connected -> stringResource(R.string.link_state_connected)
     DeviceLinkState.Polling -> stringResource(R.string.link_state_polling)
+    DeviceLinkState.Idle -> stringResource(R.string.link_state_idle)
     DeviceLinkState.Error -> stringResource(R.string.link_state_error)
     DeviceLinkState.Disconnected -> stringResource(R.string.status_disconnected)
 }
@@ -232,7 +233,7 @@ fun DeviceLinkStatusRow(link: DeviceLinkStatus) {
             text = linkStateLabel(link.state),
             color = when (link.state) {
                 DeviceLinkState.Error -> MaterialTheme.colorScheme.error
-                DeviceLinkState.Polling, DeviceLinkState.Connected -> Color(0xFF00E676)
+                DeviceLinkState.Polling, DeviceLinkState.Connected, DeviceLinkState.Idle -> Color(0xFF00E676)
                 DeviceLinkState.Connecting, DeviceLinkState.Scanning -> Color(0xFFFFD600)
                 DeviceLinkState.Disconnected -> Color.Gray
             },

@@ -193,6 +193,8 @@ devices: [ ... ]                    # 아래 참조
 ```
 
 - poll 사이클: 광고 대기 → 연결 → 서비스 탐색 → notify 구독 → 명령 write → 필터를 통과한 첫 응답 emit → 연결 해제 → 다음 주기까지 대기. 한 주기가 실패해도 루프는 계속된다.
+- 주기가 성공하면 다음 주기까지 링크 상태는 `Idle`(다음 폴링 대기)이며, HA의 `{id}_link_status`/`{id}_connection`은 on을 유지한다. 성공이 이어지는 동안에는 광고 대기를 건너뛰고 바로 연결한다. 실패하면 `Disconnected`(오류 메시지 포함)로 바뀌고 다음 주기는 광고 대기부터 다시 한다.
+- poll 기기의 컨트롤 write는 주기와 겹치지 않게 기다린 뒤 1회 연결해서 쓰고 끊는다. write 방식은 `poll.write_with_response`를 따른다.
 - 검증: `key_hex`/`iv_hex`는 32 hex, `poll`은 `write_char_uuid` 필요, `poll.command`는 hex(암호화 시 16바이트 배수), `interval`/`response_timeout`은 시간 형식. 위반 시 기기 단위 ERROR.
 - 암호화 사용 시 컨트롤 `command`도 16바이트 배수여야 한다(아니면 write 생략).
 - gatt_notify/obd 기기에 `match`(광고 매칭 블록)를 넣으면 런타임에는 쓰이지 않고, 앱의 바인딩 스캔 목록 필터에만 쓰인다.

@@ -614,9 +614,11 @@ class NordicGattNotifySource(
         val encryption = device.gatt.encryption
         val prefix = device.gatt.responsePrefix
         val poll = device.gatt.poll
-        val pollIntervalMs = poll?.let { parseDurationMs(it.interval, 60_000).coerceAtLeast(1_000) }
-        // 실패 후 재시도 간격: poll 기기는 폴링 주기를 따르고, 상시 구독은 종전대로 3초.
-        val retryDelayMs = pollIntervalMs ?: 3_000L
+        if (poll != null) {
+            val intervalMs = parseDurationMs(poll.interval, 60_000).coerceAtLeast(1_000)
+            runPollLoop(device, mac, poll, intervalMs, waitForDevice, autoReconnect)
+            return@flow
+        }
 
         try {
             while (currentCoroutineContext().isActive) {
@@ -625,27 +627,6 @@ class NordicGattNotifySource(
                     // OBD 쪽과 같은 이유로 waitForDevice()도 try 안에 둔다.
                     // 스캔 실패가 while 밖으로 새면 자동 재연결이 영구히 멈춘다.
                     waitForDevice()
-
-                    if (poll != null && pollIntervalMs != null) {
-                        // 연결-폴링-해제 주기: 연결 1회당 write 1회 → 응답 1건 → 해제 후 다음 주기까지 대기
-                        val cycleStartMs = System.currentTimeMillis()
-                        val hex = pollOnce(device, mac, poll)
-                        activeConnections.remove(device.id)?.disconnect()
-                        if (hex != null) {
-                            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac, System.currentTimeMillis()))
-                            emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
-                            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, System.currentTimeMillis()))
-                        } else {
-                            Log.w(TAG, "GATT poll for ${device.id}: no valid response")
-                            onLinkStatus(
-                                DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = "no response"),
-                            )
-                        }
-                        if (!autoReconnect) break
-                        val elapsed = System.currentTimeMillis() - cycleStartMs
-                        delay((pollIntervalMs - elapsed).coerceAtLeast(1_000))
-                        continue
-                    }
 
                     Log.d(TAG, "Connecting to GATT device ${device.id} at $mac")
                     onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
@@ -690,7 +671,7 @@ class NordicGattNotifySource(
                     )
                     activeConnections.remove(device.id)?.disconnect()
                     if (!autoReconnect) break
-                    delay(retryDelayMs)
+                    delay(3_000)
                 }
             }
         } finally {
@@ -699,11 +680,70 @@ class NordicGattNotifySource(
     }
 
     /**
+     * poll 모드: 주기마다 연결 → 명령 write → 응답 1건 → 해제를 반복한다. 실패한 주기도 루프는 계속된다.
+     */
+    private suspend fun FlowCollector<RawReading>.runPollLoop(
+        device: DeviceConfig,
+        mac: String,
+        poll: GattPoll,
+        intervalMs: Long,
+        waitForDevice: suspend () -> Unit,
+        autoReconnect: Boolean,
+    ) {
+        // healthy: 직전 주기가 성공. 이때는 광고 대기·Connecting/Connected 보고를 생략하고 Idle을 유지해
+        // HA의 link_status / connection 스위치가 매 주기 on/off로 깜빡이지 않게 한다.
+        var healthy = false
+        try {
+            while (currentCoroutineContext().isActive) {
+                val cycleStartMs = System.currentTimeMillis()
+                try {
+                    // OBD 쪽과 같은 이유로 waitForDevice()도 try 안에 둔다.
+                    if (!healthy) waitForDevice()
+                    val hex = lockFor(device.id).withLock {
+                        try {
+                            pollOnce(device, mac, poll, quiet = healthy)
+                        } finally {
+                            activeConnections.remove(device.id)?.disconnect()
+                        }
+                    }
+                    if (hex != null) {
+                        emitDownstream(RawReading(deviceId = device.id, source = "gatt_notify", rawHex = hex))
+                        healthy = true
+                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Idle, mac, System.currentTimeMillis()))
+                    } else {
+                        Log.w(TAG, "GATT poll for ${device.id}: no valid response")
+                        healthy = false
+                        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = "no response"))
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: DownstreamException) {
+                    throw e.cause
+                } catch (e: Exception) {
+                    Log.w(TAG, "GATT poll cycle failed for ${device.id}: ${e.message}")
+                    healthy = false
+                    onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Disconnected, mac, errorMessage = e.message))
+                }
+                if (!autoReconnect) break
+                val elapsed = System.currentTimeMillis() - cycleStartMs
+                delay((intervalMs - elapsed).coerceAtLeast(1_000))
+            }
+        } finally {
+            disconnect(device.id)
+        }
+    }
+
+    // poll 주기와 컨트롤 write가 같은 기기에 동시에 연결하지 않도록 기기별로 직렬화한다.
+    private val deviceLocks = ConcurrentHashMap<String, Mutex>()
+    private fun lockFor(deviceId: String) = deviceLocks.getOrPut(deviceId) { Mutex() }
+
+    /**
      * poll 한 주기: 연결 → 서비스 탐색 → notify 구독 → (암호화된) 명령 write → prefix를 통과하는
      * 첫 응답 대기. 응답 hex(복호화됨)를 돌려주고, 시간 초과면 null. 연결 해제는 호출 쪽이 한다.
+     * quiet: 직전 주기가 성공했으면 중간 상태(Connecting/Connected/Polling)를 보고하지 않는다.
      */
     @SuppressLint("MissingPermission")
-    private suspend fun pollOnce(device: DeviceConfig, mac: String, poll: GattPoll): String? = coroutineScope {
+    private suspend fun pollOnce(device: DeviceConfig, mac: String, poll: GattPoll, quiet: Boolean): String? = coroutineScope {
         val gatt = device.gatt!!
         val writeCharUuid = gatt.writeCharUuid
             ?: throw IllegalStateException("poll requires write_char_uuid")
@@ -712,10 +752,10 @@ class NordicGattNotifySource(
         val payload = GattCrypto.encryptIfNeeded(gatt.encryption, command)
 
         Log.d(TAG, "Connecting to GATT device ${device.id} at $mac (poll)")
-        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
+        if (!quiet) onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connecting, mac))
         val client = ClientBleGatt.connect(context, mac, scope)
         activeConnections[device.id] = client
-        onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
+        if (!quiet) onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Connected, mac))
 
         val service = client.discoverServices().findService(uuidFrom(gatt.serviceUuid))
         val notifyChar = service?.findCharacteristic(uuidFrom(gatt.notifyCharUuid))
@@ -732,7 +772,7 @@ class NordicGattNotifySource(
         }
         try {
             val writeType = if (poll.writeWithResponse) BleWriteType.DEFAULT else BleWriteType.NO_RESPONSE
-            onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
+            if (!quiet) onLinkStatus(DeviceLinkStatus(device.id, DeviceLinkState.Polling, mac))
             writeChar.write(DataByteArray(payload), writeType)
             GattCrypto.awaitResponse(
                 notifications = channel.receiveAsFlow(),
@@ -751,22 +791,41 @@ class NordicGattNotifySource(
     // the same way as connect() above; any revocation is caught below like any other write failure.
     @SuppressLint("MissingPermission")
     override suspend fun write(device: DeviceConfig, hex: String) {
-        val client = activeConnections[device.id] ?: return
-        val serviceUuidStr = device.gatt?.serviceUuid ?: return
-        val writeCharUuidStr = device.gatt.writeCharUuid ?: return
+        val gatt = device.gatt ?: return
+        val writeCharUuidStr = gatt.writeCharUuid ?: return
         val plain = hexToBytes(hex) ?: return
         val bytes = try {
-            GattCrypto.encryptIfNeeded(device.gatt.encryption, plain)
+            GattCrypto.encryptIfNeeded(gatt.encryption, plain)
         } catch (e: IllegalArgumentException) {
             Log.e(TAG, "GATT ${device.id}: control payload not encryptable: ${e.message}")
             return
         }
+        val writeType = if (gatt.poll?.writeWithResponse == true) BleWriteType.DEFAULT else BleWriteType.NO_RESPONSE
+
+        suspend fun writeOn(client: ClientBleGatt) {
+            val service = client.discoverServices().findService(uuidFrom(gatt.serviceUuid))
+            val characteristic = service?.findCharacteristic(uuidFrom(writeCharUuidStr))
+                ?: throw IllegalStateException("Write characteristic $writeCharUuidStr not found")
+            characteristic.write(DataByteArray(bytes), writeType)
+        }
 
         try {
-            val services = client.discoverServices()
-            val service = services.findService(uuidFrom(serviceUuidStr))
-            val characteristic = service?.findCharacteristic(uuidFrom(writeCharUuidStr))
-            characteristic?.write(DataByteArray(bytes), BleWriteType.NO_RESPONSE)
+            if (gatt.poll == null) {
+                writeOn(activeConnections[device.id] ?: return)
+                return
+            }
+            // poll 기기는 주기 사이에 연결이 없다. 폴링과 겹치지 않게 잠근 뒤 1회 연결해서 쓰고 끊는다.
+            val mac = gatt.mac ?: return
+            lockFor(device.id).withLock {
+                val client = ClientBleGatt.connect(context, mac, scope)
+                try {
+                    writeOn(client)
+                } finally {
+                    client.disconnect()
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error writing to GATT device ${device.id}", e)
         }

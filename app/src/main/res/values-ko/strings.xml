@@ -144,6 +144,7 @@
     <string name="link_state_connecting">연결 중…</string>
     <string name="link_state_connected">연결됨</string>
     <string name="link_state_polling">폴링 중</string>
+    <string name="link_state_idle">다음 폴링 대기</string>
     <string name="link_state_error">연결 오류</string>
     <string name="link_last_data">마지막 데이터: %1$s</string>
     <string name="bind_locked_running">기기 바인딩을 변경하려면 게이트웨이를 먼저 정지하세요.</string>

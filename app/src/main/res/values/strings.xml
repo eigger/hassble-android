@@ -149,6 +149,7 @@
     <string name="link_state_connecting">Connecting…</string>
     <string name="link_state_connected">Connected</string>
     <string name="link_state_polling">Polling</string>
+    <string name="link_state_idle">Waiting for next poll</string>
     <string name="link_state_error">Connection error</string>
     <string name="link_last_data">Last data: %1$s</string>
     <string name="bind_locked_running">Stop gateway to change device binding.</string>
