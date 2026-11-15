@@ -27,17 +27,10 @@ class BootReceiver : BroadcastReceiver() {
                     withTimeoutOrNull(BOOT_RECEIVER_TIMEOUT_MS) {
                         val startOnBoot = repository.startOnBoot.first()
                         if (startOnBoot) {
-                            val url = repository.haUrl.first()
-                            val token = repository.haToken.first()
-                            val refreshToken = repository.haRefreshToken.first()
-                            val gitUrl = repository.gitUrl.first()
-                            val gitToken = repository.gitToken.first()
-
-                            if (url.isNotBlank() && token.isNotBlank() && gitUrl.isNotBlank()) {
-                                Log.d(TAG, "Settings found, starting BleGatewayService")
-                                BleGatewayService.start(context, url, token, refreshToken, gitUrl, gitToken)
-                            } else {
-                                Log.d(TAG, "HassBle settings are incomplete, skipping auto-start")
+                            when (startGatewayFromSavedSettings(context, repository)) {
+                                SavedStartOutcome.Started -> Log.d(TAG, "Settings found, starting BleGatewayService")
+                                SavedStartOutcome.SettingsIncomplete -> Log.d(TAG, "HassBle settings are incomplete, skipping auto-start")
+                                is SavedStartOutcome.Failed -> Log.w(TAG, "Auto-start failed (see BleGatewayService log)")
                             }
                         } else {
                             Log.d(TAG, "Start on boot is disabled by user")

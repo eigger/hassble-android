@@ -1011,12 +1011,14 @@ class BleRuntime(
     )
 
     /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 시작. */
-    fun connectDevice(deviceId: String) {
-        if (!::config.isInitialized) return
-        val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return
+    fun connectDevice(deviceId: String): Boolean {
+        if (!::config.isInitialized) return false
+        val d = devices[deviceId] ?: config.devices.firstOrNull { it.id == deviceId } ?: return false
         // 수동 연결: 기존 job(스캔 대기 포함)을 취소하고 강제 재연결
+        // (gatt.poll 기기는 강제 연결의 첫 주기가 광고 대기 없이 즉시 1회 읽기가 된다)
         stopDevice(deviceId)
         startDevice(d, forceConnect = true)
+        return d.source == Source.gatt_notify || d.source == Source.obd
     }
 
     /** 게이트웨이 실행 중 특정 기기를 수동으로 연결 해제. */

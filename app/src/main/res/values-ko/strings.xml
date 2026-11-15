@@ -47,6 +47,8 @@
     <string name="sending_ble_data_notif">BLE 데이터를 Home Assistant로 전송 중</string>
     <string name="background_battery_settings">백그라운드 및 배터리 설정</string>
     <string name="start_on_boot">부팅 시 자동 시작</string>
+    <string name="allow_automation">자동화 앱 허용 (Tasker)</string>
+    <string name="allow_automation_desc">다른 앱이 브로드캐스트 인텐트로 게이트웨이를 제어할 수 있게 합니다: dev.eigger.hassble.action.START_GATEWAY, STOP_GATEWAY, SET_SCAN_MODE, POLL_DEVICE. 백그라운드 시작에는 배터리 최적화 제외와 \"항상 허용\" 위치 권한이 필요합니다.</string>
     <string name="battery_opt_status">배터리 최적화 상태</string>
     <string name="battery_opt_ignored">최적화 제외됨 (권장)</string>
     <string name="battery_opt_active">최적화됨 (강제 종료될 수 있음)</string>

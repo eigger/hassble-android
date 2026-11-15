@@ -54,6 +54,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -90,6 +92,7 @@ class BleGatewayService : Service() {
     private var wsStateJob: Job? = null
     private var heartbeatJob: Job? = null
     private var settingsJob: Job? = null
+    private var pollStopJob: Job? = null
     private var currentGitUrl: String = ""
     private var currentGitToken: String? = null
     private var currentConfig: GatewayConfig? = null
@@ -290,6 +293,12 @@ class BleGatewayService : Service() {
             return START_STICKY
         }
 
+        if (intent.action == ACTION_POLL_DEVICE) {
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+            handlePollDevice(deviceId, intent.getBooleanExtra(EXTRA_STOP_AFTER, false))
+            return START_STICKY
+        }
+
         if (intent.action == ACTION_DISCONNECT_DEVICE) {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
             runtime?.disconnectDevice(deviceId)
@@ -316,6 +325,35 @@ class BleGatewayService : Service() {
 
         startPipeline(haUrl, token, refreshToken)
         return START_STICKY
+    }
+
+    /**
+     * 자동화(POLL_DEVICE): 기기를 즉시 연결/읽기. stopAfter면 읽기가 끝나거나 타임아웃 중 먼저 오는 때 서비스를 멈춘다.
+     * 완료 판정은 기기 link 상태 변화로 한다([isPollFinished]).
+     */
+    private fun handlePollDevice(deviceId: String, stopAfter: Boolean) {
+        val rt = runtime
+        val before = _deviceLinkStatuses.value.firstOrNull { it.profileId == deviceId }
+        val requestedAt = System.currentTimeMillis()
+        val accepted = rt?.connectDevice(deviceId) == true
+        if (!accepted) {
+            LiveEventLogger.log(LogType.LINK, "Automation POLL_DEVICE: device=$deviceId cannot be polled (gateway not ready, unknown device, or not a GATT/OBD device)")
+            if (stopAfter) stopSelf()
+            return
+        }
+        LiveEventLogger.log(LogType.LINK, "Automation POLL_DEVICE: device=$deviceId, stopAfter=$stopAfter")
+        if (!stopAfter) return
+        pollStopJob?.cancel()
+        pollStopJob = scope.launch {
+            val finished = withTimeoutOrNull(AutomationActions.STOP_AFTER_TIMEOUT_MS) {
+                _deviceLinkStatuses
+                    .map { list -> list.firstOrNull { it.profileId == deviceId } }
+                    .first { isPollFinished(it, before, requestedAt) }
+            } != null
+            LiveEventLogger.log(LogType.LINK,
+                "Automation POLL_DEVICE: device=$deviceId ${if (finished) "finished" else "timed out"} — stopping gateway")
+            stopSelf()
+        }
     }
 
     /**
@@ -717,6 +755,7 @@ class BleGatewayService : Service() {
         runCatching { unregisterReceiver(bluetoothStateReceiver) }
         configJob?.cancel()
         settingsJob?.cancel()
+        pollStopJob?.cancel()
         wsStateJob?.cancel()
         heartbeatJob?.cancel()
         runtime?.stop()
@@ -861,6 +900,8 @@ class BleGatewayService : Service() {
         private const val ACTION_SET_AUTO_CONNECT = "dev.eigger.hassble.SET_AUTO_CONNECT"
         private const val EXTRA_AUTO_CONNECT = "auto_connect"
         private const val ACTION_CONNECT_DEVICE = "dev.eigger.hassble.CONNECT_DEVICE"
+        private const val ACTION_POLL_DEVICE = "dev.eigger.hassble.POLL_DEVICE"
+        private const val EXTRA_STOP_AFTER = "stop_after"
         private const val ACTION_DISCONNECT_DEVICE = "dev.eigger.hassble.DISCONNECT_DEVICE"
         private const val ACTION_TRIGGER_ADVERTISE = "dev.eigger.hassble.TRIGGER_ADVERTISE"
         private const val ACTION_STOP_ADVERTISE = "dev.eigger.hassble.STOP_ADVERTISE"
@@ -892,8 +933,9 @@ class BleGatewayService : Service() {
         private val _usingCachedConfig = MutableStateFlow(false)
         val usingCachedConfig: StateFlow<Boolean> = _usingCachedConfig.asStateFlow()
 
-        fun start(context: Context, haUrl: String, token: String, refreshToken: String?, gitUrl: String, gitToken: String?) {
-            runCatching {
+        /** 시작 요청. 성공이면 null, 백그라운드 시작이 막히는 등 실패하면(Android 12+) 그 예외를 돌려준다. */
+        fun start(context: Context, haUrl: String, token: String, refreshToken: String?, gitUrl: String, gitToken: String?): Throwable? {
+            return runCatching {
                 val i = Intent(context, BleGatewayService::class.java)
                     .putExtra(EXTRA_HA_URL, haUrl)
                     .putExtra(EXTRA_TOKEN, token)
@@ -901,8 +943,20 @@ class BleGatewayService : Service() {
                     .putExtra(EXTRA_GIT_URL, gitUrl)
                     .putExtra(EXTRA_GIT_TOKEN, gitToken)
                 context.startForegroundService(i)
+                Unit
             }.onFailure { e ->
                 Log.e(TAG, "Failed to start BleGatewayService", e)
+            }.exceptionOrNull()
+        }
+
+        fun pollDevice(context: Context, deviceId: String, stopAfter: Boolean) {
+            runCatching {
+                context.startService(Intent(context, BleGatewayService::class.java)
+                    .setAction(ACTION_POLL_DEVICE)
+                    .putExtra(EXTRA_DEVICE_ID, deviceId)
+                    .putExtra(EXTRA_STOP_AFTER, stopAfter))
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to pollDevice for $deviceId", e)
             }
         }
 

@@ -47,6 +47,8 @@
     <string name="sending_ble_data_notif">Sending BLE data to Home Assistant</string>
     <string name="background_battery_settings">Background &amp; Battery Settings</string>
     <string name="start_on_boot">Auto-start on Boot</string>
+    <string name="allow_automation">Allow automation apps (Tasker)</string>
+    <string name="allow_automation_desc">Lets other apps control the gateway via broadcast intents: dev.eigger.hassble.action.START_GATEWAY, STOP_GATEWAY, SET_SCAN_MODE, POLL_DEVICE. Background start requires battery optimization exemption and \"Allow all the time\" location.</string>
     <string name="battery_opt_status">Battery Optimization</string>
     <string name="battery_opt_ignored">Whitelisted (Optimal)</string>
     <string name="battery_opt_active">Optimized (May get killed)</string>

@@ -277,6 +277,7 @@ private fun HomeScreen() {
     val enabledSensors by repository.enabledSensors.collectAsState(initial = emptySet())
     val enabledSensorsInitialized by repository.enabledSensorsInitialized.collectAsState(initial = false)
     val startOnBoot by repository.startOnBoot.collectAsState(initial = true)
+    val allowAutomation by repository.allowAutomation.collectAsState(initial = false)
     val scanMode by repository.scanMode.collectAsState(initial = dev.eigger.hassble.config.BleScanModeOption.LOW_LATENCY)
     val onboardingCompleteFlow = remember(repository) { repository.onboardingComplete.map<Boolean, Boolean?> { it } }
     val onboardingComplete by onboardingCompleteFlow.collectAsState(initial = null)
@@ -668,6 +669,8 @@ private fun HomeScreen() {
                     },
                     startOnBoot = startOnBoot,
                     onStartOnBootChange = { scope.launch { repository.saveStartOnBoot(it) } },
+                    allowAutomation = allowAutomation,
+                    onAllowAutomationChange = { scope.launch { repository.saveAllowAutomation(it) } },
                     scanMode = scanMode,
                     onScanModeChange = { scope.launch { repository.saveScanMode(it) } },
                     isBatteryIgnored = isBatteryIgnored,
@@ -1087,6 +1090,8 @@ private fun GatewayTabContent(
     onClearOAuth: () -> Unit,
     startOnBoot: Boolean,
     onStartOnBootChange: (Boolean) -> Unit,
+    allowAutomation: Boolean,
+    onAllowAutomationChange: (Boolean) -> Unit,
     scanMode: dev.eigger.hassble.config.BleScanModeOption,
     onScanModeChange: (dev.eigger.hassble.config.BleScanModeOption) -> Unit,
     isBatteryIgnored: Boolean,
@@ -1379,6 +1384,24 @@ private fun GatewayTabContent(
                     Switch(
                         checked = startOnBoot,
                         onCheckedChange = onStartOnBootChange,
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = MaterialTheme.colorScheme.primary),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(text = stringResource(R.string.allow_automation), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                        Text(
+                            text = stringResource(R.string.allow_automation_desc),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = allowAutomation,
+                        onCheckedChange = onAllowAutomationChange,
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = MaterialTheme.colorScheme.primary),
                     )
                 }
